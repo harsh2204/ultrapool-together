@@ -1,0 +1,4 @@
+.local/
+.godot/
+dist/
+*.log
