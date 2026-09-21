@@ -1,18 +1,20 @@
 extends Node
 
-const VERSION = "0.2.1"
+const VERSION = "0.3.0"
 const GAME_VERSION = "0.15.7"
-const SNAPSHOT_INTERVAL = 0.05
-const SNAPSHOT_TIMEOUT_MS = 5000
+const SNAPSHOT_INTERVAL = 0.10
 
 var transport: Node
 var adapter: Node
 var table_sync: Node
+var shop_sync: Node
+var presence: Node
 var ui_root: Control
 var panel: PanelContainer
 var turn_label: Label
 var score_label: Label
 var status: Label
+var participants_label: Label
 var mode: OptionButton
 var host_button: Button
 var invite_button: MenuButton
@@ -40,9 +42,10 @@ var awaiting_shot_turn = -1
 var snapshot_time = 0.0
 var state_time = 0.0
 var snapshot_id = 0
-var waiting_snapshot = -1
-var snapshot_sent_at = 0
 var last_guest_snapshot = 0
+var last_started_turn = -1
+var last_shop_state: Dictionary = {}
+var roster_time = 0.0
 
 
 func _ready():
@@ -51,10 +54,16 @@ func _ready():
 	transport = load(base.path_join("transport.gd")).new()
 	adapter = load(base.path_join("game_adapter.gd")).new()
 	table_sync = load(base.path_join("table_sync.gd")).new()
+	shop_sync = load(base.path_join("shop_sync.gd")).new()
+	presence = load(base.path_join("presence.gd")).new()
 	add_child(transport)
 	add_child(adapter)
 	add_child(table_sync)
+	add_child(shop_sync)
+	add_child(presence)
 	_build_ui()
+	presence.setup(self, transport, shop_sync)
+	shop_sync.request.connect(_shop_request)
 	transport.connected.connect(_connected)
 	transport.disconnected.connect(_disconnected)
 	transport.received.connect(_received)
@@ -90,10 +99,11 @@ func _build_ui():
 	dock.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	dock.custom_minimum_size.x = 314
 	var row = HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
 	dock.add_child(row)
 	turn_label = _label("")
-	turn_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(turn_label)
+	turn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	dock.add_child(turn_label)
 	pass_button = _button("Pass", _request_pass)
 	pass_button.hide()
 	row.add_child(pass_button)
@@ -137,6 +147,9 @@ func _build_ui():
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status.custom_minimum_size.x = 400
 	lobby.add_child(status)
+	participants_label = _label("")
+	participants_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lobby.add_child(participants_label)
 	code_panel = VBoxContainer.new()
 	code_panel.hide()
 	lobby.add_child(_button("Use a room code", func(): code_panel.visible = not code_panel.visible))
@@ -197,6 +210,7 @@ func _join():
 func _room_ready():
 	room_code.text = transport.room_code
 	code_panel.show()
+	_update_participants()
 
 
 func _refresh_friends():
@@ -235,16 +249,22 @@ func _connected():
 	shots = [0, 0]
 	latest_state.clear()
 	awaiting_shot_turn = -1
-	waiting_snapshot = -1
 	snapshot_id = 0
 	last_guest_snapshot = 0
+	last_started_turn = -1
+	last_shop_state.clear()
+	presence.clear()
 	if local_player == 1 and not table_sync.begin_guest():
 		transport.close()
 		_disconnected("Return to the main menu before joining a friend.")
 		return
 	adapter.begin_session(self)
+	shop_sync.begin_session(self)
+	room_code.text = transport.room_code
+	_update_participants()
 	if local_player == 0:
 		_publish_state()
+		_publish_snapshot(true)
 	if active:
 		_status("Connected. Take turns using the game's normal controls.")
 
@@ -252,13 +272,16 @@ func _connected():
 func _disconnected(reason: String):
 	active = false
 	invite_button.get_popup().hide()
+	presence.clear()
+	shop_sync.end_session()
 	adapter.end_session()
 	table_sync.end_guest()
 	shot_pending = false
 	awaiting_shot_turn = -1
-	waiting_snapshot = -1
 	latest_state.clear()
+	last_shop_state.clear()
 	_status(reason)
+	_update_participants()
 	panel.show()
 
 
@@ -268,6 +291,12 @@ func _status(value: String):
 
 
 func _process(delta):
+	if active:
+		presence.tick(delta, active, can_control())
+	roster_time += delta
+	if roster_time >= 1.0:
+		roster_time = 0.0
+		_update_participants()
 	if active and local_player == 0:
 		if shot_pending:
 			var state = adapter.game_data()
@@ -288,10 +317,7 @@ func _process(delta):
 			if not active:
 				return
 		snapshot_time += delta
-		if waiting_snapshot >= 0 and Time.get_ticks_msec() - snapshot_sent_at > SNAPSHOT_TIMEOUT_MS:
-			_leave()
-			_status("Your partner stopped receiving table updates.")
-		elif waiting_snapshot < 0 and snapshot_time >= SNAPSHOT_INTERVAL:
+		if snapshot_time >= SNAPSHOT_INTERVAL:
 			snapshot_time = 0.0
 			_publish_snapshot()
 	_update_hud()
@@ -308,6 +334,8 @@ func can_control() -> bool:
 
 func _turn_ready() -> bool:
 	if not active or panel.visible or turn_owner != local_player or shot_pending or finished:
+		return false
+	if shop_sync.is_open():
 		return false
 	if local_player == 0:
 		return adapter.can_shoot()
@@ -342,11 +370,22 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 	if not vector.is_finite() or vector.length() <= 50.0 or vector.length() > 200.1:
 		return false
 	shot_start_score = adapter.score()
+	var starting_table = table_sync.capture()
 	if not adapter.shoot(vector):
 		return false
 	shot_pending = true
 	settle_time = 0.0
 	elapsed_shot = 0.0
+	snapshot_id += 1
+	transport.send(
+		{
+			"kind": "shot_start",
+			"turn": shot_number,
+			"id": snapshot_id,
+			"vector": vector,
+			"scene": starting_table
+		}
+	)
 	_publish_state()
 	return true
 
@@ -358,6 +397,7 @@ func _finish_shot():
 	shot_number += 1
 	finished = pvp and shots[0] >= 5 and shots[1] >= 5
 	turn_owner = 1 - turn_owner
+	_publish_snapshot(true)
 	_publish_state()
 
 
@@ -423,7 +463,7 @@ func _update_hud():
 	elif shot_pending or awaiting_shot_turn >= 0:
 		turn_label.text = "Shot in play"
 	elif latest_state.get("in_shop", false):
-		turn_label.text = "Host is shopping"
+		turn_label.text = "Shared shop"
 	elif not latest_state.get("table_active", false):
 		turn_label.text = "Waiting for the table"
 	else:
@@ -461,19 +501,48 @@ func _publish_state():
 		true
 	)
 	transport.send(latest_state)
+	var shop_state = shop_sync.capture()
+	if shop_state != last_shop_state:
+		last_shop_state = shop_state.duplicate(true)
+		transport.send({"kind": "shop_state", "shop": shop_state})
 
 
-func _publish_snapshot():
+func _publish_snapshot(reliable: bool = false):
 	snapshot_id += 1
-	waiting_snapshot = snapshot_id
-	snapshot_sent_at = Time.get_ticks_msec()
-	transport.send({"kind": "snapshot", "id": snapshot_id, "scene": table_sync.capture()})
+	var message = {"kind": "snapshot", "id": snapshot_id, "scene": table_sync.capture()}
+	if reliable:
+		transport.send(message)
+	else:
+		transport.send_unreliable(message)
+
+
+func _update_participants():
+	var lines: PackedStringArray = []
+	for member in transport.participants():
+		var role = "Host" if member.host else "Guest"
+		if member.you:
+			role += " · You"
+		var state = "Connected" if member.connected else "Connecting…"
+		if member.you and not active:
+			state = "In lobby"
+		lines.append("%s — %s · %s" % [member.name, role, state])
+	if lines.size() == 1:
+		lines.append("Waiting for a friend…")
+	participants_label.text = "\n".join(lines)
+	participants_label.visible = not lines.is_empty()
+
+
+func _shop_request(message: Dictionary):
+	if active:
+		transport.send(message)
 
 
 func _received(message: Dictionary):
 	if not active:
 		return
 	var kind = message.get("kind", "")
+	if presence.receive(message):
+		return
 	if local_player == 0:
 		if (
 			kind == "shot"
@@ -486,10 +555,39 @@ func _received(message: Dictionary):
 		elif kind == "pass" and message.get("turn") is int:
 			var accepted = _pass(1, message.turn)
 			transport.send({"kind": "shot_result", "turn": message.turn, "accepted": accepted})
-		elif kind == "snapshot_ack" and message.get("id") == waiting_snapshot:
-			waiting_snapshot = -1
+		elif kind == "shop_request":
+			var accepted = shop_sync.handle_request(message)
+			transport.send(
+				{"kind": "shop_result", "accepted": accepted, "error": shop_sync.last_error}
+			)
+			_publish_state()
 		return
-	if kind == "state" and _valid_state(message):
+	if kind == "shop_result" and message.get("accepted") is bool and message.get("error") is String:
+		shop_sync.apply_result(message.accepted, message.error)
+	elif kind == "shop_state" and message.get("shop") is Dictionary:
+		if not shop_sync.apply_state(message.shop):
+			_leave()
+			_status("The host sent an incompatible shop update.")
+	elif (
+		kind == "shot_start"
+		and message.get("turn") is int
+		and message.turn > last_started_turn
+		and message.get("id") is int
+		and message.get("vector") is Vector2
+		and message.vector.is_finite()
+		and message.vector.length() > 50.0
+		and message.vector.length() <= 200.1
+		and message.get("scene") is Dictionary
+	):
+		last_started_turn = message.turn
+		if message.id > last_guest_snapshot:
+			if not table_sync.apply_snapshot(message.scene):
+				_leave()
+				_status("The host sent an incompatible shot update.")
+				return
+			last_guest_snapshot = message.id
+			table_sync.begin_shot(message.vector)
+	elif kind == "state" and _valid_state(message):
 		latest_state = message
 		turn_owner = message.turn_owner
 		shot_number = message.turn
@@ -517,7 +615,6 @@ func _received(message: Dictionary):
 			_status("The host sent an incompatible table update.")
 			return
 		last_guest_snapshot = message.id
-		transport.send({"kind": "snapshot_ack", "id": message.id})
 
 
 func _number(value) -> bool:

@@ -32,5 +32,15 @@ func together_play_shot(vector: Vector2) -> void:
 	super.shoot(vector)
 
 
+func hit(other):
+	if not get_meta("together_replica", false):
+		super.hit(other)
+
+
+func hit_wall(normal):
+	if not get_meta("together_replica", false):
+		super.hit_wall(normal)
+
+
 func _can_control() -> bool:
 	return is_instance_valid(together_controller) and together_controller.can_control()

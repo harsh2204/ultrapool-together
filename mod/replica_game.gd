@@ -5,12 +5,10 @@ var remote_shots = 0
 var remote_required_score = 1.0
 var remote_max_hp = 3
 var remote_daily = false
+var remote_rotated = false
 var replicas: Dictionary = {}
 var pocket_replicas: Dictionary = {}
-var targets: Dictionary = {}
-var interpolation_time = 0.0
-var interpolation_duration = 0.05
-var last_snapshot_at = 0
+var corrections: Dictionary = {}
 
 
 func prepare_scene() -> void:
@@ -39,7 +37,7 @@ func prepare_scene() -> void:
 
 func _ready() -> void:
 	Global.gameManager = self
-	table = (table_rotated_scene if Global.ROTATED_TABLE else table_scene).instantiate()
+	table = (table_rotated_scene if remote_rotated else table_scene).instantiate()
 	# Native customization expects a shop floor even though the guest has no shop.
 	var floor_target = Sprite2D.new()
 	floor_target.visible = false
@@ -63,21 +61,47 @@ func _exit_tree() -> void:
 	pass
 
 
-func _process(delta: float) -> void:
-	interpolation_time = minf(interpolation_time + delta, interpolation_duration)
-	var weight = interpolation_time / interpolation_duration
-	for id in targets:
+func _process(_delta: float) -> void:
+	pass
+
+
+func _physics_process(delta: float) -> void:
+	for id in replicas:
 		var body = replicas[id]
-		var target: Dictionary = targets[id]
-		body.position = target.from.lerp(target.position, weight)
-		body.rotation = lerp_angle(target.from_rotation, target.rotation, weight)
+		if body.freeze:
+			continue
+		if corrections.has(id):
+			var correction: Vector2 = corrections[id] * (1.0 - exp(-12.0 * delta))
+			body.global_position += correction
+			corrections[id] -= correction
+			if corrections[id].length_squared() < 0.25:
+				corrections.erase(id)
+		if body.linear_velocity.length() > 2500.0:
+			body.linear_velocity = body.linear_velocity.limit_length(2500.0)
+		elif body.linear_velocity.length() < 10.0 and body.constant_force == Vector2.ZERO:
+			body.linear_velocity = Vector2.ZERO
+			body.angular_velocity = 0.0
+		body._anti_tunnel_walls(delta)
+	if is_instance_valid(player_ball) and not player_ball.freeze:
+		player_ball._anti_tunnel_balls(delta)
+
+
+func begin_shot(vector: Vector2) -> bool:
+	if not is_instance_valid(player_ball) or not player_ball.alive or player_ball.falling:
+		return false
+	remote_ready = false
+	player_ball.pause_cancel_shot()
+	player_ball.freeze = false
+	player_ball.sleeping = false
+	player_ball.linear_velocity = vector.limit_length(200.0) * 12.5 / player_ball.mass
+	player_ball.angular_velocity = 0.0
+	corrections.clear()
+	return true
 
 
 func apply_table(data: Dictionary) -> void:
-	var now = Time.get_ticks_msec()
-	if last_snapshot_at > 0:
-		interpolation_duration = clampf((now - last_snapshot_at) / 1000.0, 0.05, 0.25)
-	last_snapshot_at = now
+	if (data.in_shop or data.in_menu) and is_instance_valid(selected_ball):
+		unselect_ball(selected_ball, selected_ball_item)
 	remote_ready = data.ready
 	remote_shots = data.shots
 	remote_required_score = data.required_score
@@ -92,6 +116,8 @@ func apply_table(data: Dictionary) -> void:
 	score = data.score
 	player_info.money = data.money
 	player_info.hp = data.hp
+	table.global_position = data.table_position
+	Global.camera.move(data.table_position)
 	table.update_score_display(score, maxf(remote_required_score, 1.0))
 	table.update_money(data.money)
 	table.update_round_text(str(data.round + 1))
@@ -109,15 +135,30 @@ func apply_table(data: Dictionary) -> void:
 		var body = replicas[id]
 		if body.get_meta("remote_item") != state.item:
 			_set_item(body, state.item)
-		var destination: Vector2 = state.position
-		var start: Vector2 = body.position if not data.ready else destination
-		targets[id] = {
-			"from": start,
-			"position": destination,
-			"from_rotation": body.rotation if not data.ready else state.rotation,
-			"rotation": state.rotation
-		}
-		body.position = start
+		var simulate: bool = (
+			state.alive
+			and state.spawned
+			and not state.falling
+			and not state.gone
+			and not state.passive
+			and not data.in_shop
+		)
+		var error: Vector2 = state.position - body.global_position
+		if data.ready or not simulate or error.length() > body.get_radius() * 8.0:
+			body.global_position = state.position
+			body.rotation = state.rotation
+			body.transform3d.rotation = state.spin
+			corrections.erase(id)
+		else:
+			corrections[id] = error
+		body.freeze = not simulate
+		body.collision_shape.disabled = not simulate
+		body.sleeping = false
+		body.linear_velocity = state.velocity
+		body.angular_velocity = state.angular_velocity
+		body.linear_damp = state.linear_damp
+		body.angular_damp = state.angular_damp
+		body.constant_force = state.force if simulate else Vector2.ZERO
 		body.visible = state.visible
 		body.alive = state.alive
 		body.spawned = state.spawned
@@ -128,8 +169,7 @@ func apply_table(data: Dictionary) -> void:
 		body.scale_modifier = state.radius_scale
 		body.visuals.scale = state.visual_scale
 		body.modulate = state.color
-		body.transform3d.rotation = state.spin
-		var basis: Basis = body.transform3d.transform.basis
+		var basis: Basis = body.transform3d.global_transform.basis
 		body.ball.material.set_shader_parameter("rotation_x", basis.x)
 		body.ball.material.set_shader_parameter("rotation_y", basis.y)
 		body.ball.material.set_shader_parameter("rotation_z", basis.z)
@@ -142,11 +182,12 @@ func apply_table(data: Dictionary) -> void:
 			var body = replicas[id]
 			if body == player_ball:
 				player_ball = null
+			if selected_ball == body:
+				unselect_ball(body, body.ball_item)
 			GlobalPhysics.unregister_ball(body)
 			body.queue_free()
 			replicas.erase(id)
-			targets.erase(id)
-	interpolation_time = 0.0
+			corrections.erase(id)
 
 
 func _update_pockets(states: Array) -> void:
@@ -193,19 +234,22 @@ func _update_pockets(states: Array) -> void:
 
 func _create_ball(state: Dictionary) -> void:
 	var body = (player_ball_scene if state.player else ball_scene).instantiate()
+	if not state.player:
+		body.set_script(
+			load(get_script().resource_path.get_base_dir().path_join("replica_ball.gd"))
+		)
 	body.freeze = true
-	body.collision_layer = 0
-	body.collision_mask = 0
+	body.set_meta("together_replica", true)
 	_set_item(body, state.item)
 	if state.player:
 		player_ball = body
 	get_node("Balls").add_child(body)
-	body.position = state.position
+	body.global_position = state.position
 	body.ball_init()
 	_set_item(body, state.item)
 	body.spawned = true
 	body.set_physics_process(false)
-	body.set_process(state.player)
+	body.set_process(true)
 	replicas[state.id] = body
 
 
@@ -228,6 +272,10 @@ func _set_item(body, item: Dictionary) -> void:
 	]:
 		native_item.set(field, item[field])
 	body.set_item(native_item)
+	body.ball.material.set_shader_parameter("tex", native_item.data.texture)
+	if native_item.mixed_data != null:
+		body.ball.material.set_shader_parameter("mixed_tex", native_item.mixed_data.texture)
+	body.flash_spr.material = body.flash_spr.material.duplicate()
 	body.ball_item.weight_state = item.weight_state
 	body.update_weight()
 	body.set_star(item.star_power)
@@ -238,6 +286,8 @@ func _set_item(body, item: Dictionary) -> void:
 		body.freeze_icon.visible = item.locked
 	if item.fleeting:
 		body.set_fleeting()
+	body.flash_alpha = 0.0
+	body.flash_spr.material.set_shader_parameter("alpha", 0.0)
 	body.set_meta("remote_item", item.duplicate())
 
 
@@ -262,7 +312,7 @@ func _disable_gameplay(node: Node) -> void:
 	node.set_physics_process(false)
 	node.set_process_input(false)
 	node.set_process_unhandled_input(false)
-	if node is CollisionObject2D:
+	if node is CollisionObject2D and not node is StaticBody2D:
 		node.collision_layer = 0
 		node.collision_mask = 0
 	if node is Area2D:
@@ -300,12 +350,18 @@ func is_daily():
 	return remote_daily
 
 
-func select_ball(_ball, _item, _from_shop = false):
-	pass
+func select_ball(body, item, _from_shop = false):
+	if in_shop or in_menu or selected_ball == body:
+		return
+	selected_ball = body
+	selected_ball_item = item
+	Global.set_hovered_item(body, item)
 
 
-func unselect_ball(_ball, _item, _from_shop = false):
-	pass
+func unselect_ball(body, item, _from_shop = false):
+	if selected_ball == body:
+		selected_ball = null
+		Global.unset_hovered_item(body, item)
 
 
 func force_round_end():

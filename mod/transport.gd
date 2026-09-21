@@ -6,11 +6,12 @@ signal received(message: Dictionary)
 signal status_changed(text: String)
 signal room_ready
 
-const PROTOCOL := 2
+const PROTOCOL := 3
 const GAME_VERSION := "0.15.7"
 const MOD_ID := "ultrapool-together"
 const MAX_PACKET_BYTES := 262144
 const STEAM_CHANNEL := 47
+const STEAM_TRANSIENT_CHANNEL := 48
 const LOBBY_FRIENDS_ONLY := 1
 const FRIEND_FLAG_IMMEDIATE := 4
 const LOBBY_MEMBER_GONE := 2 | 4 | 8 | 16
@@ -48,7 +49,7 @@ func host_lan(port: int, token: String) -> Error:
 		return ERR_INVALID_PARAMETER
 	_token = token if not token.is_empty() else Crypto.new().generate_random_bytes(16).hex_encode()
 	_enet = ENetMultiplayerPeer.new()
-	var error := _enet.create_server(port, 1, 1)
+	var error := _enet.create_server(port, 1, 2)
 	if error != OK:
 		close()
 		return error
@@ -74,7 +75,7 @@ func join_lan(host: String, port: int, token: String) -> Error:
 		return ERR_INVALID_PARAMETER
 	_token = token
 	_enet = ENetMultiplayerPeer.new()
-	var error := _enet.create_client(host.strip_edges(), port, 1)
+	var error := _enet.create_client(host.strip_edges(), port, 2)
 	if error != OK:
 		close()
 		return error
@@ -104,7 +105,7 @@ func host_steam() -> Error:
 
 func join_steam(code: String) -> Error:
 	var parts := code.strip_edges().split("-")
-	if parts.size() != 2 or parts[0] != "UP2" or not parts[1].is_valid_int():
+	if parts.size() != 2 or parts[0] != "UP3" or not parts[1].is_valid_int():
 		return ERR_INVALID_PARAMETER
 	return _join_lobby(int(parts[1]))
 
@@ -144,6 +145,48 @@ func online_friends() -> Array:
 	return friends
 
 
+func participants() -> Array:
+	var people: Array = []
+	if _mode == "steam" and _lobby_id != 0:
+		var local_id := int(_steam.call("getSteamID"))
+		var host_id := int(_steam.call("getLobbyOwner", _lobby_id))
+		for index in range(int(_steam.call("getNumLobbyMembers", _lobby_id))):
+			var id := int(_steam.call("getLobbyMemberByIndex", _lobby_id, index))
+			var name := str(_steam.call("getFriendPersonaName", id))
+			name = name.replace("\n", " ").replace("\r", " ").strip_edges().left(48)
+			people.append(
+				{
+					"id": id,
+					"name": name if not name.is_empty() else "Steam player",
+					"host": id == host_id,
+					"you": id == local_id,
+					"connected": id == local_id or (connected_peer and id == _peer_id)
+				}
+			)
+	elif _mode == "lan" and _enet != null:
+		people.append(
+			{
+				"id": _enet.get_unique_id(),
+				"name": "You",
+				"host": is_host,
+				"you": true,
+				"connected": true
+			}
+		)
+		if _peer_id != 0:
+			people.append(
+				{
+					"id": _peer_id,
+					"name": "Guest" if is_host else "Host",
+					"host": not is_host,
+					"you": false,
+					"connected": connected_peer
+				}
+			)
+	people.sort_custom(func(a, b): return a.host and not b.host)
+	return people
+
+
 func invite_friend(friend_id: int) -> Error:
 	if not invite_ready():
 		return ERR_UNAVAILABLE
@@ -179,6 +222,11 @@ func send(message: Dictionary) -> void:
 		_send_wire({"kind": "data", "data": message})
 
 
+func send_unreliable(message: Dictionary) -> void:
+	if connected_peer:
+		_send_wire({"kind": "data", "data": message}, true)
+
+
 func close() -> void:
 	if connected_peer:
 		_send_wire({"kind": "bye"})
@@ -188,6 +236,7 @@ func close() -> void:
 	if _steam != null:
 		if _peer_id != 0 and _mode == "steam":
 			_steam.call("closeChannelWithUser", _peer_id, STEAM_CHANNEL)
+			_steam.call("closeChannelWithUser", _peer_id, STEAM_TRANSIENT_CHANNEL)
 		if _lobby_id != 0:
 			_steam.call("leaveLobby", _lobby_id)
 	_lobby_id = 0
@@ -295,8 +344,9 @@ func _process(_delta: float) -> void:
 		var packet_count := 0
 		while _enet != null and _enet.get_available_packet_count() > 0 and packet_count < 64:
 			var sender := _enet.get_packet_peer()
+			var transient := _enet.get_packet_channel() == 1
 			var packet := _enet.get_packet()
-			_receive_wire(sender, packet)
+			_receive_wire(sender, packet, transient)
 			packet_count += 1
 		if (
 			_enet != null
@@ -305,11 +355,18 @@ func _process(_delta: float) -> void:
 		):
 			_drop_peer("Host disconnected. You can join again.")
 	elif _mode == "steam":
-		var packets: Array = _steam.call("receiveMessagesOnChannel", STEAM_CHANNEL, 64)
-		for packet in packets:
+		for channel in [STEAM_CHANNEL, STEAM_TRANSIENT_CHANNEL]:
 			if _mode != "steam":
 				break
-			_receive_wire(int(packet.get("identity", 0)), packet.get("payload", PackedByteArray()))
+			var packets: Array = _steam.call("receiveMessagesOnChannel", channel, 64)
+			for packet in packets:
+				if _mode != "steam":
+					break
+				_receive_wire(
+					int(packet.get("identity", 0)),
+					packet.get("payload", PackedByteArray()),
+					channel == STEAM_TRANSIENT_CHANNEL
+				)
 	if _mode.is_empty() or _peer_id == 0:
 		return
 	var now := Time.get_ticks_msec()
@@ -382,7 +439,7 @@ func _on_lobby_created(result: int, lobby_id: int) -> void:
 		if not bool(_steam.call("setLobbyData", _lobby_id, key, metadata[key])):
 			_fail_room("Steam could not prepare the room. Try again.")
 			return
-	room_code = "UP2-%d" % _lobby_id
+	room_code = "UP3-%d" % _lobby_id
 	status_changed.emit("Invite a friend or share your room code.")
 	room_ready.emit()
 
@@ -421,7 +478,7 @@ func _on_lobby_joined(lobby_id: int, _permissions: int, _locked: bool, response:
 		_fail_room("This Steam room is no longer available.")
 		return
 	_peer_id = owner
-	room_code = "UP2-%d" % _lobby_id
+	room_code = "UP3-%d" % _lobby_id
 	_deadline = Time.get_ticks_msec() + HANDSHAKE_TIMEOUT_MS
 	status_changed.emit("Connecting to your friend...")
 	_send_hello()
@@ -468,36 +525,51 @@ func _send_hello() -> void:
 	)
 
 
-func _send_wire(message: Dictionary) -> void:
+func _send_wire(message: Dictionary, transient := false) -> void:
 	if _peer_id == 0:
 		return
 	var packet := var_to_bytes(message)
 	if packet.size() > MAX_PACKET_BYTES:
-		_drop_peer("Multiplayer update exceeded the packet limit.")
+		if not transient:
+			_drop_peer("Multiplayer update exceeded the packet limit.")
 		return
 	if _mode == "lan" and _enet != null:
 		_enet.set_target_peer(_peer_id)
-		if _enet.put_packet(packet) != OK:
+		_enet.transfer_channel = 1 if transient else 0
+		_enet.transfer_mode = (
+			MultiplayerPeer.TRANSFER_MODE_UNRELIABLE
+			if transient
+			else MultiplayerPeer.TRANSFER_MODE_RELIABLE
+		)
+		if _enet.put_packet(packet) != OK and not transient:
 			_drop_peer("Network send failed. You can join again.")
 	elif _mode == "steam" and _steam != null:
-		# k_nSteamNetworkingSend_Reliable; Steam handles encryption and relaying.
-		var result: int = _steam.call("sendMessageToUser", _peer_id, packet, 8, STEAM_CHANNEL)
-		if result != 1:
+		# UnreliableNoDelay drops stale updates; ReliableNoNagle sends actions promptly.
+		var flags := 5 if transient else 9
+		var channel := STEAM_TRANSIENT_CHANNEL if transient else STEAM_CHANNEL
+		var result: int = _steam.call("sendMessageToUser", _peer_id, packet, flags, channel)
+		if result != 1 and not transient:
 			_drop_peer("Steam send failed (%d). You can join again." % result)
 
 
-func _receive_wire(sender: int, packet: PackedByteArray) -> void:
+func _receive_wire(sender: int, packet: PackedByteArray, transient := false) -> void:
 	if sender != _peer_id or sender == 0:
 		return
+	if transient and not connected_peer:
+		return
 	if packet.is_empty() or packet.size() > MAX_PACKET_BYTES:
-		_drop_peer("Invalid network packet.")
+		if not transient:
+			_drop_peer("Invalid network packet.")
 		return
 	# bytes_to_var never instantiates objects (unlike bytes_to_var_with_objects).
 	var message: Variant = bytes_to_var(packet)
 	if not message is Dictionary or not message.get("kind") is String:
-		_drop_peer("Invalid network message.")
+		if not transient:
+			_drop_peer("Invalid network message.")
 		return
 	var kind: String = message["kind"]
+	if transient and kind != "data":
+		return
 	if not connected_peer:
 		if kind == "reject" and not is_host:
 			_drop_peer("Room code or game/mod version did not match.")
@@ -553,6 +625,7 @@ func _drop_peer(reason: String) -> void:
 			_enet.disconnect_peer(former_peer)
 		elif _mode == "steam" and _steam != null and former_peer != 0:
 			_steam.call("closeChannelWithUser", former_peer, STEAM_CHANNEL)
+			_steam.call("closeChannelWithUser", former_peer, STEAM_TRANSIENT_CHANNEL)
 		if _mode == "steam" and _lobby_id != 0:
 			_steam.call("setLobbyJoinable", _lobby_id, true)
 	else:

@@ -49,7 +49,7 @@ func _run() -> void:
 	await pause(2.0)
 	check(host_node.connected_peer and guest_node.connected_peer, "two-way handshake")
 	check(
-		guest_node.join_steam("UP2-123") == ERR_ALREADY_IN_USE,
+		guest_node.join_steam("UP3-123") == ERR_ALREADY_IN_USE,
 		"another invite cannot replace an active session"
 	)
 	check(
@@ -93,13 +93,27 @@ func _run() -> void:
 		guest_node.join_steam("UP1-123-token") == ERR_INVALID_PARAMETER,
 		"old protocol room rejected"
 	)
-	check(guest_node.join_steam("UP2-0") == ERR_INVALID_PARAMETER, "zero lobby rejected")
+	check(guest_node.join_steam("UP2-123") == ERR_INVALID_PARAMETER, "old v0.2 room rejected")
+	check(guest_node.join_steam("UP3-0") == ERR_INVALID_PARAMETER, "zero lobby rejected")
 	guest_node.join_lan("127.0.0.1", 47657, host_node.room_code)
 	await pause(0.5)
 	check(
 		host_node.connected_peer and guest_node.connected_peer, "reconnect after malformed packet"
 	)
+	guest_node.send_unreliable({"kind": "presence", "seq": 17})
+	host_node.send({"kind": "shot_start", "turn": 3})
+	await pause(0.5)
+	check(
+		inbox.any(func(message): return message.get("seq") == 17),
+		"transient channel delivers cursor updates"
+	)
+	check(
+		inbox.any(func(message): return message.get("kind") == "shot_start"),
+		"reliable actions still arrive after transient sends"
+	)
 	snapshot.resize(262144)
+	host_node.send_unreliable({"kind": "snapshot", "state": snapshot})
+	check(host_node.connected_peer, "oversized transient update does not end session")
 	host_node.send({"type": "snapshot", "state": snapshot})
 	check(not host_node.connected_peer, "packet limit includes wire overhead")
 	host_node.close()
@@ -116,14 +130,14 @@ func _run() -> void:
 				break
 			await pause(0.2)
 		check(
-			host_node.invite_ready() and host_node.room_code.begins_with("UP2-"),
+			host_node.invite_ready() and host_node.room_code.begins_with("UP3-"),
 			"friends lobby becomes ready asynchronously"
 		)
 		var steam: Object = host_node._steam
 		var lobby_id: int = host_node._lobby_id
 		if lobby_id != 0:
 			check(
-				steam.call("getLobbyData", lobby_id, "protocol") == "2", "lobby publishes protocol"
+				steam.call("getLobbyData", lobby_id, "protocol") == "3", "lobby publishes protocol"
 			)
 			check(
 				int(steam.call("getLobbyOwner", lobby_id)) == int(steam.call("getSteamID")),

@@ -137,16 +137,22 @@ func _guest():
 	var replica = global_node.gameManager
 	var player = replica.player_ball
 	_check(player.has_method("together_play_shot"), "guest cue uses native turn hook")
-	var frozen = true
+	var replicas_safe = true
 	for body in replica.replicas.values():
-		frozen = (
-			frozen
-			and body.freeze
-			and not body.is_physics_processing()
-			and body.collision_layer == 0
-			and body.collision_mask == 0
+		replicas_safe = replicas_safe and body.get_meta("together_replica", false)
+		_check(
+			body.ball.material.get_shader_parameter("tex") == body.ball_item.data.texture,
+			"replicated ball uses its native type texture"
 		)
-	_check(frozen, "replicated balls cannot run local authoritative physics")
+	_check(replicas_safe, "replicated bodies suppress authoritative collision effects")
+	var inspection = get_node("/root/UIManager").info_display
+	_check(
+		inspection.can_process() and inspection.is_visible_in_tree(),
+		"guest native inspection is active"
+	)
+	_check(
+		not player.freeze and not player.collision_shape.disabled, "guest cue enables local physics"
+	)
 	var shots_before: int = replica.get_shots_left()
 	var velocity_before: Vector2 = player.linear_velocity
 	var turn_before: int = mod.shot_number
@@ -160,12 +166,25 @@ func _guest():
 		mod.awaiting_shot_turn == turn_before and replica.get_shots_left() == shots_before,
 		"duplicate native guest input does not spend a local shot"
 	)
-	_check(player.linear_velocity == velocity_before, "guest shot intent applies no local impulse")
+	_check(player.linear_velocity == velocity_before, "guest shot waits for host acceptance")
+	if not await _wait(func(): return mod.last_started_turn == turn_before, 10):
+		_check(false, "confirmed guest shot reaches local simulation")
+		return
+	var position_before: Vector2 = player.global_position
+	mod.transport.set_process(false)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	mod.transport.set_process(true)
+	_check(
+		player.global_position.distance_to(position_before) > 0.1,
+		"guest ball moves without a network update"
+	)
 	if not await _wait(func(): return mod.finished, 60):
 		_check(false, "guest shot resolves to match result")
 		return
 	_check(mod.shots == [5, 5], "guest receives final scoreboard")
-	_check(mod.last_guest_snapshot > 1, "guest applies and acknowledges successive table snapshots")
+	_check(mod.last_guest_snapshot > 1, "guest receives independent table corrections")
+	_check(mod.last_started_turn >= 0, "guest receives shot vectors for local movement")
 	_check(not mod.can_control(), "guest cannot shoot after match result")
 	await get_tree().create_timer(2).timeout
 	mod.transport.close()

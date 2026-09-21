@@ -8,7 +8,7 @@ const ITEM_NUMBERS = {
 	"weight_state": [0, 3]
 }
 const ITEM_FLAGS = ["flaming", "fleeting", "star_power", "shielded", "shield_broken", "locked"]
-const TABLE_FLAGS = ["ready", "in_menu", "in_shop", "round_ended", "game_over", "daily"]
+const TABLE_FLAGS = ["ready", "in_menu", "in_shop", "round_ended", "game_over", "daily", "rotated"]
 const BALL_FLAGS = ["player", "visible", "alive", "spawned", "falling", "gone", "passive"]
 
 var _guest = false
@@ -42,6 +42,8 @@ func capture() -> Dictionary:
 		"hp": game.player_info.hp,
 		"max_hp": game.get_max_hp(),
 		"daily": game.is_daily(),
+		"rotated": game.table.scene_file_path == game.table_rotated_scene.resource_path,
+		"table_position": game.table.global_position,
 		"balls": [],
 		"pockets": []
 	}
@@ -71,6 +73,11 @@ func capture() -> Dictionary:
 				"player": body == game.player_ball,
 				"item": item_data,
 				"position": body.global_position,
+				"velocity": body.linear_velocity,
+				"angular_velocity": body.angular_velocity,
+				"linear_damp": body.linear_damp,
+				"angular_damp": body.angular_damp,
+				"force": body.constant_force,
 				"rotation": body.rotation,
 				"spin": body.transform3d.rotation,
 				"visual_scale": body.visuals.scale,
@@ -131,12 +138,14 @@ func begin_guest() -> bool:
 	_saved_balls = get_node("/root/GlobalPhysics").balls.duplicate()
 	_suspend(current_scene)
 	_suspend(get_node("/root/UIManager"))
+	_resume_display(get_node("/root/UIManager").info_display)
+	_resume_display(get_node("/root/UIManager").locked_info_display)
 	_suspend(get_node("/root/TutorialManager"))
 	var tutorial = get_node("/root/TutorialManager")
 	_saved_tutorial = {"ENABLED": tutorial.ENABLED, "active_popup": tutorial.active_popup}
 	tutorial.ENABLED = false
 	tutorial.active_popup = null
-	global_node.IS_HOVER_SUPPRESSED = true
+	global_node.IS_HOVER_SUPPRESSED = false
 	global_node.hovered_item = null
 	global_node.hovered_item_object = null
 	global_node.gameManager = null
@@ -165,6 +174,12 @@ func end_guest() -> void:
 			node.visible = state.visible
 		if state.has("freeze"):
 			node.freeze = state.freeze
+		if state.has("collision_layer"):
+			node.collision_layer = state.collision_layer
+			node.collision_mask = state.collision_mask
+		if state.has("monitoring"):
+			node.monitoring = state.monitoring
+			node.monitorable = state.monitorable
 	if is_instance_valid(global_node.camera):
 		global_node.camera.make_current()
 	_saved_nodes.clear()
@@ -181,7 +196,7 @@ func apply_snapshot(data: Dictionary) -> bool:
 	if not data.available:
 		_clear_replica()
 		return true
-	var key = "%s:%s" % [data.scene_id, data.rounds_played]
+	var key = "%s:%s:%s" % [data.scene_id, data.rounds_played, data.rotated]
 	if key == _scene_key:
 		for body in data.balls:
 			if (
@@ -216,6 +231,7 @@ func apply_snapshot(data: Dictionary) -> bool:
 			scene.set(property, exports[property])
 		scene.remote_daily = data.daily
 		scene.remote_max_hp = data.max_hp
+		scene.remote_rotated = data.rotated
 		scene.prepare_scene()
 		global_node.gameManager = scene
 		get_node("/root/GlobalPhysics").clear_walls()
@@ -228,6 +244,14 @@ func apply_snapshot(data: Dictionary) -> bool:
 	return true
 
 
+func begin_shot(vector: Vector2) -> bool:
+	if not _guest or not is_instance_valid(_replica):
+		return false
+	if not vector.is_finite() or vector.length() <= 50.0 or vector.length() > 200.1:
+		return false
+	return _replica.begin_shot(vector)
+
+
 func ready_for_input() -> bool:
 	if not is_instance_valid(_replica) or not _replica.can_shoot():
 		return false
@@ -236,6 +260,7 @@ func ready_for_input() -> bool:
 
 
 func _clear_replica() -> void:
+	get_node("/root/Global").clear_hovered_item()
 	if is_instance_valid(_replica):
 		remove_child(_replica)
 		_replica.free()
@@ -249,6 +274,15 @@ func _clear_replica() -> void:
 	get_node("/root/GlobalPhysics").clear_balls()
 
 
+func _resume_display(display: Node) -> void:
+	for state in _saved_nodes:
+		if state.node == display or display.is_ancestor_of(state.node):
+			state.node.process_mode = state.process_mode
+			if state.has("visible"):
+				state.node.visible = state.visible
+	display.process_mode = Node.PROCESS_MODE_ALWAYS
+
+
 func _suspend(node: Node) -> void:
 	if node == null:
 		return
@@ -259,6 +293,16 @@ func _suspend(node: Node) -> void:
 	if node is RigidBody2D:
 		state.freeze = node.freeze
 		node.freeze = true
+	if node is CollisionObject2D:
+		state.collision_layer = node.collision_layer
+		state.collision_mask = node.collision_mask
+		node.collision_layer = 0
+		node.collision_mask = 0
+	if node is Area2D:
+		state.monitoring = node.monitoring
+		state.monitorable = node.monitorable
+		node.monitoring = false
+		node.monitorable = false
 	_saved_nodes.append(state)
 	node.process_mode = Node.PROCESS_MODE_DISABLED
 	for child in node.get_children():
@@ -288,6 +332,8 @@ func _valid_snapshot(data: Dictionary) -> bool:
 	for key in ["score", "required_score", "money"]:
 		if not _number(data.get(key), -1.0e18, 1.0e18):
 			return false
+	if not _vector(data.get("table_position"), 100000.0):
+		return false
 	if (
 		not data.get("balls") is Array
 		or data.balls.size() > MAX_BALLS
@@ -357,13 +403,15 @@ func _valid_ball(body: Dictionary) -> bool:
 	for key in BALL_FLAGS:
 		if typeof(body.get(key)) != TYPE_BOOL:
 			return false
-	for key in ["position", "visual_scale"]:
+	for key in ["position", "visual_scale", "velocity"]:
 		if (
 			typeof(body.get(key)) != TYPE_VECTOR2
 			or not body[key].is_finite()
 			or body[key].length() > 100000.0
 		):
 			return false
+	if not _vector(body.get("force"), 1.0e7):
+		return false
 	if (
 		body.visual_scale.x < 0.0
 		or body.visual_scale.y < 0.0
@@ -378,6 +426,9 @@ func _valid_ball(body: Dictionary) -> bool:
 		or not _number(body.get("rotation"), -1.0e6, 1.0e6)
 		or not _number(body.get("mass"), 0.01, 100000.0)
 		or not _number(body.get("radius_scale"), 0.01, 100.0)
+		or not _number(body.get("angular_velocity"), -100000.0, 100000.0)
+		or not _number(body.get("linear_damp"), 0.0, 10000.0)
+		or not _number(body.get("angular_damp"), 0.0, 10000.0)
 	):
 		return false
 	if typeof(body.get("color")) != TYPE_COLOR:
@@ -408,6 +459,10 @@ func _valid_ball(body: Dictionary) -> bool:
 		if typeof(item.get(key)) != TYPE_BOOL:
 			return false
 	return true
+
+
+func _vector(value, maximum: float) -> bool:
+	return typeof(value) == TYPE_VECTOR2 and value.is_finite() and value.length() <= maximum
 
 
 func _number(value, minimum: float, maximum: float) -> bool:

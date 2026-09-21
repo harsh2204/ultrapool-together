@@ -36,6 +36,11 @@ func _run() -> void:
 		"player": true,
 		"item": item,
 		"position": Vector2(300, 700),
+		"velocity": Vector2.ZERO,
+		"angular_velocity": 0.0,
+		"linear_damp": 1.5,
+		"angular_damp": 0.5,
+		"force": Vector2.ZERO,
 		"rotation": 0.0,
 		"spin": Vector3.ZERO,
 		"visual_scale": Vector2.ONE,
@@ -60,6 +65,8 @@ func _run() -> void:
 		"round_ended": false,
 		"game_over": false,
 		"daily": false,
+		"rotated": false,
+		"table_position": Vector2.ZERO,
 		"score": 0,
 		"required_score": 50,
 		"shots": 5,
@@ -93,6 +100,15 @@ func _run() -> void:
 	invalid = state.duplicate(true)
 	invalid.balls[0].position = Vector2(NAN, 0)
 	_check(not sync._valid_snapshot(invalid), "nonfinite position rejected")
+	invalid = state.duplicate(true)
+	invalid.balls[0].velocity = Vector2(INF, 0)
+	_check(not sync._valid_snapshot(invalid), "nonfinite prediction velocity rejected")
+	invalid = state.duplicate(true)
+	invalid.balls[0].linear_damp = -1.0
+	_check(not sync._valid_snapshot(invalid), "negative prediction damping rejected")
+	invalid = state.duplicate(true)
+	invalid.table_position = "0, 0"
+	_check(not sync._valid_snapshot(invalid), "invalid table transform rejected")
 	invalid = state.duplicate(true)
 	invalid.balls[0].visual_scale = Vector2(100000, 100000)
 	_check(not sync._valid_snapshot(invalid), "unbounded geometry rejected")
