@@ -252,6 +252,14 @@ func _build_tables():
 			progress.add_theme_font_size_override("font_size", 14)
 			progress.add_theme_color_override("font_color", MUTED)
 			content.add_child(progress)
+			if _state.get("table_count", 1) > 1 and summary.get("bounty_shot", 0) > 0:
+				var bounty = Label.new()
+				bounty.text = "Bounty · Shot %d" % summary.bounty_shot
+				if summary.get("bounty_bonus", 0) > 0:
+					bounty.text += " · +25 points"
+				bounty.add_theme_font_size_override("font_size", 14)
+				bounty.add_theme_color_override("font_color", GOLD)
+				content.add_child(bounty)
 		var table_players: Array = []
 		for player in _state.get("players", []):
 			if player.table == table_id:

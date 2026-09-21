@@ -1,6 +1,7 @@
 extends Node
 
 var _starting = false
+var _original_deck: Resource
 
 
 func _ready() -> void:
@@ -53,7 +54,7 @@ func validate_config(config: Dictionary) -> bool:
 	)
 
 
-func start(config: Dictionary) -> Error:
+func start(config: Dictionary, catalog: Node = null) -> Error:
 	if not validate_config(config):
 		return ERR_INVALID_DATA
 	if not at_main_menu():
@@ -62,6 +63,9 @@ func start(config: Dictionary) -> Error:
 	var database = get_node("/root/BallDatabase")
 	global_node.chosen_run_state = null
 	global_node.chosen_deck = database.id_to_deck[config.deck]
+	if catalog != null:
+		_original_deck = global_node.chosen_deck
+		global_node.chosen_deck = catalog.prepare_deck(_original_deck)
 	global_node.chosen_difficulty = database.id_to_difficulty[config.difficulty]
 	global_node.run_mode = global_node.RunMode.NORMAL
 	global_node.seed_text = str(config.seed)
@@ -97,6 +101,9 @@ func _process(_delta: float) -> void:
 func cancel() -> void:
 	_starting = false
 	set_process(false)
+	if _original_deck != null:
+		get_node("/root/Global").chosen_deck = _original_deck
+		_original_deck = null
 
 
 func return_menu() -> Error:
