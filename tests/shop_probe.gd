@@ -1,6 +1,16 @@
 extends Node
 
 var failures: Array[String] = []
+var controller: Node
+
+
+class ShopController:
+	extends Node
+	var finished = false
+	var panel: Control
+
+	func is_table_host() -> bool:
+		return true
 
 
 func _ready():
@@ -14,7 +24,7 @@ func _run():
 	var mod = get_node("/root/UltrapoolTogether")
 	mod.set_process(false)
 	mod.transport.close()
-	mod.panel.hide()
+	mod._set_panel(false)
 	get_node("/root/SettingsManager").use_analytics = false
 	get_node("/root/AnalyticsManager").state = 0
 	get_node("/root/CloudSaveManager").backend = null
@@ -24,7 +34,10 @@ func _run():
 	global_node.chosen_difficulty = database.id_to_difficulty["diff_1"]
 	global_node.chosen_run_state = null
 	var sync = mod.shop_sync
-	sync.begin_session(mod)
+	controller = ShopController.new()
+	controller.panel = mod.panel
+	add_child(controller)
+	sync.begin_session(controller)
 	global_node.go_to_game()
 	if not await _wait(
 		func():
@@ -118,6 +131,14 @@ func _run():
 		"paused host blocks guest transactions"
 	)
 	get_tree().paused = false
+	controller.finished = true
+	var completed: Dictionary = sync.capture()
+	var completed_money = game.player_info.money
+	_check(
+		not sync.handle_request({"action": "reroll", "revision": completed.revision}),
+		"completed tables reject shop transactions"
+	)
+	_check(game.player_info.money == completed_money, "completed table cannot spend money")
 	_finish(sync)
 
 
