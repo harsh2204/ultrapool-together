@@ -1,0 +1,305 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="lobby_scene.gd" id="1_lobby"]
+
+[node name="TogetherLobby" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_lobby")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.025, 0.047, 0.061, 1)
+
+[node name="TopRail" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 5.0
+grow_horizontal = 2
+mouse_filter = 2
+color = Color(0.91, 0.72, 0.38, 1)
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 24
+
+[node name="Layout" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Header" type="HBoxContainer" parent="Margin/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Brand" type="VBoxContainer" parent="Margin/Layout/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="Margin/Layout/Header/Brand"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 30
+text = "ULTRAPOOL"
+
+[node name="Together" type="Label" parent="Margin/Layout/Header/Brand"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.91, 0.72, 0.38, 1)
+theme_override_font_sizes/font_size = 15
+text = "T O G E T H E R"
+
+[node name="Close" type="Button" parent="Margin/Layout/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 4
+text = "Close · F8"
+
+[node name="RoomBar" type="HFlowContainer" parent="Margin/Layout"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/h_separation = 12
+theme_override_constants/v_separation = 8
+
+[node name="Code" type="Label" parent="Margin/Layout/RoomBar"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 4
+text = "CREATING STEAM ROOM…"
+
+[node name="Copy" type="Button" parent="Margin/Layout/RoomBar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Copy code"
+
+[node name="Invite" type="MenuButton" parent="Margin/Layout/RoomBar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Invite friend"
+flat = false
+
+[node name="Divider" type="ColorRect" parent="Margin/Layout"]
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+mouse_filter = 2
+color = Color(0.2, 0.31, 0.33, 1)
+
+[node name="Body" type="ScrollContainer" parent="Margin/Layout"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="Content" type="VBoxContainer" parent="Margin/Layout/Body"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 18
+
+[node name="Home" type="VBoxContainer" parent="Margin/Layout/Body/Content"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 18
+
+[node name="Welcome" type="Label" parent="Margin/Layout/Body/Content/Home"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "CREATE OR JOIN A LOBBY"
+autowrap_mode = 3
+
+[node name="Description" type="Label" parent="Margin/Layout/Body/Content/Home"]
+layout_mode = 2
+text = "Up to eight players. Share one table for co-op, or compete across separate tables."
+autowrap_mode = 3
+
+[node name="Host" type="Button" parent="Margin/Layout/Body/Content/Home"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(230, 54)
+layout_mode = 2
+size_flags_horizontal = 0
+text = "Create lobby"
+
+[node name="JoinTitle" type="Label" parent="Margin/Layout/Body/Content/Home"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "HAVE A ROOM CODE?"
+
+[node name="JoinRow" type="HBoxContainer" parent="Margin/Layout/Body/Content/Home"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="JoinCode" type="LineEdit" parent="Margin/Layout/Body/Content/Home/JoinRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Paste your friend's room code"
+max_length = 128
+
+[node name="Join" type="Button" parent="Margin/Layout/Body/Content/Home/JoinRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Join lobby"
+
+[node name="SteamNote" type="Label" parent="Margin/Layout/Body/Content/Home"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
+theme_override_font_sizes/font_size = 15
+text = "Everyone opens Ultrapool Together before joining. Invitations use Steam directly."
+autowrap_mode = 3
+
+[node name="Room" type="VBoxContainer" parent="Margin/Layout/Body/Content"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="RoomHeading" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room"]
+layout_mode = 2
+
+[node name="RoomTitle" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 27
+text = "YOUR LOBBY"
+
+[node name="Count" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "1 / 8 PLAYERS"
+
+[node name="Settings" type="HFlowContainer" parent="Margin/Layout/Body/Content/Room"]
+layout_mode = 2
+theme_override_constants/h_separation = 24
+theme_override_constants/v_separation = 10
+
+[node name="TableSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/TableSetting"]
+layout_mode = 2
+text = "Tables"
+
+[node name="TableCount" type="SpinBox" parent="Margin/Layout/Body/Content/Room/Settings/TableSetting"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(82, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 8.0
+value = 1.0
+
+[node name="ShotSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/ShotSetting"]
+layout_mode = 2
+text = "Shots per table"
+
+[node name="ShotBudget" type="SpinBox" parent="Margin/Layout/Body/Content/Room/Settings/ShotSetting"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(82, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 20.0
+value = 6.0
+
+[node name="Rules" type="Label" parent="Margin/Layout/Body/Content/Room"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
+text = "Everyone at a table plays together."
+autowrap_mode = 3
+
+[node name="Tables" type="GridContainer" parent="Margin/Layout/Body/Content/Room"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/h_separation = 16
+theme_override_constants/v_separation = 16
+columns = 2
+
+[node name="Bench" type="PanelContainer" parent="Margin/Layout/Body/Content/Room"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="BenchMargin" type="MarginContainer" parent="Margin/Layout/Body/Content/Room/Bench"]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 12
+
+[node name="BenchContent" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Bench/BenchMargin"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Bench/BenchMargin/BenchContent"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "CHOOSING A TABLE"
+
+[node name="Unassigned" type="HFlowContainer" parent="Margin/Layout/Body/Content/Room/Bench/BenchMargin/BenchContent"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/h_separation = 14
+theme_override_constants/v_separation = 8
+
+[node name="FooterRule" type="Label" parent="Margin/Layout"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = ""
+autowrap_mode = 3
+
+[node name="Status" type="Label" parent="Margin/Layout"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.91, 0.72, 0.38, 1)
+theme_override_font_sizes/font_size = 15
+text = ""
+autowrap_mode = 3
+
+[node name="Actions" type="HFlowContainer" parent="Margin/Layout"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/h_separation = 12
+theme_override_constants/v_separation = 8
+
+[node name="Leave" type="Button" parent="Margin/Layout/Actions"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Leave lobby"
+
+[node name="Ready" type="Button" parent="Margin/Layout/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(180, 48)
+layout_mode = 2
+text = "Ready up"
+
+[node name="Start" type="Button" parent="Margin/Layout/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(180, 48)
+layout_mode = 2
+text = "Start match"
+
+[node name="Return" type="Button" parent="Margin/Layout/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(180, 48)
+layout_mode = 2
+text = "End match · Return to lobby"

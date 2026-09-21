@@ -1,7 +1,8 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$GamePath,
-    [string]$Destination
+    [string]$Destination,
+    [string]$UserDataRoot = [Environment]::GetFolderPath('ApplicationData')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,6 +58,77 @@ function Assert-PlainPath([string]$Path) {
     }
 }
 
+function Get-ProgressImport {
+    $profileRoot = Get-FullDirectory $UserDataRoot
+    $steamProfile = Join-Path $profileRoot 'Godot\app_userdata\Ultrapool'
+    $modProfile = Join-Path $profileRoot 'UltrapoolTogether'
+    $importMarker = Join-Path $modProfile 'ultrapool-together-progress-import.json'
+    Assert-PlainPath $steamProfile
+    Assert-PlainPath $modProfile
+    Assert-PlainPath $importMarker
+    if (Test-Path -LiteralPath $importMarker) { return $null }
+
+    $sourceSave = Join-Path $steamProfile 'save.tres'
+    if (-not (Test-Path -LiteralPath $sourceSave -PathType Leaf)) {
+        Write-Host 'No Steam progression save found; existing mod progress is unchanged.'
+        return $null
+    }
+    foreach ($name in @('save.tres', 'save.bak.tres')) {
+        Assert-PlainPath (Join-Path $steamProfile $name)
+        Assert-PlainPath (Join-Path $modProfile $name)
+    }
+    $saveHeader = Get-Content -LiteralPath $sourceSave -TotalCount 1
+    if (-not $saveHeader -or $saveHeader -notmatch '^\[gd_resource\b' -or $saveHeader -notmatch 'script_class="SaveData"') {
+        throw 'The Steam progression save is empty or unrecognized. Existing saves were not changed.'
+    }
+    $backupRoot = Join-Path $modProfile 'save-import-backups'
+    Assert-PlainPath $backupRoot
+    return @{
+        source = $sourceSave
+        profile = $modProfile
+        marker = $importMarker
+        backup_root = $backupRoot
+    }
+}
+
+function Import-Progress($Plan) {
+    if ($null -eq $Plan) { return }
+    $importId = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '-' + [Guid]::NewGuid().ToString('N')
+    $backupPath = Join-Path $Plan.backup_root $importId
+    New-Item -ItemType Directory -Path $backupPath -Force | Out-Null
+    foreach ($name in @('save.tres', 'save.bak.tres')) {
+        $existing = Join-Path $Plan.profile $name
+        if (Test-Path -LiteralPath $existing -PathType Leaf) {
+            Copy-Item -LiteralPath $existing -Destination (Join-Path $backupPath $name)
+        }
+    }
+    $sourceHash = (Get-FileHash -LiteralPath $Plan.source -Algorithm SHA256).Hash
+    # Seed both native recovery files from the same imported progress.
+    foreach ($name in @('save.bak.tres', 'save.tres')) {
+        $target = Join-Path $Plan.profile $name
+        $staged = Join-Path $Plan.profile ($name + '.' + $importId + '.tmp')
+        Copy-Item -LiteralPath $Plan.source -Destination $staged
+        if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ne $sourceHash) {
+            throw 'The source save changed during import. Close Ultrapool and rerun Install.cmd.'
+        }
+        if (Test-Path -LiteralPath $target -PathType Leaf) {
+            [System.IO.File]::Replace($staged, $target, [System.Management.Automation.Language.NullString]::Value)
+        } else {
+            [System.IO.File]::Move($staged, $target)
+        }
+    }
+    $record = [ordered]@{
+        schema = 1
+        imported_at = [DateTime]::UtcNow.ToString('o')
+        source = $Plan.source
+        source_sha256 = $sourceHash
+        previous_mod_progress = $backupPath
+    }
+    $record | ConvertTo-Json | Set-Content -LiteralPath $Plan.marker -Encoding UTF8
+    Write-Host 'Imported Steam progression once. Future mod updates will preserve this profile.'
+    Write-Host "Previous mod progression backup: $backupPath"
+}
+
 if (-not $GamePath) { $GamePath = Find-Ultrapool }
 if (Test-Path -LiteralPath $GamePath -PathType Leaf) {
     $GamePath = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($GamePath))
@@ -85,6 +157,14 @@ if ($installRoot -eq [System.IO.Path]::GetPathRoot($installRoot).TrimEnd('\', '/
     throw 'The destination must be a dedicated mod directory, separate from the game and package roots.'
 }
 Assert-PlainPath $installRoot
+
+$runningGames = @(Get-Process -Name game -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -eq (Join-Path $gameRoot 'game.exe') -or $_.Path -eq (Join-Path $installRoot 'game.exe')
+})
+if ($runningGames.Count -gt 0) {
+    throw 'Close Ultrapool and Ultrapool Together before installing or importing progress.'
+}
+$progressImport = Get-ProgressImport
 
 $manifestPath = Join-Path $installRoot $manifestName
 $previousFiles = @()
@@ -116,7 +196,9 @@ foreach ($relative in $ownedFiles) {
     }
 }
 
-if (-not $PSCmdlet.ShouldProcess($installRoot, 'Install Ultrapool Together using local copies of the game files')) {
+$installAction = 'Install Ultrapool Together using local copies of the game files'
+if ($null -ne $progressImport) { $installAction += ' and import Steam progression once with a backup of existing mod progress' }
+if (-not $PSCmdlet.ShouldProcess($installRoot, $installAction)) {
     return
 }
 
@@ -158,9 +240,10 @@ UltrapoolTogether="*$autoloadPath"
 "@
 [System.IO.File]::WriteAllText((Join-Path $installRoot 'override.cfg'), $override, [System.Text.UTF8Encoding]::new($false))
 [System.IO.File]::WriteAllText((Join-Path $installRoot 'steam_appid.txt'), "4195110`n", [System.Text.Encoding]::ASCII)
+Import-Progress $progressImport
 $manifest.state = 'installed'
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
 Write-Host "Installed Ultrapool Together to $installRoot"
 Write-Host "Launch it with: $(Join-Path $installRoot 'Launch.cmd')"
-Write-Host 'Your original Steam game files are unchanged. Mod saves use a separate UltrapoolTogether user folder.'
+Write-Host 'Your original Steam game and solo runs are unchanged. Mod saves use a separate UltrapoolTogether user folder.'

@@ -1,16 +1,36 @@
 # Validation
 
-**Local runtime tests are suspended after the 2026-09-20 GPU hang.** Do not execute the game or Godot commands below, including `--headless`, without explicit user authorization for that test. See [AGENTS.md](../AGENTS.md). The installer test below uses fake executable fixtures and does not start the game.
+**Every Godot/runtime probe listed here is UNRUN for v0.4.** Source parsing is not engine type checking, gameplay validation, or a visual review. Local runtime tests remain suspended after the 2026-09-20 GPU hang: do not launch Ultrapool, Godot, or these probes, including `--headless`, without explicit user authorization for that test. See [AGENTS.md](../AGENTS.md). Earlier runtime results do not validate this revision.
 
-Run installer boundary tests with Windows PowerShell:
+## Checks that do not launch the game
+
+Installer boundary tests use fake executable fixtures:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\installation.ps1
 ```
 
-The Godot probes require your own installed Ultrapool 0.15.7. Make private test directories containing local copies of `game.exe`, `steam_api64.dll`, and `libgodotsteam.windows.template_release.x86_64.dll`. Keep test overrides away from your original game directory. Paths below are examples; replace the checkout prefix. Each probe verifies its save namespace before running.
+Every installer call in that suite supplies an isolated `UserDataRoot` under `.local/installer-tests`; real user profiles are not accessed. It checks one-time progression import, exact backups of existing mod saves, update preservation, untouched run files, missing/invalid source saves, dry runs, profile junction rejection, and uninstall behavior.
 
-For the adapter probe, use this `override.cfg` beside the private executable:
+GDScript can also be parsed with the private `gdtoolkit` installation under `.local/static-tools`. This runs Python only and does not check native game resources, Godot API availability, or behavior at runtime.
+
+## Standalone model and controller probes — UNRUN
+
+These scripts extend `SceneTree`. They use a separate compatible Godot 4.6 executable's `--script` entry point; they are not game autoloads and do not have game-save namespace guards. Run them only after authorization, from a private test project with its own user-data directory and no game autoloads. The shipped game executable is a release template and does not provide this standalone script workflow.
+
+| Probe | Coverage | Success marker |
+| --- | --- | --- |
+| `lobby_probe.gd` | Eight-player capacity, self-selected seats, readiness invalidation, host-only settings, unequal table groups, equal shots per table, start/reset, reserved disconnected seats, and leader selection. | `LOBBY_PROBE PASS` |
+| `router_probe.gd` | Authenticated actor identity, requests to the correct table leader, table-isolated broadcasts and replies, reliable actions, disconnected members, and malformed routes. | `ROUTER_PROBE PASS` |
+| `controller_probe.gd` | Main controller lifecycle using off-tree service substitutes: identity teardown, room/match generations, terminal leader disconnects and reconnects, a run closing during a shot, and targeted shop synchronization preserving the broadcast cache. | `CONTROLLER_PROBE PASS` |
+
+Each script exits 0 only on success. The standalone controller probe creates no native game scenes or network connections. These scripts still execute Godot and remain covered by the runtime restriction.
+
+## Native game probes — UNRUN
+
+These probes require your own installed Ultrapool 0.15.7. Make private test directories containing local copies of `game.exe`, `steam_api64.dll`, and `libgodotsteam.windows.template_release.x86_64.dll`. Keep overrides out of the normal game directory. Replace the checkout prefix in the following examples with an absolute path using forward slashes.
+
+Each native probe checks its save namespace before proceeding. Configure the namespace and autoload in `override.cfg` beside the private executable:
 
 ```ini
 [application]
@@ -21,13 +41,35 @@ config/custom_user_dir_name="UltrapoolTogetherAdapterTest"
 AdapterProbe="*C:/Code/ultrapool-multiplayer/tests/adapter_probe.gd"
 ```
 
-After authorization, launch that executable from its own directory with `--headless`. The probe starts a real classic run and checks the native aiming hook, unchanged mouse/controller bindings, off-turn drag and precise-confirmation rejection, and preservation of cue-ball state. It then shoots the cue, checks shot consumption and settling, exercises round-end cash-out and a paused result popup, and verifies restoration of the original player script. It prints `ADAPTER_PROBE_PASS` and exits 0 on success.
+Use the matching settings below. Only the shop and session probes also require the `UltrapoolTogether` main autoload; put it before the probe autoload.
 
-See [TRANSPORT.md](TRANSPORT.md) for the network probe, including the optional Steam room check.
+| Probe | Save namespace | Probe autoload | Success marker |
+| --- | --- | --- | --- |
+| `adapter_probe.gd` | `UltrapoolTogetherAdapterTest` | `AdapterProbe` | `ADAPTER_PROBE_PASS` |
+| `snapshot_probe.gd` | `UltrapoolTogetherSnapshotTest` | `SnapshotProbe` | `SNAPSHOT_PROBE PASS` |
+| `shop_probe.gd` | `UltrapoolTogetherShopTest` | `ShopProbe` | `SHOP_PROBE_PASS` |
+| `session_probe.gd` | `UltrapoolTogetherSessionTesthost` / `UltrapoolTogetherSessionTestguest` | `SessionProbe` | `SESSION_PROBE_PASS host` / `SESSION_PROBE_PASS guest` |
+| `transport_probe.gd` | `UltrapoolTogetherTransportTest` | `TogetherTransportTest` | `TRANSPORT TEST COMPLETE PASS` |
 
-The packet-validation probe uses the same isolated-runtime setup with save namespace `UltrapoolTogetherSnapshotTest` and autoload `SnapshotProbe="*C:/Code/ultrapool-multiplayer/tests/snapshot_probe.gd"`. It covers malformed values, duplicate identities, resource-path injection, base pockets and dynamic holes; it remains unrun under the same runtime restriction.
+After authorization for a particular probe, launch its private executable from its own test directory and capture stdout and stderr. Success requires the listed marker, exit code 0, and no mod script errors. Runtime tests use native game resources even when launched with `--headless`.
 
-For the complete session test, create two separate private runtime directories with these overrides:
+The adapter probe starts a classic run and exercises the native aiming hook, unchanged mouse/controller bindings, off-turn drag and precise-confirmation rejection, cue state preservation, shot consumption and settling, round-end cash-out, a paused result popup, and restoration of the original player script.
+
+The snapshot probe covers malformed values, duplicate identities, resource-path injection, base pockets, and dynamic holes. It validates packet handling; it does not prove that guest visuals or ball movement are correct.
+
+The shop probe needs this additional autoload before `ShopProbe`:
+
+```ini
+UltrapoolTogether="*C:/Code/ultrapool-multiplayer/mod/main.gd"
+```
+
+It opens a native shop under a table-host controller substitute, buys and rearranges items, rejects replayed transactions and changed item identities, checks floating-point currency and resource validation, and rejects transactions while paused or after the table finishes. It exercises the shared action handler locally; it does not simulate simultaneous remote shoppers or validate every item combination.
+
+See [TRANSPORT.md](TRANSPORT.md) for the eight-peer loopback transport probe and optional Steam room check. The revised protocol 4 probe is also unrun. A Steam room creation check alone does not validate play across accounts.
+
+## Two-process session flow — UNRUN
+
+Create two separate private runtime directories. The host's override is:
 
 ```ini
 [application]
@@ -39,12 +81,13 @@ UltrapoolTogether="*C:/Code/ultrapool-multiplayer/mod/main.gd"
 SessionProbe="*C:/Code/ultrapool-multiplayer/tests/session_probe.gd"
 ```
 
-Use `UltrapoolTogetherSessionTestguest` for the second directory's save namespace. After authorization for this two-process test, start the first executable with `--rendering-method gl_compatibility -- --host` and the second with `--rendering-method gl_compatibility -- --guest`. The test opens localhost UDP port 24817. Capture stdout and stderr and wait for both processes to finish. Both must print `SESSION_PROBE_PASS` and exit 0.
+Use `UltrapoolTogetherSessionTestguest` in the second directory. After explicit authorization for this two-process test, start the first executable with `--rendering-method gl_compatibility -- --host` and the second with `--rendering-method gl_compatibility -- --guest`. This renderer argument is part of the proposed test configuration, not an established fix for the earlier GPU incident. The probe opens localhost UDP port 24817. Wait for both processes to finish and require both role-specific pass markers and exit code 0.
 
-The v0.3 session test starts a real game, passes turns in co-op, verifies the native controls are disabled off-turn and while the multiplayer panel is open, and rejects invalid/stale/duplicate shots. It seeds the PvP counters at four shots each and submits each player's last shot through the native player hook. The guest checks native type textures, replica isolation from scoring callbacks, confirmed shot messages, and independent table corrections. Disconnect checks cover restoration of the host player script and the guest's original menu, camera, and input bindings. The probe does not capture screenshots. It does not cover a ten-shot full-run playthrough or a remote Internet connection.
+The v0.4 probe uses the actual lobby scene signals and controller in two phases:
 
-The v0.3 changes have only been checked statically while runtime testing is suspended. Earlier runtime results do not validate these changes. A future two-PC playtest should verify local movement under latency, remote aiming and cursors, every ball's type and hover details, concurrent shop actions, stale purchase rejection, rearranging inventory from either player, shared shop exit, and restoration of local play after leaving.
+1. **One shared co-op table.** Joining preserves the guest menu and places the guest on the unassigned bench. Starting early or readying without a seat is rejected. Both choose seats and ready up before the host starts. Native host input is blocked while the lobby is open; duplicate input cannot consume another shot. The guest checks native type textures and inspection, waits for confirmed shot input, and verifies that its ball moves across physics frames while network polling is briefly stopped. Two shots complete without a competitive cap. Returning to the lobby and closing it restores the guest's original menu.
+2. **Two separate competitive tables.** The host changes to two tables with a one-shot budget, and both players seat and ready again. Each player runs its own native game with matching seed, deck, difficulty, and initial cue position. Distinct wallet changes remain local to their respective tables. Each table consumes one shot, locks aiming when finished, and receives a scoreboard containing both finished tables. Returning to the lobby and one guest leaving must preserve the host's room. Native input bindings must remain unchanged through both phases.
 
-The shop probe uses an isolated copy with save namespace `UltrapoolTogetherShopTest` and both autoloads `UltrapoolTogether="*C:/Code/ultrapool-multiplayer/mod/main.gd"` and `ShopProbe="*C:/Code/ultrapool-multiplayer/tests/shop_probe.gd"`. After explicit authorization for that runtime test, launch from the private test directory. It starts a native shop, buys and rearranges items, rejects replayed transactions and changed item identities, checks floating-point currency and resource validation, and rejects transactions while the host is paused. Success prints `SHOP_PROBE_PASS`; this probe has been authored and parsed but has not been executed.
+The probe drives UI signals rather than clicking rendered controls and takes no screenshots. It covers two local processes, not eight real players, Internet latency, Steam invitations, or a complete campaign.
 
-Startup/exit warnings from the original executable (pre-tree node lookup and leaked rendering objects) also occur in the unmodded baseline; test success is determined by the explicit pass markers, exit codes, and absence of mod script errors. Release templates ignore `--script`; the probes use autoload overrides instead.
+A future authorized multi-PC playtest should check the full lobby at different window sizes, direct invitations with the overlay disabled, 1v1v1 and uneven table groups, equal table budgets, independent boards and shops, smooth local ball movement under latency, partner aiming/cursors, ball types and inspection, concurrent purchases and rearrangement, table-host departure, rematches, and restoration of local play after leaving.

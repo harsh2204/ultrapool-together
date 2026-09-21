@@ -15,6 +15,8 @@ var _disabled_items: Dictionary = {}
 var _disabled_buttons: Dictionary = {}
 var _buttons: Dictionary = {}
 var _tutorial_enabled = true
+var _tutorial_saved = false
+var _was_finished = false
 var _selected = ""
 var _pending = false
 var _pending_at = 0
@@ -46,17 +48,20 @@ func begin_session(controller: Node):
 	_state.clear()
 	_selected = ""
 	_pending = false
-	if _controller.local_player == 0:
+	_was_finished = _controller.finished
+	if _controller.is_table_host():
 		var tutorial = get_node("/root/TutorialManager")
 		_tutorial_enabled = tutorial.ENABLED
+		_tutorial_saved = true
 		tutorial.ENABLED = false
 		if tutorial.active_popup != null:
 			tutorial.cancel()
 
 
 func end_session():
-	if _controller != null and _controller.local_player == 0:
+	if _tutorial_saved:
 		get_node("/root/TutorialManager").ENABLED = _tutorial_enabled
+		_tutorial_saved = false
 	_restore_items()
 	_controller = null
 	_state.clear()
@@ -95,9 +100,12 @@ func _process(_delta):
 	if _controller == null:
 		return
 	_panel.visible = is_open() and not get_node("/root/UIManager").is_popup_open()
+	if _was_finished != _controller.finished:
+		_was_finished = _controller.finished
+		_update_actions()
 	if is_open() and _columns != _column_count():
 		_render()
-	if _controller.local_player == 0:
+	if _controller.is_table_host():
 		var shop = _shop()
 		if shop != null:
 			_lock_native_items(shop)
@@ -117,7 +125,7 @@ func _shop():
 
 
 func capture() -> Dictionary:
-	if _controller == null or _controller.local_player != 0:
+	if _controller == null or not _controller.is_table_host():
 		return {}
 	var shop = _shop()
 	var data = {"open": shop != null}
@@ -196,8 +204,10 @@ func _pack_slot(group: String, index: int, slot) -> Dictionary:
 
 func handle_request(message: Dictionary) -> bool:
 	last_error = ""
-	if _controller == null or _controller.local_player != 0:
+	if _controller == null or not _controller.is_table_host():
 		return false
+	if _controller.finished:
+		return _reject("This table has finished. Return to the lobby to play again.")
 	if not message.get("revision") is int or not message.get("action") is String:
 		return _reject("Invalid shop action.")
 	capture()
@@ -565,7 +575,7 @@ func _add_section(title: String, group: String, start: int, end: int):
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.toggle_mode = true
 		button.button_pressed = _selected == slot.key
-		button.disabled = _state.busy or _pending
+		button.disabled = _state.busy or _pending or _controller.finished
 		var description = _describe(slot)
 		button.tooltip_text = description.get("name", "Empty slot")
 		button.pressed.connect(_select_slot.bind(slot.key))
@@ -681,7 +691,7 @@ func _find_slot(key: String) -> Dictionary:
 
 
 func _select_slot(key: String):
-	if _pending or _state.busy:
+	if _pending or _state.busy or _controller.finished:
 		return
 	var slot = _find_slot(key)
 	if _selected == key:
@@ -715,11 +725,11 @@ func _submit_item(action: String, source: String, target = ""):
 
 
 func _submit(message: Dictionary):
-	if not is_open() or _pending or _controller.panel.visible:
+	if not is_open() or _pending or _controller.panel.visible or _controller.finished:
 		return
 	message["kind"] = "shop_request"
 	message["revision"] = _state.revision
-	if _controller.local_player == 0:
+	if _controller.is_table_host():
 		var accepted = handle_request(message)
 		apply_result(accepted, last_error)
 	else:
@@ -740,7 +750,9 @@ func _mix_has_items() -> bool:
 func _update_actions():
 	if not is_open():
 		return
-	var blocked = _pending or _state.busy
+	var blocked = _pending or _state.busy or _controller.finished
+	if _controller.finished:
+		_notice.text = "This table has finished. Scores and purchases are locked."
 	for button in _buttons.values():
 		button.disabled = blocked
 	_reroll.text = "Reroll · %d €" % _state.reroll

@@ -138,7 +138,7 @@ func _game():
 	if global_node == null:
 		return null
 	var game = global_node.get("gameManager")
-	if not is_instance_valid(game) or not game.is_inside_tree():
+	if not is_instance_valid(game) or not game.is_inside_tree() or not game.is_node_ready():
 		return null
 	return game
 
