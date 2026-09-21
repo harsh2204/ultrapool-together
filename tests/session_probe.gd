@@ -83,10 +83,15 @@ func _host():
 	_check(game.get_shots_left() == before - 2, "both players consume exactly one native shot")
 	_check(not mod.finished, "co-op is not limited by the competitive shot budget")
 	mod.panel.return_requested.emit()
+	_check(
+		mod.active and _room().return_vote.active,
+		"host must wait for teammate consent before ending co-op"
+	)
 	if not await _wait(func(): return not mod.active and _at_menu(), 20):
 		_check(false, "return to lobby ends the first run")
 		return
 	mod.panel.table_count_requested.emit(2)
+	mod.panel.match_mode_requested.emit("score")
 	mod.panel.shot_budget_requested.emit(1)
 	if not await _wait(
 		func():
@@ -181,6 +186,11 @@ func _guest():
 		player.global_position.distance_to(position) > 0.1,
 		"guest ball moves between network updates"
 	)
+	if not await _wait(func(): return _room().get("return_vote", {}).get("active", false), 90):
+		_check(false, "host proposes returning from co-op")
+		return
+	_check(mod.active, "return proposal keeps the guest run active until consent")
+	mod.panel.return_vote_requested.emit(true)
 	if not await _wait(func(): return not mod.active and _at_menu(), 90):
 		_check(false, "guest returns from co-op to the lobby")
 		return
@@ -195,7 +205,13 @@ func _guest():
 	)
 	mod._set_panel(true)
 	if not await _wait(
-		func(): return _room().get("table_count", 0) == 2 and _room().get("shot_budget", 0) == 1, 20
+		func():
+			return (
+				_room().get("table_count", 0) == 2
+				and _room().get("match_mode") == "score"
+				and _room().get("shot_budget", 0) == 1
+			),
+		20
 	):
 		_check(false, "guest receives competitive table settings")
 		return

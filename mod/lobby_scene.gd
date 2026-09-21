@@ -8,8 +8,11 @@ signal slot_requested(table: int, slot: int)
 signal ready_requested(ready: bool)
 signal table_count_requested(count: int)
 signal shot_budget_requested(shots: int)
+signal match_mode_requested(mode: String)
 signal start_requested
 signal return_requested
+signal return_vote_requested(approve: bool)
+signal watch_requested(table: int)
 signal leave_requested
 signal close_requested
 
@@ -48,9 +51,16 @@ func _ready():
 	%Invite.get_popup().id_pressed.connect(_invite)
 	%TableCount.value_changed.connect(func(value): table_count_requested.emit(int(value)))
 	%ShotBudget.value_changed.connect(func(value): shot_budget_requested.emit(int(value)))
+	%MatchMode.add_item("Race", 0)
+	%MatchMode.add_item("Score PvP", 1)
+	%MatchMode.item_selected.connect(
+		func(index): match_mode_requested.emit("race" if index == 0 else "score")
+	)
 	%Ready.pressed.connect(_toggle_ready)
 	%Start.pressed.connect(func(): start_requested.emit())
 	%Return.pressed.connect(func(): return_requested.emit())
+	%ApproveReturn.pressed.connect(func(): return_vote_requested.emit(true))
+	%CancelReturn.pressed.connect(func(): return_vote_requested.emit(false))
 	%Leave.pressed.connect(func(): leave_requested.emit())
 	%Close.pressed.connect(func(): close_requested.emit())
 	resized.connect(_resize_tables)
@@ -79,7 +89,12 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	%TableCount.editable = is_host and not started
 	%ShotBudget.set_value_no_signal(state.get("shot_budget", 6))
 	%ShotBudget.editable = is_host and not started
-	%ShotBudget.get_parent().visible = state.get("table_count", 1) > 1
+	var multiple_tables: bool = state.get("table_count", 1) > 1
+	var racing = multiple_tables and state.get("match_mode", "race") == "race"
+	%MatchMode.select(0 if state.get("match_mode", "race") == "race" else 1)
+	%MatchMode.disabled = not is_host or started
+	%MatchMode.get_parent().visible = multiple_tables
+	%ShotBudget.get_parent().visible = multiple_tables and not racing
 	var summaries: Array = state.get("table_summaries", [])
 	var complete = (
 		started and not summaries.is_empty() and summaries.all(func(table): return table.finished)
@@ -88,11 +103,11 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	%RoomTitle.text = (
 		"MATCH RESULTS" if complete else ("MATCH IN PROGRESS" if started else "YOUR LOBBY")
 	)
-	%Rules.text = (
-		"One table. One shared run. Take turns and shop together."
-		if state.get("table_count", 1) == 1
-		else "%d tables compete. Players at the same table are partners." % state.table_count
-	)
+	%Rules.text = "One table. One shared run. Take turns and shop together."
+	if racing:
+		%Rules.text = "Race to finish the run first. Each table has its own board and shared shop."
+	elif multiple_tables:
+		%Rules.text = "Highest score wins. Each table shares the same total shot allowance."
 	if not is_host and not started:
 		%Rules.text += " The host chooses the match settings."
 	var local_player = _player(local_id)
@@ -103,15 +118,29 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	%Ready.visible = not started
 	%Start.visible = is_host and not started
 	%Start.disabled = not state.get("can_start", false)
-	%Return.visible = is_host and started
-	%Return.text = "Return to lobby" if complete else "End match · Return to lobby"
+	var return_vote: Dictionary = state.get("return_vote", {})
+	var voting: bool = started and not complete and return_vote.get("active", false)
+	var eligible: Array = return_vote.get("eligible", [])
+	var approved: Array = return_vote.get("ready", [])
+	%Return.visible = is_host and started and not voting
+	%Return.text = "Return to lobby" if complete else "Vote to end match"
+	%ApproveReturn.visible = voting and local_id in eligible
+	%ApproveReturn.text = "Approved" if local_id in approved else "Approve return to lobby"
+	%ApproveReturn.disabled = local_id in approved
+	%CancelReturn.visible = voting and local_id in eligible
 	%Leave.text = "Leave match" if started else "Leave lobby"
+	%Leave.visible = not is_host or not started or complete
 	%Close.text = "Back to game · F8" if started else "Close · F8"
 	%FooterRule.text = (
 		"Match complete. The host can return everyone to the lobby."
 		if complete
 		else _readiness_text(players, local_player, started)
 	)
+	if voting:
+		%FooterRule.text = (
+			"Return to lobby? %d / %d approved. Play continues until everyone agrees."
+			% [approved.size(), eligible.size()]
+		)
 	%FooterRule.visible = _room_open
 	if roster_changed:
 		_build_tables()
@@ -243,35 +272,7 @@ func _build_tables():
 		content.add_child(title)
 		var summary = _table_summary(table_id)
 		if _state.get("started", false) and not summary.is_empty():
-			var score = Label.new()
-			score.text = "%.0f POINTS" % summary.get("score", 0)
-			score.add_theme_font_size_override("font_size", 23)
-			content.add_child(score)
-			var progress = Label.new()
-			progress.text = (
-				"%d shots · %s" % [summary.get("shots_used", 0), summary.get("status", "Playing")]
-				if _state.get("table_count", 1) == 1
-				else (
-					"%d / %d shots · %s"
-					% [
-						summary.get("shots_used", 0),
-						summary.get("shot_budget", 0),
-						summary.get("status", "Playing")
-					]
-				)
-			)
-			progress.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			progress.add_theme_font_size_override("font_size", 14)
-			progress.add_theme_color_override("font_color", MUTED)
-			content.add_child(progress)
-			if _state.get("table_count", 1) > 1 and summary.get("bounty_shot", 0) > 0:
-				var bounty = Label.new()
-				bounty.text = "Bounty · Shot %d" % summary.bounty_shot
-				if summary.get("bounty_bonus", 0) > 0:
-					bounty.text += " · +25 points"
-				bounty.add_theme_font_size_override("font_size", 14)
-				bounty.add_theme_color_override("font_color", GOLD)
-				content.add_child(bounty)
+			_add_progress(content, summary)
 		var table_players: Array = []
 		for player in _state.get("players", []):
 			if player.table == table_id:
@@ -287,6 +288,7 @@ func _build_tables():
 			occupied.append(player.slot)
 			players.add_child(_player_row(player, color))
 		if _state.get("started", false):
+			_add_watch_button(content, table_id, summary)
 			continue
 		var seat = 0
 		while seat in occupied:
@@ -299,6 +301,68 @@ func _build_tables():
 		join.disabled = here or seat >= _state.get("capacity", 8)
 		join.pressed.connect(func(): slot_requested.emit(table_id, seat))
 		content.add_child(join)
+
+
+func _add_progress(content: VBoxContainer, summary: Dictionary):
+	var multiple_tables: bool = _state.get("table_count", 1) > 1
+	var racing = multiple_tables and _state.get("match_mode", "race") == "race"
+	var headline = Label.new()
+	headline.text = "%.0f POINTS" % summary.get("score", 0)
+	if racing:
+		headline.text = "ROUND %d" % maxi(1, summary.get("round", 1))
+		if summary.get("run_goal_rounds", 0) > 0:
+			headline.text += " / %d" % summary.run_goal_rounds
+		if summary.get("finish_order", 0) > 0:
+			headline.text = "FINISHED #%d" % summary.finish_order
+	headline.add_theme_font_size_override("font_size", 23)
+	content.add_child(headline)
+	var progress = Label.new()
+	var status: String = summary.get("status", "Playing")
+	if racing:
+		progress.text = "%s · %s" % [_time_text(summary.get("elapsed_ms", 0)), status]
+	elif multiple_tables:
+		progress.text = (
+			"%d / %d shots · %s"
+			% [summary.get("shots_used", 0), summary.get("shot_budget", 0), status]
+		)
+	else:
+		progress.text = "%d shots · %s" % [summary.get("shots_used", 0), status]
+	progress.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	progress.add_theme_font_size_override("font_size", 14)
+	progress.add_theme_color_override("font_color", MUTED)
+	content.add_child(progress)
+	if not multiple_tables or racing or summary.get("bounty_shot", 0) <= 0:
+		return
+	var bounty = Label.new()
+	bounty.text = "Bounty · Shot %d" % summary.bounty_shot
+	if summary.get("bounty_bonus", 0) > 0:
+		bounty.text += " · +25 points"
+	bounty.add_theme_font_size_override("font_size", 14)
+	bounty.add_theme_color_override("font_color", GOLD)
+	content.add_child(bounty)
+
+
+func _add_watch_button(content: VBoxContainer, table: int, summary: Dictionary):
+	if _state.get("table_count", 1) < 2:
+		return
+	var own_table: int = _player(_local_id).get("table", -1)
+	var watched: int = _state.get("watched_table", own_table)
+	if table == own_table and watched == own_table:
+		return
+	var watch = Button.new()
+	watch.custom_minimum_size.y = 40
+	watch.add_theme_font_size_override("font_size", 16)
+	watch.text = "Return to my table" if table == own_table else "Watch table"
+	if watched == table:
+		watch.text = "Watching"
+	watch.disabled = watched == table or summary.get("status", "") == "Table host disconnected"
+	watch.pressed.connect(func(): watch_requested.emit(table))
+	content.add_child(watch)
+
+
+func _time_text(milliseconds: int) -> String:
+	var seconds = maxi(0, milliseconds) / 1000
+	return "%d:%02d" % [seconds / 60, seconds % 60]
 
 
 func _player_row(player: Dictionary, color: Color) -> Control:

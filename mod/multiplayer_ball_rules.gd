@@ -20,6 +20,7 @@ var call_state: Dictionary = {}
 var bounty_shot = 0
 var _round_key = ""
 var _competitive = false
+var _solo_table = false
 var _hit_object = false
 var _walls: Dictionary = {}
 var _pocketed: Dictionary = {}
@@ -58,6 +59,7 @@ func begin_shot(accepted_index: int, actor: int, competitive: bool, member_count
 	shot_index = accepted_index
 	shooter = actor
 	_competitive = competitive
+	_solo_table = member_count == 1
 	pending = true
 	_clear_shot()
 	return true
@@ -117,7 +119,7 @@ func pocket(
 				if (
 					ball.marked_shot > 0
 					and ball.marked_shot < shot_index
-					and (_competitive or ball.marker != shooter)
+					and (_competitive or _solo_table or ball.marker != shooter)
 				):
 					result.points += ceilf(value * 0.5)
 					ball.paid[kind] = true

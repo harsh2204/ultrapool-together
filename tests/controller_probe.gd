@@ -6,7 +6,7 @@ class TransportStub:
 	var is_host = false
 	var id = 20
 	var coordinator = 10
-	var room_code = "UP5-test"
+	var room_code = "UP6-test"
 	var sent: Array = []
 
 	func local_id() -> int:
@@ -50,6 +50,8 @@ class AdapterStub:
 		"can_shoot": false,
 		"in_shop": false,
 		"game_over": false,
+		"run_won": false,
+		"run_goal_rounds": 20,
 		"round_finalized": false,
 		"round": 0,
 		"shots_left": 0,
@@ -87,6 +89,28 @@ class TableStub:
 
 	func end_guest():
 		ended += 1
+
+	func _valid_snapshot(data: Dictionary) -> bool:
+		return data.get("available") is bool
+
+
+class SpectatorStub:
+	extends Node
+	var watched_table = -1
+	var states: Array = []
+	var snapshots: Array = []
+
+	func is_watching() -> bool:
+		return watched_table >= 0
+
+	func close():
+		watched_table = -1
+
+	func apply_state(table: int, state: Dictionary):
+		states.append({"table": table, "state": state.duplicate(true)})
+
+	func apply_snapshot(table: int, scene: Dictionary):
+		snapshots.append({"table": table, "scene": scene.duplicate(true)})
 
 
 class ShopStub:
@@ -207,6 +231,12 @@ func _initialize() -> void:
 	_run_closes_during_shot()
 	_targeted_shop_sync()
 	_rejected_shots_preserve_ability_state()
+	_race_and_score_limits()
+	_race_finishes()
+	_return_vote_lifecycle()
+	_host_leave_requires_consent()
+	_startup_failure_scope()
+	_spectator_routes()
 	print("CONTROLLER_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
@@ -255,6 +285,7 @@ func _controller():
 	controller.lobby = {
 		"started": true,
 		"table_count": 2,
+		"match_mode": "score",
 		"shot_budget": 6,
 		"players":
 		[
@@ -520,6 +551,329 @@ func _rejected_shots_preserve_ability_state():
 	)
 	_check(rules.shot_index == 2, "passing does not create a gap in accepted-shot indices")
 	controller.free()
+
+
+func _host_controller(mode: String):
+	var host = _controller()
+	host.transport.is_host = true
+	host.transport.id = 10
+	host._local_id = 10
+	host.table_id = 0
+	host.table_leader_id = 10
+	host.turn_owner = 10
+	host.lobby_model.setup(10, "Room host")
+	for id in [20, 30]:
+		host.lobby_model.add_player(id, "Player %d" % id)
+	host.lobby_model.set_table_count(10, 2)
+	host.lobby_model.set_match_mode(10, mode)
+	host.lobby_model.choose_slot(20, 1, 0)
+	host.lobby_model.choose_slot(30, 1, 1)
+	for id in [10, 20, 30]:
+		host.lobby_model.set_ready(id, true)
+	host.lobby_model.start(10)
+	host.table_summaries = [_summary(0, 10), _summary(1, 20)]
+	host._broadcast_lobby()
+	host.transport.sent.clear()
+	return host
+
+
+func _summary(table: int, leader: int) -> Dictionary:
+	return {
+		"table": table,
+		"leader_id": leader,
+		"score": 0.0,
+		"base_score": 0.0,
+		"bounty_shot": 0,
+		"bounty_bonus": 0.0,
+		"shots_used": 0,
+		"shot_budget": 6,
+		"finished": false,
+		"run_won": false,
+		"round": 1,
+		"run_goal_rounds": 20,
+		"elapsed_ms": 0,
+		"finish_order": 0,
+		"status": "Playing"
+	}
+
+
+func _state(controller, table: int, overrides: Dictionary = {}) -> Dictionary:
+	var state: Dictionary = controller.adapter.game_data()
+	state.merge(
+		{
+			"kind": "state",
+			"available": true,
+			"table_active": true,
+			"turn_owner": controller._leader(table),
+			"turn": 1,
+			"pending": false,
+			"round": 1,
+			"total_score": 12.0,
+			"used_shots": 1,
+			"bounty_shot": 0,
+			"multiplayer_balls": controller.multiplayer_balls.capture(),
+			"finished": false,
+			"finish_reason": ""
+		},
+		true
+	)
+	state.merge(overrides, true)
+	return state
+
+
+func _send_table(controller, actor: int, table: int, payload: Dictionary, match_value: int = -1):
+	controller._route_table(
+		actor,
+		{
+			"kind": "table",
+			"match": controller.match_id if match_value < 0 else match_value,
+			"table": table,
+			"payload": payload
+		}
+	)
+
+
+func _race_and_score_limits():
+	for mode in ["race", "score"]:
+		var controller = _controller()
+		controller.active = true
+		controller.lobby.match_mode = mode
+		controller.used_shots = 5
+		controller.shot_pending = true
+		controller._finish_shot()
+		_check(controller.used_shots == 6, "%s counts completed native shots" % mode)
+		_check(controller.finished == (mode == "score"), "%s applies the correct shot limit" % mode)
+		controller.free()
+	var coop = _controller()
+	coop.active = true
+	coop.lobby.table_count = 1
+	coop.lobby.match_mode = "score"
+	coop.used_shots = 5
+	coop._finish_shot()
+	_check(not coop.finished, "one-table co-op ignores saved competitive mode and shot budget")
+	coop.free()
+
+
+func _race_finishes():
+	var host = _host_controller("race")
+	var win = _state(
+		host,
+		1,
+		{
+			"game_over": true,
+			"run_won": true,
+			"round": 20,
+			"finished": true,
+			"finish_reason": "Run completed"
+		}
+	)
+	_check(host._valid_state(win, 1), "native final-round victory is a valid race finish")
+	var premature: Dictionary = win.duplicate(true)
+	premature.round = 19
+	_check(not host._valid_state(premature, 1), "winning a nonfinal round cannot finish a race")
+	var no_goal: Dictionary = win.duplicate(true)
+	no_goal.round = 0
+	no_goal.run_goal_rounds = 0
+	_check(not host._valid_state(no_goal, 1), "empty run goal cannot count as race victory")
+	var not_ended: Dictionary = win.duplicate(true)
+	not_ended.game_over = false
+	_check(not host._valid_state(not_ended, 1), "unfinished native run cannot claim victory")
+	_send_table(host, 30, 1, win)
+	_check(not host.table_summaries[1].finished, "teammate cannot publish a table leader's victory")
+	_send_table(host, 20, 1, win, host.match_id - 1)
+	_check(not host.table_summaries[1].finished, "previous-match victory is ignored")
+	_send_table(host, 20, 1, win)
+	_check(
+		host.table_summaries[1].finish_order == 1, "first authenticated win receives first place"
+	)
+	var recorded: Dictionary = host.table_summaries[1].duplicate(true)
+	_send_table(host, 20, 1, win)
+	_check(
+		host._finish_count == 1 and host.table_summaries[1] == recorded,
+		"duplicate victory cannot change place or finish time"
+	)
+	var regressed = _state(host, 1)
+	_send_table(host, 20, 1, regressed)
+	_check(host.table_summaries[1] == recorded, "late playing state cannot reopen a finished table")
+	var second = win.duplicate(true)
+	second.turn_owner = 10
+	_send_table(host, 10, 0, second)
+	_check(host.table_summaries[0].finish_order == 2, "next table gets second place")
+	_check(host._match_complete(), "all terminal tables complete the match")
+	host.free()
+	var losses = _host_controller("race")
+	_send_table(
+		losses,
+		20,
+		1,
+		_state(
+			losses,
+			1,
+			{"game_over": true, "finished": true, "finish_reason": "Run ended", "round": 20}
+		)
+	)
+	_check(
+		losses.table_summaries[1].finished and losses.table_summaries[1].finish_order == 0,
+		"losing on the final round finishes without placing"
+	)
+	_check(losses._finish_count == 0, "loss does not consume first place")
+	losses.free()
+
+
+func _return_vote_lifecycle():
+	var host = _host_controller("race")
+	host.active = true
+	var generation: int = host.match_id
+	host._apply_lobby_request(20, {"action": "reset", "match": generation})
+	_check(not host.lobby.return_vote.active, "guest cannot bypass vote by proposing a reset")
+	host._apply_lobby_request(10, {"action": "reset", "match": generation - 1})
+	_check(not host.lobby.return_vote.active, "stale reset request cannot open a new match vote")
+	host._apply_lobby_request(10, {"action": "reset", "match": generation})
+	_check(
+		host.active and host.lobby.return_vote.active, "host proposal leaves the active run playing"
+	)
+	var revision: int = host.lobby.return_vote.revision
+	host._apply_lobby_request(
+		20, {"action": "return_ready", "match": generation, "revision": revision, "ready": true}
+	)
+	_check(
+		host.active and host.match_id == generation, "partial consent preserves the active match"
+	)
+	host._apply_lobby_request(
+		30, {"action": "return_ready", "match": generation - 1, "revision": revision, "ready": true}
+	)
+	_check(
+		host.active and host.lobby.return_vote.ready == [10, 20],
+		"old-match approval cannot complete the current vote"
+	)
+	host._apply_lobby_request(
+		30, {"action": "return_ready", "match": generation, "revision": revision, "ready": true}
+	)
+	_check(
+		not host.active and not host.lobby.started,
+		"unanimous connected-player consent returns to lobby"
+	)
+	_check(
+		host.match_id == generation + 1 and host.table_summaries.is_empty(),
+		"approved reset advances the generation and clears results"
+	)
+	var stops = host.transport.sent.filter(
+		func(frame): return frame.message.get("kind") == "match_stop"
+	)
+	_check(stops.size() == 1, "one approved vote publishes one match stop")
+	host.free()
+
+
+func _host_leave_requires_consent():
+	var host = _host_controller("race")
+	host.active = true
+	host._leave_requested()
+	_check(
+		host.active and host.transport.session_open() and host.lobby.return_vote.active,
+		"host Leave request keeps the room open and starts a unanimous return vote"
+	)
+	_check(host.panel.visible, "host Leave request opens the voting controls")
+	host.free()
+	var guest = _controller()
+	guest.active = true
+	guest._leave_requested()
+	_check(not guest.active and not guest.transport.session_open(), "guest can leave voluntarily")
+	guest.free()
+	var completed = _host_controller("race")
+	completed.active = true
+	for summary in completed.table_summaries:
+		summary.finished = true
+	completed._leave_requested()
+	_check(not completed.transport.session_open(), "host can leave once every table finishes")
+	completed.free()
+
+
+func _startup_failure_scope():
+	var host = _host_controller("race")
+	host.active = true
+	host._starting_players = [20, 30]
+	host._match_started_at = Time.get_ticks_msec()
+	var generation: int = host.match_id
+	host._received(20, {"kind": "match_ready", "match": generation - 1})
+	_check(
+		20 in host._starting_players, "stale startup acknowledgement cannot clear current startup"
+	)
+	host._received(20, {"kind": "match_ready", "match": generation})
+	_check(
+		not 20 in host._starting_players,
+		"ready acknowledgement closes that player's startup window"
+	)
+	host._received(20, {"kind": "match_failed", "match": generation})
+	_check(
+		host.active and host.match_id == generation,
+		"established player cannot bypass consent with a startup error"
+	)
+	host._received(30, {"kind": "match_failed", "match": generation - 1})
+	_check(host.active, "previous-match startup failure cannot abort the current run")
+	host._match_started_at = Time.get_ticks_msec() - 15001
+	host._received(30, {"kind": "match_failed", "match": generation})
+	_check(host.active, "expired startup error cannot bypass run-ending consent")
+	host._match_started_at = Time.get_ticks_msec()
+	host._received(30, {"kind": "match_failed", "match": generation})
+	_check(
+		not host.active and host.match_id == generation + 1,
+		"genuine pending startup failure safely returns the room"
+	)
+	host.free()
+
+
+func _spectator_routes():
+	var host = _host_controller("race")
+	host._set_watcher(999, {"match": host.match_id, "table": 0})
+	_check(host._watchers.is_empty(), "unregistered actor cannot subscribe to a table")
+	host._set_watcher(30, {"match": host.match_id - 1, "table": 0})
+	host._set_watcher(30, {"match": host.match_id, "table": 1})
+	_check(host._watchers.is_empty(), "old-match and own-table subscriptions are rejected")
+	host._set_watcher(30, {"match": host.match_id, "table": 0})
+	_check(host._watchers.get(30) == 0, "connected teammate can watch a different table")
+	_send_table(host, 10, 0, _state(host, 0))
+	var frames = host.transport.sent.filter(
+		func(frame): return frame.message.get("kind") == "watch_state"
+	)
+	_check(
+		frames.size() == 1 and frames[0].recipient == 30 and frames[0].message.table == 0,
+		"host forwards only the subscribed table's state"
+	)
+	host.transport.sent.clear()
+	host._set_watcher(30, {"match": host.match_id, "table": -1})
+	_send_table(host, 10, 0, _state(host, 0))
+	_check(
+		not host.transport.sent.any(func(frame): return frame.message.get("kind") == "watch_state"),
+		"leaving spectate stops its stream"
+	)
+	host.free()
+	var viewer = _controller()
+	viewer.active = true
+	viewer.spectator = SpectatorStub.new()
+	viewer.add_child(viewer.spectator)
+	viewer.spectator.watched_table = 0
+	_check(not viewer._turn_ready(), "spectating blocks local shot controls")
+	var frame = {
+		"kind": "watch_state", "match": viewer.match_id, "table": 0, "payload": _state(viewer, 0)
+	}
+	viewer._received(30, frame)
+	_check(viewer.spectator.states.is_empty(), "peer cannot impersonate coordinator spectator feed")
+	viewer._received(10, frame)
+	_check(viewer.spectator.states.size() == 1, "coordinator can deliver the watched table")
+	_check(
+		viewer.turn_owner == 20 and viewer.table_id == 1 and viewer.latest_state.is_empty(),
+		"spectator update cannot overwrite own-table authority"
+	)
+	frame.payload = {"kind": "snapshot", "id": 2, "scene": {"available": false}}
+	viewer._received(10, frame)
+	frame.payload.id = 1
+	viewer._received(10, frame)
+	_check(viewer.spectator.snapshots.size() == 1, "out-of-order spectator snapshots are ignored")
+	frame.match -= 1
+	frame.payload.id = 3
+	viewer._received(10, frame)
+	_check(viewer.spectator.snapshots.size() == 1, "previous-match spectator snapshots are ignored")
+	viewer.free()
 
 
 func _check(condition: bool, description: String):

@@ -11,6 +11,7 @@ func _initialize() -> void:
 	var lobby = model_script.new()
 	_check(not lobby.setup(0, "Host"), "invalid host rejected")
 	_check(lobby.setup(10, "Host"), "host creates lobby")
+	_check(lobby.snapshot().match_mode == "race", "new lobbies default to a full-run race")
 	_check(
 		_find(lobby, 10).table == 0 and _find(lobby, 10).slot == 0, "host starts in the first seat"
 	)
@@ -32,6 +33,15 @@ func _initialize() -> void:
 	_check(lobby.choose_slot(20, 0, 1), "partner chooses a co-op seat")
 	_ready_all(lobby)
 	_check(lobby.can_start(), "ready co-op lobby can start")
+	_check(not lobby.set_match_mode(20, "score"), "guest cannot change match mode")
+	_check(not lobby.set_match_mode(10, "coop"), "unknown match modes are rejected")
+	_check(lobby.set_match_mode(10, "score"), "host can choose Score PvP")
+	_check(not lobby.can_start(), "mode change invalidates readiness")
+	_check(lobby.set_match_mode(10, "race"), "host can choose Race")
+	_ready_all(lobby)
+	var ready_revision: int = lobby.revision
+	_check(lobby.set_match_mode(10, "race"), "repeating the same mode is accepted")
+	_check(lobby.revision == ready_revision and lobby.can_start(), "same mode preserves readiness")
 	_check(not lobby.set_shot_budget(20, 3), "guest cannot change shot budget")
 	_check(not lobby.set_shot_budget(10, 0), "zero shot budget rejected")
 	_check(not lobby.set_shot_budget(10, 21), "excess shot budget rejected")
@@ -58,6 +68,7 @@ func _initialize() -> void:
 	_check(not lobby.choose_slot(20, 0, 1), "started match locks seating")
 	_check(not lobby.set_table_count(10, 1), "started match locks tables")
 	_check(not lobby.set_shot_budget(10, 4), "started match locks shot budget")
+	_check(not lobby.set_match_mode(10, "score"), "started match locks mode")
 	_check(not lobby.set_ready(20, false), "started match locks ready state")
 	_check(not lobby.add_player(30, "Late player"), "started match rejects new players")
 	_check(lobby.remove_player(20), "match records a disconnected player")
@@ -73,6 +84,10 @@ func _initialize() -> void:
 	)
 	_check(not lobby.reset_lobby(20), "guest cannot reset lobby")
 	lobby.remove_player(20)
+	_check(not lobby.reset_lobby(10), "unfinished match cannot be reset without consent")
+	_check(
+		lobby.request_return(10) and lobby.can_return(), "only connected players need to approve"
+	)
 	_check(lobby.reset_lobby(10), "host reopens lobby")
 	_check(
 		lobby.snapshot().players.size() == 1 and lobby.table_count == 1,
@@ -140,7 +155,10 @@ func _initialize() -> void:
 	_check(
 		uneven.members_for_table(3).size() == 2, "active roster preserves departed shooter identity"
 	)
-	uneven.reset_lobby(10)
+	uneven.request_return(10)
+	for id in [20, 30, 50]:
+		uneven.set_return_ready(id, true)
+	_check(uneven.reset_lobby(10), "all remaining players approve returning to the lobby")
 	_check(
 		uneven.leader_for_table(3) == 50, "reopened lobby can choose its next occupied-seat leader"
 	)
@@ -158,10 +176,68 @@ func _initialize() -> void:
 	var members = uneven.members_for_table(3)
 	members[0].connected = false
 	_check(_find(uneven, 40).connected, "membership helper cannot mutate the authoritative roster")
+	_check_return_votes(model_script)
 	print("LOBBY_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
 	quit(0 if failures.is_empty() else 1)
+
+
+func _check_return_votes(model_script) -> void:
+	var lobby = model_script.new()
+	lobby.setup(10, "Host")
+	for id in [20, 30]:
+		lobby.add_player(id, "Player %d" % id)
+		lobby.choose_slot(id, 0, id / 10 - 1)
+	_ready_all(lobby)
+	lobby.start(10)
+	_check(not lobby.request_return(20), "guest cannot propose ending the match")
+	_check(not lobby.set_return_ready(20, true), "approval requires a pending proposal")
+	_check(lobby.request_return(10), "host proposes returning to the lobby")
+	var vote: Dictionary = lobby.snapshot().return_vote
+	_check(vote.active and vote.ready == [10], "proposal starts with the host's approval")
+	_check(not lobby.can_return(), "host cannot end a three-player run alone")
+	_check(not lobby.set_return_ready(999, true), "unknown actor cannot approve ending the run")
+	_check(
+		not lobby.set_return_ready(20, true, vote.revision - 1),
+		"stale consent cannot approve a new vote"
+	)
+	_check(lobby.set_return_ready(20, true, vote.revision), "teammate can approve the current vote")
+	_check(not lobby.reset_lobby(10), "partial approval cannot end the run")
+	_check(lobby.request_return(10), "repeated host proposal is accepted")
+	_check(lobby.snapshot().return_vote.ready == [10, 20], "repeated proposal preserves consent")
+	_check(lobby.set_return_ready(30, false), "a teammate can cancel the proposal")
+	_check(
+		not lobby.snapshot().return_vote.active and not lobby.can_return(),
+		"cancel removes all consent"
+	)
+	lobby.request_return(10)
+	lobby.set_return_ready(20, true)
+	var old_revision: int = lobby.snapshot().return_vote.revision
+	lobby.remove_player(30)
+	vote = lobby.snapshot().return_vote
+	_check(
+		vote.eligible == [10, 20] and vote.ready == [10],
+		"roster change requires fresh teammate approval"
+	)
+	_check(not lobby.set_return_ready(20, true, old_revision), "old roster approval is rejected")
+	lobby.set_return_ready(20, true)
+	_check(lobby.can_return(), "remaining connected players can unanimously approve")
+	lobby.add_player(30, "Player 30")
+	_check(not lobby.can_return(), "reconnection cannot inherit previous consent")
+	lobby.set_return_ready(20, true)
+	lobby.set_return_ready(30, true)
+	_check(lobby.can_return(), "all reconnected players can approve")
+	var copied: Dictionary = lobby.snapshot().return_vote
+	copied.ready.clear()
+	_check(lobby.can_return(), "vote snapshots cannot mutate consent")
+	_check(not lobby.reset_lobby(20), "unanimous approval still requires host execution")
+	_check(lobby.reset_lobby(10), "unanimous approval permits host reset")
+	_check(not lobby.snapshot().return_vote.active, "reset discards the finished vote")
+	_ready_all(lobby)
+	lobby.start(10)
+	_check(lobby.reset_lobby(10, true), "completed matches return without an end-run vote")
+	_check(not lobby.request_return(10), "pre-match lobby rejects end-run proposals")
 
 
 func _find(lobby, id: int) -> Dictionary:

@@ -1,5 +1,17 @@
 extends Node
 
+
+class RunEndFixture:
+	extends RefCounted
+	var game_ended = true
+	var round_won = true
+	var round_game_over = false
+	var level_number = 19
+
+	func get_target_round() -> int:
+		return 20
+
+
 var output = ""
 var mod: Node
 var failures: Array[String] = []
@@ -19,9 +31,11 @@ func _run():
 	if output_index >= 0 and output_index + 1 < args.size():
 		output = args[output_index + 1]
 	if not OS.get_user_data_dir().contains("UltrapoolTogetherRenderTest"):
+		push_error("RENDER_PROBE_FAIL: refusing non-test profile " + OS.get_user_data_dir())
 		get_tree().quit(2)
 		return
 	if output.is_empty() or not DirAccess.dir_exists_absolute(output):
+		push_error("RENDER_PROBE_FAIL: missing output directory; arguments: " + str(args))
 		get_tree().quit(2)
 		return
 	print("RENDER_PROBE_START ", OS.get_user_data_dir())
@@ -41,6 +55,15 @@ func _run():
 	if not _check(mod.multiplayer_balls != null, "ball service loaded"):
 		_finish()
 		return
+	for probe in [
+		"team_vote_probe",
+		"lobby_probe",
+		"controller_probe",
+		"multiplayer_balls_probe",
+		"bounty_probe"
+	]:
+		_run_model_probe(probe)
+	_check_run_completion()
 	await _wait(mod.run_setup.at_main_menu)
 	fixtures = (
 		load(get_script().resource_path.get_base_dir().path_join("render_ui_fixtures.gd")).new()
@@ -83,10 +106,17 @@ func _run():
 		return
 	await get_tree().create_timer(3.0).timeout
 	var game = global_node.gameManager
+	mod.run_controls.begin_session()
+	_check(not mod.run_controls._bindings.is_empty(), "native run exits route to lobby voting")
 	_check_balls(game.balls, "host")
 	await _capture("10-host-table", "Host table · all eight multiplayer balls")
 	await fixtures.capture_table_states(mod, _capture)
 	var snapshot = mod.table_sync.capture()
+	var spectator_fixtures = (
+		load(get_script().resource_path.get_base_dir().path_join("spectator_fixtures.gd")).new()
+	)
+	for result in await spectator_fixtures.capture(mod, snapshot, _capture):
+		_check(result.passed, result.name)
 	var ball_state = mod.multiplayer_balls.capture()
 	mod.shop_sync.begin_session(mod)
 	game.player_info.money = 92.0
@@ -107,7 +137,9 @@ func _run():
 		)
 		await fixtures.capture_shop_presence(mod, _capture)
 		_check_shop_purchase()
+		await _check_shop_readiness()
 	mod.shop_sync.end_session()
+	mod.run_controls.end_session()
 	mod.adapter.end_session()
 	mod.multiplayer_balls.end_session()
 	mod.active = false
@@ -238,11 +270,72 @@ func _check_shop_purchase():
 		"target": empty.key,
 		"target_id": 0
 	}
-	_check(sync.handle_request(purchase), "shared shop accepts occupied offer purchase")
+	_check(sync.handle_request(purchase, 1), "shared shop accepts occupied offer purchase")
 	var purchased: Dictionary = sync.capture()
 	_check(purchased.revision > state.revision, "purchase advances shop revision")
-	_check(not sync.handle_request(purchase), "duplicate purchase rejected")
+	_check(not sync.handle_request(purchase, 1), "duplicate purchase rejected")
 	_check(sync.capture().money == purchased.money, "duplicate purchase preserves money")
+
+
+func _check_shop_readiness():
+	var transport = mod.transport
+	mod.transport = fixtures.OfflineTransport.new()
+	var sync = mod.shop_sync
+	var state = sync.capture()
+	var consent = {
+		"action": "ready",
+		"ready": true,
+		"revision": state.revision,
+		"ready_generation": state.ready_vote.revision
+	}
+	_check(sync.handle_request(consent, 1), "first teammate readies for the next round")
+	_check(sync.capture().open, "partial readiness keeps the shared shop open")
+	_check(sync.capture().ready_vote.ready == [1], "shared shop publishes individual readiness")
+	await _capture(
+		"shop-team-ready", "Native shared shop · one teammate ready, waiting for the other"
+	)
+	_check(
+		sync.handle_request(consent, 2),
+		"simultaneous teammate consent uses the same vote generation"
+	)
+	await get_tree().create_timer(0.7).timeout
+	_check(not sync.capture().open, "unanimous readiness starts the next round")
+	_check(not sync.handle_request(consent, 2), "old consent cannot start another round")
+	mod.transport.free()
+	mod.transport = transport
+
+
+func _run_model_probe(name: String):
+	var path = get_script().resource_path.get_base_dir().path_join(name + ".gd")
+	var script = GDScript.new()
+	script.resource_path = path.get_basename() + ".embedded.gd"
+	script.source_code = (
+		FileAccess
+		. get_file_as_string(path)
+		. replace("extends SceneTree", "extends RefCounted")
+		. replace("func _initialize()", "func run()")
+	)
+	script.source_code += "\nfunc quit(_code: int):\n\tpass\n"
+	if not _check(script.reload() == OK, "compiled " + name):
+		return
+	var probe = script.new()
+	probe.run()
+	_check(probe.failures.is_empty(), "%s: %d checks" % [name, probe.checks])
+
+
+func _check_run_completion():
+	var ending = RunEndFixture.new()
+	_check(
+		mod.adapter.is_run_won(ending), "clearing the native final round counts as a race finish"
+	)
+	ending.round_game_over = true
+	_check(not mod.adapter.is_run_won(ending), "losing at the final round is not a race finish")
+	ending.round_game_over = false
+	ending.game_ended = false
+	_check(not mod.adapter.is_run_won(ending), "an unfinished final round is not a race finish")
+	ending.game_ended = true
+	ending.level_number = 18
+	_check(not mod.adapter.is_run_won(ending), "an earlier round cannot finish the race")
 
 
 func _capture_ball_previews(game):

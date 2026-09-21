@@ -20,6 +20,7 @@ func _initialize() -> void:
 	)
 	_relay_and_replay()
 	_competitive_seat_counts()
+	_race_table_balls()
 	_patience()
 	_calls()
 	_utilities_and_mixed_balls()
@@ -88,6 +89,39 @@ func _competitive_seat_counts() -> void:
 			]
 		)
 	_check(payouts == [[10.0, 5.0], [10.0, 5.0], [10.0, 5.0]], "seat count cannot improve bonuses")
+
+
+func _race_table_balls() -> void:
+	var solo = _new_rules()
+	solo.register_ball(1, [RELAY])
+	solo.begin_shot(1, 10, false, 1)
+	solo.hit(1)
+	_check(
+		solo.pocket(1, [RELAY], 20.0, 0, false).points == 0, "solo Race Relay needs a later shot"
+	)
+	solo.finish_shot([1])
+	solo.begin_shot(2, 10, false, 1)
+	_check(
+		solo.pocket(1, [RELAY], 20.0, 0, false).points == 10, "solo Race can complete its own Relay"
+	)
+	solo.finish_shot([1])
+	solo.begin_shot(3, 10, false, 1)
+	_check(
+		solo.pocket(1, [RELAY], 20.0, 0, false).points == 0,
+		"solo Race Relay still pays once per round"
+	)
+	for seats in [1, 2, 8]:
+		var race = _new_rules()
+		race.begin_shot(3, 10, false, seats)
+		var bounty: Dictionary = race.pocket(1, [BOUNTY], 20.0, 0, false)
+		_check(
+			bounty.bounty and bounty.points == 10,
+			"Race Bounty awards run points for every team size"
+		)
+		_check(
+			not race.pocket(2, [BOUNTY], 20.0, 1, false).bounty,
+			"Race Bounty remains once per match"
+		)
 
 
 func _patience() -> void:

@@ -58,11 +58,12 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 	coop.players[2].ready = false
 	coop.players[3].ready = false
 	coop.can_start = false
-	panel.set_connection("UP5-RENDER-FIXTURE", true, true)
+	panel.set_connection("UP6-RENDER-FIXTURE", true, true)
 	panel.render(coop, 1, true)
 	await capture.call("lobby-choosing-seats", "Four-player co-op with one player choosing a seat.")
 	coop = _lobby([0, 0, 0, 0], 1)
 	panel.render(coop, 1, true)
+	_record(panel.get_node("%Leave").visible, "host can leave a pre-match lobby")
 	await capture.call("lobby-coop-ready", "Four players ready at a shared table.")
 
 	panel.set_friends([{"id": 5, "name": "Erin"}, {"id": 6, "name": "Finley"}])
@@ -79,7 +80,75 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 
 	panel.render(_lobby([0, 1, 2, 3, 3, 3], 4), 1, true)
 	await capture.call("lobby-four-tables", "A 1v1v1v3 match with equal shot budgets per table.")
-	panel.render(_results(), 1, true)
+	var race = _lobby([0, 0, 1, 1], 2)
+	race.match_mode = "race"
+	panel.render(race, 1, true)
+	await capture.call("lobby-race", "Race mode · two teams racing to finish the full run")
+	race.started = true
+	race.table_summaries = [
+		{
+			"table": 0,
+			"round": 12,
+			"run_goal_rounds": 20,
+			"elapsed_ms": 382000,
+			"finish_order": 0,
+			"finished": false,
+			"status": "Shopping"
+		},
+		{
+			"table": 1,
+			"round": 14,
+			"run_goal_rounds": 20,
+			"elapsed_ms": 382000,
+			"finish_order": 0,
+			"finished": false,
+			"status": "Playing"
+		}
+	]
+	race.return_vote = {
+		"active": true, "proposer": 1, "eligible": [1, 2, 3, 4], "ready": [1, 2], "revision": 2
+	}
+	panel.render(race, 1, true)
+	_record(
+		not panel.get_node("%Leave").visible, "host cannot close an unfinished match through Leave"
+	)
+	_record(
+		not panel.get_node("%Return").visible, "pending vote replaces the host's end-match proposal"
+	)
+	panel.render(race, 3, false)
+	_record(panel.get_node("%Leave").visible, "guest can leave an active match voluntarily")
+	_record(
+		panel.get_node("%ApproveReturn").visible and not panel.get_node("%ApproveReturn").disabled,
+		"eligible teammate can approve a pending return vote"
+	)
+	await capture.call("lobby-return-vote", "End-match vote · every connected player must approve")
+	race.return_vote.active = false
+	race.table_summaries[1].finished = true
+	race.table_summaries[1].run_won = true
+	race.table_summaries[1].round = 20
+	race.table_summaries[1].finish_order = 1
+	race.table_summaries[1].status = "Run completed"
+	panel.render(race, 1, true)
+	await capture.call(
+		"lobby-race-finish", "Race standings · first finisher and a team still playing"
+	)
+	var results = _results()
+	results.return_vote = {
+		"active": true, "proposer": 1, "eligible": [1, 2, 3, 4], "ready": [1], "revision": 3
+	}
+	panel.render(results, 1, true)
+	_record(
+		panel.get_node("%Return").visible and panel.get_node("%Return").text == "Return to lobby",
+		"completed match exposes immediate host return even with a pending vote"
+	)
+	_record(
+		(
+			not panel.get_node("%ApproveReturn").visible
+			and not panel.get_node("%CancelReturn").visible
+		),
+		"completed match removes obsolete end-run voting controls"
+	)
+	_record(panel.get_node("%Leave").visible, "host can close a completed match")
 	await capture.call("lobby-standings", "Completed table standings, including the Bounty award.")
 	_restore(mod, saved)
 
@@ -287,6 +356,7 @@ func _lobby(tables: Array, count: int) -> Dictionary:
 		"players": players,
 		"table_count": count,
 		"shot_budget": 6,
+		"match_mode": "score",
 		"started": false,
 		"can_start": true,
 		"table_summaries": []

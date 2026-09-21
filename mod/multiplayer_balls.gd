@@ -133,7 +133,7 @@ func begin_shot(index: int, shooter: int) -> bool:
 	return rules.begin_shot(
 		index,
 		shooter,
-		_controller._competitive(),
+		_controller._score_match(),
 		_controller._members(_controller.table_id).size()
 	)
 
