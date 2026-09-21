@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.2.0"
+const VERSION = "0.2.1"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.05
 const SNAPSHOT_TIMEOUT_MS = 5000
@@ -15,11 +15,12 @@ var score_label: Label
 var status: Label
 var mode: OptionButton
 var host_button: Button
-var invite_button: Button
+var invite_button: MenuButton
 var pass_button: Button
 var restart_button: Button
 var leave_button: Button
 var room_code: LineEdit
+var code_panel: VBoxContainer
 
 var active = false
 var supported = true
@@ -124,22 +125,27 @@ func _build_ui():
 	lobby.add_child(mode)
 	host_button = _button("Host game", _host)
 	lobby.add_child(host_button)
-	invite_button = _button("Invite friend", func(): transport.invite_friend())
+	invite_button = MenuButton.new()
+	invite_button.text = "Invite friend"
+	invite_button.flat = false
+	invite_button.focus_mode = Control.FOCUS_ALL
+	invite_button.about_to_popup.connect(_refresh_friends)
+	invite_button.get_popup().id_pressed.connect(_invite_selected)
 	invite_button.disabled = true
 	lobby.add_child(invite_button)
 	status = _label("Open the mod on both PCs, then host and invite through Steam.")
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status.custom_minimum_size.x = 400
 	lobby.add_child(status)
-	var fallback = VBoxContainer.new()
-	fallback.hide()
-	lobby.add_child(_button("Use a room code", func(): fallback.visible = not fallback.visible))
-	lobby.add_child(fallback)
+	code_panel = VBoxContainer.new()
+	code_panel.hide()
+	lobby.add_child(_button("Use a room code", func(): code_panel.visible = not code_panel.visible))
+	lobby.add_child(code_panel)
 	room_code = LineEdit.new()
 	room_code.placeholder_text = "Steam room code"
-	fallback.add_child(room_code)
+	code_panel.add_child(room_code)
 	var code_row = HBoxContainer.new()
-	fallback.add_child(code_row)
+	code_panel.add_child(code_row)
 	code_row.add_child(_button("Copy", func(): DisplayServer.clipboard_set(room_code.text)))
 	code_row.add_child(_button("Join", _join))
 	restart_button = _button("Play another match", _start_match)
@@ -190,6 +196,25 @@ func _join():
 
 func _room_ready():
 	room_code.text = transport.room_code
+	code_panel.show()
+
+
+func _refresh_friends():
+	var popup = invite_button.get_popup()
+	popup.clear()
+	for friend in transport.online_friends():
+		var index = popup.item_count
+		popup.add_item(friend.name, index)
+		popup.set_item_metadata(index, friend.id)
+	if popup.item_count == 0:
+		popup.add_item("No online friends")
+		popup.set_item_disabled(0, true)
+		_status("No online friends found. Your friend can join with the room code.")
+
+
+func _invite_selected(id: int):
+	var popup = invite_button.get_popup()
+	transport.invite_friend(int(popup.get_item_metadata(popup.get_item_index(id))))
 
 
 func _leave():
@@ -200,6 +225,7 @@ func _leave():
 func _connected():
 	active = true
 	local_player = 0 if transport.is_host else 1
+	invite_button.get_popup().hide()
 	panel.hide()
 	turn_owner = 0
 	shot_number = 0
@@ -225,6 +251,7 @@ func _connected():
 
 func _disconnected(reason: String):
 	active = false
+	invite_button.get_popup().hide()
 	adapter.end_session()
 	table_sync.end_guest()
 	shot_pending = false

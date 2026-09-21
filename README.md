@@ -20,10 +20,10 @@ For a custom location, run `Install.ps1 -GamePath "D:\SteamLibrary\steamapps\com
 
 1. Keep Steam running and open the mod on both PCs. The joining player must be at the main menu.
 2. Open **Multiplayer** or press **F8**. Choose **Co-op** or **PvP**, then **Host game**.
-3. Select **Invite friend** and send an invitation using the Steam overlay. Your friend accepts it through Steam.
+3. Select **Invite friend**, then choose a friend from the in-game list. Your friend accepts the invitation through Steam. The Steam overlay is not required.
 4. The host starts or continues a normal run. On your turn, use Ultrapool's normal mouse or controller aiming, including its precise-shot mode.
 
-Both players should open the mod before accepting an invitation: Steam otherwise launches the original game. If the overlay is unavailable, expand **Use a room code** and copy/join the Steam lobby code there. No IP address, port forwarding, or separate server is part of this flow.
+Both players should open the mod before accepting an invitation: Steam otherwise launches the original game. You can also **Copy** the room code shown after hosting. Your Steam friend opens **Use a room code**, pastes the `UP2-...` code, and selects **Join**. The room stays available while the host keeps it open; it is limited to Steam friends and invited players. No IP address, port forwarding, or separate server is part of this flow.
 
 Co-op shares the run and score. **Pass** hands a ready turn to your partner. The host manages menus, shopping, and round progression. PvP credits each player's shot score and finishes after five shots each. **Leave game** restores local play.
 

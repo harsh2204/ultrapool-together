@@ -12,6 +12,7 @@ const MOD_ID := "ultrapool-together"
 const MAX_PACKET_BYTES := 262144
 const STEAM_CHANNEL := 47
 const LOBBY_FRIENDS_ONLY := 1
+const FRIEND_FLAG_IMMEDIATE := 4
 const LOBBY_MEMBER_GONE := 2 | 4 | 8 | 16
 const HANDSHAKE_TIMEOUT_MS := 15000
 const PEER_TIMEOUT_MS := 20000
@@ -129,13 +130,27 @@ func session_open() -> bool:
 	return not _mode.is_empty() or _create_pending or _join_pending_id != 0
 
 
-func invite_friend() -> Error:
+func online_friends() -> Array:
+	var friends: Array = []
+	if not invite_ready():
+		return friends
+	for index in range(int(_steam.call("getFriendCount", FRIEND_FLAG_IMMEDIATE))):
+		var id := int(_steam.call("getFriendByIndex", index, FRIEND_FLAG_IMMEDIATE))
+		if int(_steam.call("getFriendPersonaState", id)) == 0:
+			continue
+		var name := str(_steam.call("getFriendPersonaName", id))
+		friends.append({"id": id, "name": name if not name.is_empty() else "Steam friend"})
+	friends.sort_custom(func(a, b): return a.name.naturalnocasecmp_to(b.name) < 0)
+	return friends
+
+
+func invite_friend(friend_id: int) -> Error:
 	if not invite_ready():
 		return ERR_UNAVAILABLE
-	if not bool(_steam.call("isOverlayEnabled")):
-		status_changed.emit("Enable the Steam overlay to invite a friend.")
-		return ERR_UNAVAILABLE
-	_steam.call("activateGameOverlayInviteDialog", _lobby_id)
+	if not bool(_steam.call("inviteUserToLobby", _lobby_id, friend_id)):
+		status_changed.emit("Steam couldn't send the invitation. Share your room code instead.")
+		return FAILED
+	status_changed.emit("Invitation sent through Steam. Waiting for your friend...")
 	return OK
 
 
@@ -231,8 +246,11 @@ func _prepare_steam() -> bool:
 		"setLobbyJoinable",
 		"getNumLobbyMembers",
 		"getLobbyMemberByIndex",
-		"activateGameOverlayInviteDialog",
-		"isOverlayEnabled",
+		"getFriendCount",
+		"getFriendByIndex",
+		"getFriendPersonaState",
+		"getFriendPersonaName",
+		"inviteUserToLobby",
 	]:
 		if not _steam.has_method(method):
 			_steam = null
@@ -365,7 +383,7 @@ func _on_lobby_created(result: int, lobby_id: int) -> void:
 			_fail_room("Steam could not prepare the room. Try again.")
 			return
 	room_code = "UP2-%d" % _lobby_id
-	status_changed.emit("Invite a friend to play.")
+	status_changed.emit("Invite a friend or share your room code.")
 	room_ready.emit()
 
 
