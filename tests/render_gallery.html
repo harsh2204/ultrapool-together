@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ultrapool Together · screenshot gallery</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #14171b; color: #eceef1; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header, main, footer { width: min(1440px, 100%); margin: auto; padding: 28px; }
+    h1 { margin: 0 0 12px; font-size: clamp(24px, 4vw, 34px); font-weight: 650; }
+    p { max-width: 940px; margin: 0 0 16px; color: #b8bdc5; line-height: 1.6; }
+    a { color: #a4d7e4; }
+    .tools { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin: 22px 0; }
+    label { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+    input { padding: 10px 12px; width: min(300px, 100%); border: 1px solid #505864; border-radius: 4px; color: inherit; background: #1c2128; font: inherit; }
+    :focus-visible { outline: 2px solid #a4d7e4; outline-offset: 4px; }
+    #summary, #count, small { color: #b8bdc5; font-size: 14px; }
+    #summary.failed { color: #ffc2ac; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; }
+    nav a { padding: 6px 10px; border: 1px solid #3e4651; border-radius: 4px; font-size: 13px; text-decoration: none; }
+    nav a:hover { background: #262e37; }
+    main { padding-top: 0; }
+    figure { margin: 0 0 36px; scroll-margin-top: 20px; }
+    figcaption { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    h2 { margin: 0; font-size: 19px; font-weight: 600; }
+    figcaption a { font-size: 13px; }
+    img { display: block; width: 100%; height: auto; border: 1px solid #3e4651; background: #08090b; }
+    small { display: block; margin-top: 8px; }
+    [hidden] { display: none !important; }
+    footer { padding-top: 0; color: #b8bdc5; }
+    footer a + a { margin-left: 18px; }
+    #empty { padding: 24px 0; }
+    @media (max-width: 600px) { header, main, footer { padding: 20px 14px; } main { padding-top: 0; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Ultrapool Together</h1>
+    <p>Actual game captures for reviewing the mod without playing a run. Lobby participants, friend availability, turn indicators, and results use repeatable fixtures. Host and guest views are captured sequentially in one process; these images do not verify a live network session.</p>
+    <div id="summary" role="status"></div>
+    <div class="tools">
+      <label for="filter">Find a screen <input id="filter" type="search" placeholder="Shop, lobby, Relay…" autocomplete="off"></label>
+      <span id="count" aria-live="polite"></span>
+    </div>
+    <nav aria-label="Screens"></nav>
+  </header>
+  <main>
+    <p id="empty" hidden>No screens match this search.</p>
+  </main>
+  <footer><a href="report.json">Check results</a><a href="runner.json">Run details</a></footer>
+  <script type="application/json" id="report">__REPORT_JSON__</script>
+  <script>
+    const report = JSON.parse(document.getElementById('report').textContent);
+    const main = document.querySelector('main');
+    const navigation = document.querySelector('nav');
+    const summary = document.getElementById('summary');
+    const failed = report.checks.filter(check => !check.passed).length;
+    summary.textContent = `${report.checks.length - failed} checks passed · ${failed} failed`;
+    summary.classList.toggle('failed', failed > 0);
+
+    const entries = report.screens.map((screen, index) => {
+      const caption = screen.caption || screen.file;
+      const figure = document.createElement('figure');
+      figure.id = `screen-${index + 1}`;
+      const heading = document.createElement('figcaption');
+      const title = document.createElement('h2');
+      title.textContent = caption;
+      const fullSize = document.createElement('a');
+      fullSize.href = screen.file;
+      fullSize.textContent = 'Open full size';
+      heading.append(title, fullSize);
+
+      const imageLink = document.createElement('a');
+      imageLink.href = screen.file;
+      imageLink.setAttribute('aria-label', `Open full size: ${caption}`);
+      const image = document.createElement('img');
+      image.src = screen.file;
+      image.alt = caption;
+      image.loading = 'lazy';
+      image.width = screen.width;
+      image.height = screen.height;
+      imageLink.append(image);
+      const dimensions = document.createElement('small');
+      dimensions.textContent = `${screen.width} × ${screen.height} · ${screen.file}`;
+      figure.append(heading, imageLink, dimensions);
+      main.append(figure);
+
+      const link = document.createElement('a');
+      link.href = `#${figure.id}`;
+      link.textContent = caption;
+      navigation.append(link);
+      return { figure, link, text: `${caption} ${screen.file}`.toLowerCase() };
+    });
+
+    function filterScreens() {
+      const query = document.getElementById('filter').value.trim().toLowerCase();
+      let visible = 0;
+      for (const entry of entries) {
+        const matches = entry.text.includes(query);
+        entry.figure.hidden = !matches;
+        entry.link.hidden = !matches;
+        if (matches) visible++;
+      }
+      document.getElementById('count').textContent = `${visible} of ${entries.length} screens`;
+      document.getElementById('empty').hidden = visible !== 0;
+    }
+    document.getElementById('filter').addEventListener('input', filterScreens);
+    filterScreens();
+  </script>
+</body>
+</html>

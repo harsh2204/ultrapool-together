@@ -199,8 +199,9 @@ func _draw_cursor(canvas: Control, id: int, remote: Dictionary) -> void:
 		position = shop_rect.position + remote.position * shop_rect.size
 		if not message.target.is_empty():
 			var target: Vector2 = _shop.presence_target_position(message.target)
-			if target.is_finite():
-				position = target
+			if not target.is_finite():
+				return
+			position = target
 	else:
 		if shop_rect.has_area():
 			return

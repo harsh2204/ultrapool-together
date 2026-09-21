@@ -263,6 +263,10 @@ func request_call(ball_id: int, pocket_index: int) -> void:
 	)
 
 
+func blocks_shot_input() -> bool:
+	return _ui != null and _ui.blocks_shot_input()
+
+
 func handle_call(actor: int, message: Dictionary) -> bool:
 	if (
 		not _active

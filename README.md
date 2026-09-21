@@ -54,3 +54,5 @@ Run `Uninstall.ps1` from the installed mod folder. Saves and files not owned by 
 ## Development
 
 Run `Build-Package.ps1` to create the installation ZIP. See [tests/README.md](tests/README.md) for test setup and coverage. Game binaries and assets are supplied by each player's installed copy.
+
+Run `Capture-Screens.cmd` to generate a gallery of the mod's screens without playing through a match. See the [screenshot harness](docs/screenshots.md) for fixtures and output files.

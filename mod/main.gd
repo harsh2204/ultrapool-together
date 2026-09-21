@@ -100,6 +100,9 @@ func _build_ui():
 	add_child(hud)
 	ui_root = Control.new()
 	ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.theme = Theme.new()
+	ui_root.theme.default_font = get_node("/root/UIManager").FONT_LATIN
+	ui_root.theme.default_font_size = 18
 	hud.add_child(ui_root)
 	ui_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var dock = VBoxContainer.new()
@@ -107,7 +110,7 @@ func _build_ui():
 	dock.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	dock.offset_left = -350
 	dock.offset_right = -16
-	dock.offset_top = 16
+	dock.offset_top = 72
 	dock.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	var row = HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
@@ -601,6 +604,8 @@ func _process(delta):
 func can_control() -> bool:
 	if not _turn_ready():
 		return false
+	if multiplayer_balls != null and multiplayer_balls.blocks_shot_input():
+		return false
 	if get_node("/root/InputManager").is_controller():
 		return true
 	var hovered = get_viewport().gui_get_hovered_control()
@@ -722,7 +727,12 @@ func _pass(player: int, expected_turn: int) -> bool:
 
 
 func _update_hud():
-	pass_button.visible = active and _members(table_id).size() > 1 and not finished
+	pass_button.visible = (
+		active
+		and _members(table_id).size() > 1
+		and not finished
+		and not latest_state.get("in_shop", false)
+	)
 	pass_button.disabled = not _turn_ready()
 	turn_label.text = ""
 	score_label.text = ""
@@ -751,7 +761,7 @@ func _update_hud():
 			"Table %d · %.0f points · %d/%d shots"
 			% [table_id + 1, displayed_score, used_shots, lobby.shot_budget]
 		)
-	elif latest_state.get("available", false):
+	elif latest_state.get("available", false) and not latest_state.get("in_shop", false):
 		score_label.text = (
 			"Round %d · %d shots left · Score %.0f"
 			% [latest_state.round, latest_state.shots_left, latest_state.score]

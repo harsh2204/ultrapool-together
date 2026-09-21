@@ -100,7 +100,7 @@ func begin_shot(vector: Vector2) -> bool:
 
 
 func apply_table(data: Dictionary) -> void:
-	if (data.in_shop or data.in_menu) and is_instance_valid(selected_ball):
+	if (data.in_shop != in_shop or data.in_menu) and is_instance_valid(selected_ball):
 		unselect_ball(selected_ball, selected_ball_item)
 	remote_ready = data.ready
 	remote_shots = data.shots
@@ -117,7 +117,10 @@ func apply_table(data: Dictionary) -> void:
 	player_info.money = data.money
 	player_info.hp = data.hp
 	table.global_position = data.table_position
-	Global.camera.move(data.table_position)
+	if data.in_shop and is_instance_valid(shop) and shop.has_method("get_camera_target"):
+		Global.camera.move(shop.get_camera_target())
+	else:
+		Global.camera.move(data.table_position)
 	table.update_score_display(score, maxf(remote_required_score, 1.0))
 	table.update_money(data.money)
 	table.update_round_text(str(data.round + 1))
@@ -350,8 +353,8 @@ func is_daily():
 	return remote_daily
 
 
-func select_ball(body, item, _from_shop = false):
-	if in_shop or in_menu or selected_ball == body:
+func select_ball(body, item, from_shop = false):
+	if (in_shop and not from_shop) or in_menu or selected_ball == body:
 		return
 	selected_ball = body
 	selected_ball_item = item

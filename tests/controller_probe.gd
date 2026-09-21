@@ -124,6 +124,9 @@ class MultiplayerBallsStub:
 	var begin_calls = 0
 	var rules: RefCounted
 
+	func blocks_shot_input() -> bool:
+		return false
+
 	func end_session():
 		ended += 1
 

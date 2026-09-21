@@ -202,10 +202,10 @@ func _load_texture(asset: String) -> ImageTexture:
 		return null
 	var face = source.get_region(Rect2i(0, 0, source.get_height(), source.get_height()))
 	face.convert(Image.FORMAT_RGBA8)
-	face.resize(128, 128, Image.INTERPOLATE_LANCZOS)
-	var atlas = Image.create(512, 384, false, Image.FORMAT_RGBA8)
+	face.resize(256, 256, Image.INTERPOLATE_LANCZOS)
+	var atlas = Image.create(1024, 768, false, Image.FORMAT_RGBA8)
 	atlas.fill(face.get_pixel(0, 0))
-	# Native sphere shaders sample the six faces of a 4-by-3 cube cross.
+	# Match native 256px cube faces: the sphere shader uses a fixed mip-level scale.
 	for cell in [
 		Vector2i(1, 0),
 		Vector2i(0, 1),
@@ -214,6 +214,6 @@ func _load_texture(asset: String) -> ImageTexture:
 		Vector2i(3, 1),
 		Vector2i(1, 2)
 	]:
-		atlas.blit_rect(face, Rect2i(0, 0, 128, 128), cell * 128)
+		atlas.blit_rect(face, Rect2i(0, 0, 256, 256), cell * 256)
 	atlas.generate_mipmaps()
 	return ImageTexture.create_from_image(atlas)

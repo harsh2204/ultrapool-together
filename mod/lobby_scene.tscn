@@ -38,13 +38,13 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/margin_left = 32
-theme_override_constants/margin_top = 24
+theme_override_constants/margin_top = 20
 theme_override_constants/margin_right = 32
-theme_override_constants/margin_bottom = 24
+theme_override_constants/margin_bottom = 20
 
 [node name="Layout" type="VBoxContainer" parent="Margin"]
 layout_mode = 2
-theme_override_constants/separation = 14
+theme_override_constants/separation = 10
 
 [node name="Header" type="HBoxContainer" parent="Margin/Layout"]
 layout_mode = 2
@@ -166,7 +166,7 @@ autowrap_mode = 3
 [node name="Room" type="VBoxContainer" parent="Margin/Layout/Body/Content"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_constants/separation = 16
+theme_override_constants/separation = 10
 
 [node name="RoomHeading" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room"]
 layout_mode = 2
@@ -175,7 +175,7 @@ layout_mode = 2
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_font_sizes/font_size = 27
+theme_override_font_sizes/font_size = 24
 text = "YOUR LOBBY"
 
 [node name="Count" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading"]
@@ -184,6 +184,7 @@ layout_mode = 2
 text = "1 / 8 PLAYERS"
 
 [node name="Settings" type="HFlowContainer" parent="Margin/Layout/Body/Content/Room"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/h_separation = 24
 theme_override_constants/v_separation = 10
@@ -224,6 +225,7 @@ value = 6.0
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
+theme_override_font_sizes/font_size = 16
 text = "Everyone at a table plays together."
 autowrap_mode = 3
 

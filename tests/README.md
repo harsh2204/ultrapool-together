@@ -1,6 +1,8 @@
 # Validation
 
-The runtime probes have not been run for v0.5. Syntax checks do not verify engine types or gameplay. Follow [AGENTS.md](../AGENTS.md) before running any probe, including `--headless`.
+Syntax checks do not verify engine types or gameplay. Follow [AGENTS.md](../AGENTS.md) before running any probe, including `--headless`.
+
+For authorized visual tests, run `Capture-Screens.cmd` from the repository root. The [screenshot harness](../docs/screenshots.md) builds repeatable fixtures, checks native textures and shop actions, and saves an HTML gallery with logs and check results. It uses one windowed game process and separate test saves.
 
 ## Checks that do not launch the game
 

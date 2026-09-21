@@ -12,7 +12,8 @@ var _last_capture: Dictionary = {}
 var _revision = 0
 var _native_slots: Dictionary = {}
 var _disabled_items: Dictionary = {}
-var _disabled_buttons: Dictionary = {}
+var _disabled_slots: Dictionary = {}
+var _bound_buttons: Dictionary = {}
 var _buttons: Dictionary = {}
 var _tutorial_enabled = true
 var _tutorial_saved = false
@@ -20,24 +21,23 @@ var _was_finished = false
 var _selected = ""
 var _pending = false
 var _pending_at = 0
-var _columns = 5
 var _slot_script: Script
-var _panel: PanelContainer
-var _wallet: Label
+var _panel: Control
 var _notice: Label
-var _sections: VBoxContainer
-var _scroll: ScrollContainer
-var _details: RichTextLabel
-var _reroll: Button
-var _sell: Button
-var _mix: Button
-var _continue: Button
+var _view: Node
+var _guest_view: Node
+var _previous_shop: Node
+var _saved_deck: Resource
+var _saved_difficulty: Resource
+var _guest_context_saved = false
+var _view_slots: Dictionary = {}
+var _sell_targets: Array = []
 
 
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	process_priority = -500
-	_slot_script = load(get_script().resource_path.get_base_dir().path_join("shop_slot_button.gd"))
+	_slot_script = load(get_script().resource_path.get_base_dir().path_join("native_shop_slot.gd"))
 	_build_ui()
 
 
@@ -63,6 +63,9 @@ func end_session():
 		get_node("/root/TutorialManager").ENABLED = _tutorial_enabled
 		_tutorial_saved = false
 	_restore_items()
+	_clear_guest_view()
+	_view = null
+	_view_slots.clear()
 	_controller = null
 	_state.clear()
 	_last_capture.clear()
@@ -77,7 +80,7 @@ func is_open() -> bool:
 
 
 func presence_rect() -> Rect2:
-	return _panel.get_global_rect() if is_open() and _panel.visible else Rect2()
+	return get_viewport().get_visible_rect() if is_open() and _panel.visible else Rect2()
 
 
 func presence_target() -> String:
@@ -92,28 +95,33 @@ func presence_target() -> String:
 func presence_target_position(key: String) -> Vector2:
 	if not _buttons.has(key) or not _panel.visible:
 		return Vector2(INF, INF)
-	var center = _buttons[key].get_global_rect().get_center()
-	return center if _scroll.get_global_rect().has_point(center) else Vector2(INF, INF)
+	return slot_screen_position(key) if _buttons[key].visible else Vector2(INF, INF)
 
 
 func _process(_delta):
 	if _controller == null:
 		return
-	_panel.visible = is_open() and not get_node("/root/UIManager").is_popup_open()
+	_panel.visible = (
+		is_open()
+		and not _controller.panel.visible
+		and not get_node("/root/UIManager").is_popup_open()
+	)
+	if is_open():
+		if not is_instance_valid(_view):
+			_render()
+		if is_instance_valid(_view):
+			_lock_native_items(_view)
+			if _view.moving():
+				_clear_inspection()
+			_layout_targets()
+			_update_actions()
 	if _was_finished != _controller.finished:
 		_was_finished = _controller.finished
 		_update_actions()
-	if is_open() and _columns != _column_count():
-		_render()
-	if _controller.is_table_host():
-		var shop = _shop()
-		if shop != null:
-			_lock_native_items(shop)
-		elif not _disabled_items.is_empty() or not _disabled_buttons.is_empty():
-			_restore_items()
 	if _pending and Time.get_ticks_msec() - _pending_at > 5000:
 		_pending = false
 		_notice.text = "Waiting for the shop update. Try your action again."
+		_notice.show()
 		_update_actions()
 
 
@@ -139,6 +147,10 @@ func capture() -> Dictionary:
 				"scene": shop.get_instance_id(),
 				"round": get_node("/root/Global").gameManager.level_number,
 				"money": info.money,
+				"hp": info.hp,
+				"deck": str(get_node("/root/Global").chosen_deck.id),
+				"difficulty": str(get_node("/root/Global").chosen_difficulty.id),
+				"sets": shop.sets_offered.map(func(id): return str(id)),
 				"snacks": info.snack_tickets,
 				"cocktails": info.cocktail_tickets,
 				"reroll": shop.roll_cost,
@@ -197,7 +209,8 @@ func _pack_slot(group: String, index: int, slot) -> Dictionary:
 			"score": item.get_score(),
 			"price": slot.get_price() if not passive else 0,
 			"sell": item.get_sell_price()
-		}
+		},
+		true
 	)
 	return packed
 
@@ -216,6 +229,7 @@ func handle_request(message: Dictionary) -> bool:
 	if _state.busy:
 		return _reject("Wait for the shop animation to finish.")
 	var shop = _shop()
+	_clear_inspection()
 	var action = message.get("action", "")
 	match action:
 		"reroll":
@@ -350,6 +364,9 @@ func apply_result(accepted: bool, reason = ""):
 	_pending = false
 	if not accepted:
 		_notice.text = reason if reason != "" else "The shop changed. Please choose again."
+		_notice.show()
+	else:
+		_notice.hide()
 	_update_actions()
 
 
@@ -367,12 +384,16 @@ func apply_state(data: Dictionary) -> bool:
 	_pending = false
 	if not data.open:
 		_selected = ""
+		_restore_items()
+		_clear_guest_view()
+		_view = null
+		_view_slots.clear()
 		return true
 	if _find_slot(_selected).get("id", 0) != selection_id:
 		_selected = ""
 	if not was_open:
 		get_viewport().gui_release_focus()
-	_notice.text = "Shop animation…" if _state.busy else "Your money and build are shared."
+	_notice.hide()
 	_render()
 	return true
 
@@ -382,7 +403,7 @@ func _valid_state(data: Dictionary) -> bool:
 		return false
 	if not data.open:
 		return true
-	for field in ["scene", "round", "snacks", "cocktails", "reroll"]:
+	for field in ["scene", "round", "hp", "snacks", "cocktails", "reroll"]:
 		if not data.get(field) is int:
 			return false
 	for field in ["snacks", "cocktails", "reroll"]:
@@ -400,6 +421,19 @@ func _valid_state(data: Dictionary) -> bool:
 		return false
 	var keys = {}
 	var database = get_node("/root/BallDatabase")
+	if (
+		not data.get("deck") is String
+		or not database.id_to_deck.has(data.deck)
+		or not data.get("difficulty") is String
+		or not database.id_to_difficulty.has(data.difficulty)
+		or not data.get("sets") is Array
+		or data.sets.is_empty()
+		or data.sets.size() > 64
+	):
+		return false
+	for id in data.sets:
+		if not id is String or not database.id_to_set.has(id):
+			return false
 	for slot in data.slots:
 		if (
 			not slot is Dictionary
@@ -439,8 +473,6 @@ func _valid_state(data: Dictionary) -> bool:
 
 func _lock_native_items(shop):
 	shop.drop()
-	shop.selected_ball = null
-	shop.selected_passive = null
 	for container in [
 		shop.items,
 		shop.shop_items,
@@ -454,11 +486,28 @@ func _lock_native_items(shop):
 			if not _disabled_items.has(id):
 				_disabled_items[id] = {"node": item, "interactable": item.interactable}
 			item.interactable = false
-	for button in shop.find_children("*", "BaseButton", true, false):
-		var id = button.get_instance_id()
-		if not _disabled_buttons.has(id):
-			_disabled_buttons[id] = {"node": button, "disabled": button.disabled}
-		button.disabled = true
+	for slot in _view_slots.values():
+		var id = slot.get_instance_id()
+		if not _disabled_slots.has(id):
+			_disabled_slots[id] = {"node": slot, "disabled": slot.disabled_slot}
+		slot.disabled_slot = true
+	_bind_action(shop.reroll_button, "reroll")
+	_bind_action(shop.play_button, "continue")
+	_bind_action(shop.cocktail_bar.mix_button, "mix")
+
+
+func _bind_action(button, action: String):
+	var id = button.get_instance_id()
+	if _bound_buttons.has(id):
+		return
+	var connections = button.pressed.get_connections()
+	for connection in connections:
+		button.pressed.disconnect(connection.callable)
+	var handler = func(): _submit({"action": action})
+	button.pressed.connect(handler)
+	_bound_buttons[id] = {
+		"node": button, "connections": connections, "handler": handler, "disabled": button.disabled
+	}
 
 
 func _restore_items():
@@ -466,221 +515,265 @@ func _restore_items():
 		if is_instance_valid(entry.node):
 			entry.node.interactable = entry.interactable
 	_disabled_items.clear()
-	for entry in _disabled_buttons.values():
+	for entry in _disabled_slots.values():
 		if is_instance_valid(entry.node):
-			entry.node.disabled = entry.disabled
-	_disabled_buttons.clear()
+			entry.node.disabled_slot = entry.disabled
+	_disabled_slots.clear()
+	for entry in _bound_buttons.values():
+		if not is_instance_valid(entry.node):
+			continue
+		entry.node.pressed.disconnect(entry.handler)
+		for connection in entry.connections:
+			if connection.callable.is_valid():
+				entry.node.pressed.connect(connection.callable, connection.flags)
+		entry.node.set_disabled(entry.disabled)
+	_bound_buttons.clear()
 
 
 func _build_ui():
 	var layer = CanvasLayer.new()
 	layer.layer = 110
 	add_child(layer)
-	_panel = PanelContainer.new()
+	_panel = Control.new()
+	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(_panel)
 	_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var margin = MarginContainer.new()
-	for side in ["left", "right", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 20)
-	margin.add_theme_constant_override("margin_top", 88)
-	_panel.add_child(margin)
-	var content = VBoxContainer.new()
-	content.add_theme_constant_override("separation", 10)
-	margin.add_child(content)
-	_wallet = Label.new()
-	_wallet.add_theme_font_size_override("font_size", 21)
-	_wallet.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	content.add_child(_wallet)
-	var help = Label.new()
-	help.text = "Shop together · Drag a ball, or select it and click a destination. Both players can buy and arrange."
-	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	content.add_child(help)
-	_scroll = ScrollContainer.new()
-	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	content.add_child(_scroll)
-	_sections = VBoxContainer.new()
-	_sections.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_sections.add_theme_constant_override("separation", 8)
-	_scroll.add_child(_sections)
-	_details = RichTextLabel.new()
-	_details.bbcode_enabled = true
-	_details.custom_minimum_size.y = 65
-	_details.add_theme_color_override("default_color", Color(0.12, 0.12, 0.12))
-	var details_style = StyleBoxFlat.new()
-	details_style.bg_color = Color(0.94, 0.94, 0.9)
-	_details.add_theme_stylebox_override("normal", details_style)
-	content.add_child(_details)
 	_notice = Label.new()
+	_notice.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	content.add_child(_notice)
-	var actions = HFlowContainer.new()
-	content.add_child(actions)
-	_sell = _button("Sell selected", func(): _submit_item("sell", _selected))
-	actions.add_child(_sell)
-	_reroll = _button("Reroll", func(): _submit({"action": "reroll"}))
-	actions.add_child(_reroll)
-	_mix = _button("Mix cocktail", func(): _submit({"action": "mix"}))
-	actions.add_child(_mix)
-	_continue = _button("Continue to table", func(): _submit({"action": "continue"}))
-	actions.add_child(_continue)
+	_notice.add_theme_color_override("font_shadow_color", Color.BLACK)
+	_notice.add_theme_constant_override("shadow_outline_size", 3)
+	_panel.add_child(_notice)
+	_notice.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	_notice.offset_left = 24
+	_notice.offset_right = -24
+	_notice.offset_top = -42
+	_notice.offset_bottom = -12
+	_notice.hide()
 	_panel.hide()
 
 
-func _button(text: String, action: Callable) -> Button:
-	var button = Button.new()
-	button.text = text
-	button.pressed.connect(action)
-	return button
+func native_shop():
+	return _view if is_instance_valid(_view) else null
+
+
+func slot_item(key: String):
+	if not _view_slots.has(key):
+		return null
+	var slot = _view_slots[key]
+	return slot.item if key.get_slice(":", 0) in ["snack", "passive"] else slot.ball
+
+
+func slot_screen_position(key: String) -> Vector2:
+	if not _view_slots.has(key):
+		return Vector2(INF, INF)
+	return get_viewport().get_canvas_transform() * _view_slots[key].global_position
+
+
+func inspect_slot(key: String) -> bool:
+	if not is_instance_valid(_view) or _view.moving():
+		return false
+	var body = slot_item(key)
+	if not is_instance_valid(body):
+		return false
+	if body is ShopPassive:
+		_view.select_passive(body)
+	else:
+		_view.select_ball(body)
+	return true
+
+
+func _uninspect_slot(key: String):
+	var body = slot_item(key)
+	if not is_instance_valid(body) or not is_instance_valid(_view):
+		return
+	if body is ShopPassive:
+		_view.unselect_passive(body)
+	else:
+		_view.unselect_ball(body)
+
+
+func _clear_inspection():
+	if is_instance_valid(_view.selected_ball):
+		_view.unselect_ball(_view.selected_ball)
+	if is_instance_valid(_view.selected_passive):
+		_view.unselect_passive(_view.selected_passive)
+	get_node("/root/Global").clear_hovered_item()
+
+
+func current_section() -> String:
+	if not is_instance_valid(_view):
+		return "balls"
+	return ["balls", "mix", "snacks"][_view.state]
+
+
+func show_section(section: String) -> bool:
+	if not is_instance_valid(_view) or section not in ["balls", "mix", "snacks"]:
+		return false
+	if section == "mix" and not _view.cocktail_bar.visible:
+		return false
+	if section == "snacks" and not _view.tapas_bar.visible:
+		return false
+	_clear_inspection()
+	_view.set_state(["balls", "mix", "snacks"].find(section))
+	return true
+
+
+func _ensure_view() -> bool:
+	if _controller.is_table_host():
+		_view = _shop()
+	else:
+		var global_node = get_node("/root/Global")
+		var game = global_node.gameManager
+		if not is_instance_valid(game) or not game.has_method("apply_table"):
+			return false
+		if not is_instance_valid(_guest_view):
+			if not _guest_context_saved:
+				_previous_shop = (
+					global_node.shopManager if is_instance_valid(global_node.shopManager) else null
+				)
+				_saved_deck = global_node.chosen_deck
+				_saved_difficulty = global_node.chosen_difficulty
+				_guest_context_saved = true
+			var database = get_node("/root/BallDatabase")
+			global_node.chosen_deck = database.id_to_deck[_state.deck]
+			global_node.chosen_difficulty = database.id_to_difficulty[_state.difficulty]
+			var source = global_node.SCENE_GAME.instantiate()
+			_guest_view = source.get_node("UI/Shop")
+			var posters = _guest_view.posters
+			_guest_view.get_parent().remove_child(_guest_view)
+			source.free()
+			_guest_view.set_script(
+				load(get_script().resource_path.get_base_dir().path_join("native_shop.gd"))
+			)
+			_guest_view.posters = posters
+			var empty_shop = game.get_node("UI/Shop")
+			empty_shop.get_parent().remove_child(empty_shop)
+			empty_shop.queue_free()
+			game.get_node("UI").add_child(_guest_view)
+			game.shop = _guest_view
+			var floor_target = game.table.get_node("TableCustomization").shop_floor
+			_guest_view.set_floor(floor_target.texture)
+			global_node.camera.move(_guest_view.get_camera_target())
+		_view = _guest_view
+		if _state.slots.size() != _guest_view.remote_slots.size():
+			return false
+		for slot in _state.slots:
+			if not _guest_view.remote_slots.has(slot.key):
+				return false
+		_guest_view.apply_state(_state)
+	if not is_instance_valid(_view):
+		return false
+	var groups = {
+		"offer": _view.shop_slots,
+		"build": _view.get_inventory_slots(),
+		"snack": _view.tapas_bar.slots,
+		"passive": _view.get_passive_slots(),
+		"mix":
+		[
+			_view.cocktail_bar.slot_left,
+			_view.cocktail_bar.slot_right,
+			_view.cocktail_bar.slot_center
+		]
+	}
+	_view_slots.clear()
+	for group in groups:
+		for index in groups[group].size():
+			_view_slots["%s:%d" % [group, index]] = groups[group][index]
+	return true
+
+
+func _clear_guest_view():
+	if not _guest_context_saved:
+		return
+	var global_node = get_node("/root/Global")
+	global_node.clear_hovered_item()
+	var game = global_node.gameManager
+	if is_instance_valid(_guest_view):
+		var parent = _guest_view.get_parent()
+		parent.remove_child(_guest_view)
+		_guest_view.queue_free()
+		var empty_shop = Node2D.new()
+		empty_shop.name = "Shop"
+		parent.add_child(empty_shop)
+		if is_instance_valid(game):
+			game.shop = empty_shop
+	_guest_view = null
+	global_node.shopManager = _previous_shop if is_instance_valid(_previous_shop) else null
+	global_node.chosen_deck = _saved_deck
+	global_node.chosen_difficulty = _saved_difficulty
+	_guest_context_saved = false
+	if is_instance_valid(global_node.camera):
+		global_node.camera.move(Vector2.ZERO)
 
 
 func _render():
-	_columns = _column_count()
-	_wallet.text = (
-		"Shared shop · %d € · %d snack tickets · %d cocktail tickets"
-		% [_state.money, _state.snacks, _state.cocktails]
-	)
-	for child in _sections.get_children():
-		_sections.remove_child(child)
-		child.queue_free()
+	if not _ensure_view():
+		return
+	for button in _buttons.values():
+		button.queue_free()
 	_buttons.clear()
-	_add_section("Balls for sale", "offer", 0, MAX_SLOTS)
-	_add_section("Table · front to back", "build", 0, 10)
-	_add_section("Reserve", "build", 10, MAX_SLOTS)
-	if _state.snacks > 0:
-		_add_section("Snacks · one ticket each", "snack", 0, MAX_SLOTS)
-	_add_section("Your passives", "passive", 0, MAX_SLOTS)
-	if _state.cocktails > 0 or _mix_has_items():
-		_add_section("Cocktail · ingredient 1, ingredient 2, mixed result", "mix", 0, MAX_SLOTS)
+	for target in _sell_targets:
+		target.button.queue_free()
+	_sell_targets.clear()
+	for slot in _state.slots:
+		var button = _new_target()
+		button.slot_key = slot.key
+		button.set_meta("shop_slot", slot.key)
+		button.revision = _state.revision
+		button.item_id = slot.id
+		button.button_pressed = _selected == slot.key
+		button.pressed.connect(_select_slot.bind(slot.key))
+		button.mouse_entered.connect(inspect_slot.bind(slot.key))
+		button.mouse_exited.connect(_uninspect_slot.bind(slot.key))
+		button.drop_requested.connect(_drop_item)
+		var body = slot_item(slot.key)
+		if is_instance_valid(body):
+			button.preview_texture = body.get_item().data.texture
+			if body is ShopBall:
+				button.preview_material = body.ball.material
+		_buttons[slot.key] = button
+	for zone in [_view.sell_zone, _view.tapas_bar.sell_zone]:
+		var button = _new_target()
+		button.toggle_mode = false
+		button.slot_key = "sell"
+		button.pressed.connect(func(): _submit_item("sell", _selected))
+		button.drop_requested.connect(_drop_item)
+		_sell_targets.append({"button": button, "zone": zone})
+	_lock_native_items(_view)
+	_layout_targets()
 	_update_actions()
 
 
-func _add_section(title: String, group: String, start: int, end: int):
-	var label = Label.new()
-	label.text = title
-	_sections.add_child(label)
-	var grid = GridContainer.new()
-	grid.columns = mini(5 if group == "build" else 4, _columns)
-	_sections.add_child(grid)
-	for slot in _state.slots:
-		if slot.group != group or slot.index < start or slot.index >= end:
-			continue
-		var button = _slot_script.new()
-		button.slot_key = slot.key
-		button.set_meta("shop_slot", slot.key)
-		_buttons[slot.key] = button
-		button.revision = _state.revision
-		button.item_id = slot.id
-		button.custom_minimum_size = Vector2(128, 84)
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.toggle_mode = true
-		button.button_pressed = _selected == slot.key
-		button.disabled = _state.busy or _pending or _controller.finished
-		var description = _describe(slot)
-		button.tooltip_text = description.get("name", "Empty slot")
-		button.pressed.connect(_select_slot.bind(slot.key))
-		button.mouse_entered.connect(_show_details.bind(slot))
-		button.drop_requested.connect(_drop_item)
-		grid.add_child(button)
-		var box = VBoxContainer.new()
-		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		button.add_child(box)
-		box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		var line = Label.new()
-		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		line.text = str(slot.index + 1) if slot.id == 0 else description.name
-		line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		line.custom_minimum_size.x = 110
-		line.add_theme_font_size_override("font_size", 13)
-		box.add_child(line)
-		if slot.id == 0:
-			continue
-		var icon = _make_icon(slot)
-		box.add_child(icon)
-		var price = Label.new()
-		price.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		price.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		price.add_theme_font_size_override("font_size", 12)
-		price.text = (
-			"%d € · Lv %d" % [slot.price, slot.level]
-			if group == "offer"
-			else "Lv %d · %d pts" % [slot.level, slot.score]
+func _new_target():
+	var button = _slot_script.new()
+	button.toggle_mode = true
+	button.focus_mode = Control.FOCUS_NONE
+	for style in ["normal", "hover", "pressed", "disabled", "focus"]:
+		button.add_theme_stylebox_override(style, StyleBoxEmpty.new())
+	_panel.add_child(button)
+	return button
+
+
+func _layout_targets():
+	var transform = get_viewport().get_canvas_transform()
+	var area = get_viewport().get_visible_rect()
+	for key in _buttons:
+		var slot = _view_slots[key]
+		var button = _buttons[key]
+		button.size = Vector2(60, 60) * transform.get_scale().abs()
+		button.position = transform * slot.global_position - button.size * 0.5
+		button.visible = slot.is_visible_in_tree() and area.intersects(button.get_rect())
+	for target in _sell_targets:
+		var zone = target.zone
+		var top_left = transform * zone.get_node("topLeft").global_position
+		var bottom_right = transform * zone.get_node("bottomRight").global_position
+		target.button.position = top_left
+		target.button.size = bottom_right - top_left
+		target.button.visible = (
+			zone.is_visible_in_tree() and area.intersects(target.button.get_rect())
 		)
-		box.add_child(price)
-
-
-func _make_icon(slot: Dictionary) -> TextureRect:
-	var icon = TextureRect.new()
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	icon.custom_minimum_size = Vector2(40, 40)
-	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	var database = get_node("/root/BallDatabase")
-	var passive = slot.group in ["snack", "passive"]
-	var resource = (
-		database.get_passive_by_id(slot.data) if passive else database.get_ball_by_id(slot.data)
-	)
-	if resource == null:
-		return icon
-	icon.texture = resource.texture
-	if not passive:
-		icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		icon.stretch_mode = TextureRect.STRETCH_SCALE
-		var material_path = (
-			"res://materials/preview_ball.tres"
-			if slot.mixed == ""
-			else "res://materials/preview_ball_mixed.tres"
-		)
-		icon.material = load(material_path).duplicate()
-		icon.material.set_shader_parameter("tex", resource.texture)
-		if slot.mixed != "":
-			var mixed = database.get_ball_by_id(slot.mixed)
-			if mixed != null:
-				icon.material.set_shader_parameter("mixed_tex", mixed.texture)
-		var basis = Basis(Vector3.FORWARD, PI / 2) * Basis(Vector3.RIGHT, PI / 1.5)
-		icon.material.set_shader_parameter("rotation_x", basis.x)
-		icon.material.set_shader_parameter("rotation_y", basis.y)
-		icon.material.set_shader_parameter("rotation_z", basis.z)
-	return icon
-
-
-func _column_count() -> int:
-	return clampi(int((get_viewport().get_visible_rect().size.x - 40) / 132.0), 1, 5)
-
-
-func _describe(slot: Dictionary) -> Dictionary:
-	if slot.id == 0:
-		return {}
-	var database = get_node("/root/BallDatabase")
-	var passive = slot.group in ["snack", "passive"]
-	var resource = (
-		database.get_passive_by_id(slot.data) if passive else database.get_ball_by_id(slot.data)
-	)
-	var name = resource.get_formatted_name()
-	var description = resource.get_formatted_description(mini(slot.level, 5))
-	if slot.mixed != "":
-		var mixed = database.get_ball_by_id(slot.mixed)
-		name += " + " + mixed.get_formatted_name()
-		description += "\n·····\n" + mixed.get_formatted_description(mini(slot.level, 5))
-	return {"name": name, "description": description}
-
-
-func _show_details(slot: Dictionary):
-	if slot.id == 0:
-		_details.text = "Empty slot · Select a ball, then click here to move or buy it."
-		return
-	var description = _describe(slot)
-	_details.text = (
-		"[b]%s[/b] · Level %d · Score %d · Sell for %d €\n%s"
-		% [
-			description.name,
-			slot.level,
-			slot.score,
-			slot.sell,
-			load("res://utils/text_formatter.gd").format(description.description)
-		]
-	)
 
 
 func _find_slot(key: String) -> Dictionary:
@@ -702,14 +795,18 @@ func _select_slot(key: String):
 	elif slot.get("id", 0) != 0:
 		_selected = key
 	_render()
-	_show_details(slot)
+	inspect_slot(key)
 
 
 func _drop_item(source: String, target: String, revision: int, item_id: int):
 	if revision != _state.revision or _find_slot(source).get("id", 0) != item_id:
 		_notice.text = "The shop changed during your drag. Please choose again."
+		_notice.show()
 		return
-	_submit_item("move", source, target)
+	if target == "sell":
+		_submit_item("sell", source)
+	else:
+		_submit_item("move", source, target)
 	_selected = ""
 
 
@@ -736,30 +833,28 @@ func _submit(message: Dictionary):
 		_pending = true
 		_pending_at = Time.get_ticks_msec()
 		_notice.text = "Updating the shared shop…"
+		_notice.show()
 		_update_actions()
 		request.emit(message)
 
 
-func _mix_has_items() -> bool:
-	for slot in _state.get("slots", []):
-		if slot.group == "mix" and slot.id != 0:
-			return true
-	return false
-
-
 func _update_actions():
-	if not is_open():
+	if not is_open() or not is_instance_valid(_view):
 		return
-	var blocked = _pending or _state.busy or _controller.finished
+	var blocked = (
+		_pending
+		or _state.busy
+		or _controller.finished
+		or _controller.panel.visible
+		or _view.moving()
+	)
 	if _controller.finished:
 		_notice.text = "This table has finished. Scores and purchases are locked."
+		_notice.show()
 	for button in _buttons.values():
 		button.disabled = blocked
-	_reroll.text = "Reroll · %d €" % _state.reroll
-	_reroll.disabled = blocked or _state.money < _state.reroll
-	_sell.disabled = (
-		blocked or _selected == "" or _selected.get_slice(":", 0) not in ["build", "passive"]
-	)
-	_mix.visible = _state.cocktails > 0 or _mix_has_items()
-	_mix.disabled = blocked or not _state.can_mix
-	_continue.disabled = blocked or not _state.can_continue
+	for target in _sell_targets:
+		target.button.disabled = blocked
+	_view.reroll_button.set_disabled(blocked or _state.money < _state.reroll)
+	_view.cocktail_bar.mix_button.set_disabled(blocked or not _state.can_mix)
+	_view.play_button.set_disabled(blocked or not _state.can_continue)

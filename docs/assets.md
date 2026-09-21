@@ -2,7 +2,7 @@
 
 Original multiplayer ball artwork generated through [Fal](https://fal.ai/) using `bytedance/seedream/v5/pro/text-to-image` (Seedream 5 Pro).
 
-The eight PNG sources in `mod/assets/balls/` are 1536 × 768 pixels. Each contains two matching emblems on a solid color background. The texture loader takes the left square face and packs it into the game's 4 × 3 cube atlas, repeating the emblem on all six faces and generating mipmaps. Lighting comes from the native ball shader.
+The eight PNG sources in `mod/assets/balls/` are 1536 × 768 pixels. Each contains two matching emblems on a solid color background. The texture loader takes the left square face and packs it into a 1024 × 768 cube atlas with 256-pixel faces, repeating the emblem on all six faces and generating mipmaps. This matches the native textures and the sphere shader's fixed mip-level calculation, keeping small table and shop balls sharp. Lighting comes from the native ball shader.
 
 | Ball | Source file | Fal request | Original output |
 | --- | --- | --- | --- |
