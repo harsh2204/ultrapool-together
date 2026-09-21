@@ -1,41 +1,50 @@
 extends Node
 
-const SHOT_ACTIONS = [&"click", &"shoot", &"aim_left", &"aim_right", &"aim_up", &"aim_down"]
 const SETTLE_TIME = 0.6
 const MIN_SHOT_LENGTH = 50.0
 const MAX_SHOT_LENGTH = 200.0
 
 var _session_active = false
-var _saved_bindings: Dictionary = {}
-var _input_blocked = false
+var _controller: Node
+var _native_player_script: Script
+var _hooked_player: Node
+var _original_player_script: Script
 var _settled_seconds = 0.0
 var _last_game_id = 0
-var _last_player_id = 0
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	process_priority = -1000
+	get_tree().node_added.connect(_node_added)
 
 
-func begin_session() -> void:
+func begin_session(controller: Node) -> void:
+	_controller = controller
+	if _native_player_script == null:
+		_native_player_script = load(
+			get_script().resource_path.get_base_dir().path_join("native_player.gd")
+		)
 	_session_active = true
 	_settled_seconds = 0.0
-	_update_input_gate()
+	_update_player_hook()
 
 
 func end_session() -> void:
 	_session_active = false
-	_restore_bindings()
+	_restore_player()
+	_controller = null
 	_settled_seconds = 0.0
 
 
 func _exit_tree() -> void:
-	_restore_bindings()
+	_restore_player()
 
 
 func _process(delta: float) -> void:
-	_update_input_gate()
+	_update_player_hook()
+	if is_instance_valid(_hooked_player) and not _controller.can_control():
+		_hooked_player.pause_cancel_shot()
 	var game = _game()
 	var game_id: int = game.get_instance_id() if game != null else 0
 	if game_id != _last_game_id:
@@ -52,17 +61,23 @@ func can_shoot() -> bool:
 	if not _session_active or not _table_active(game) or not is_settled():
 		return false
 	var player = game.get("player_ball")
-	return is_instance_valid(player) and bool(player.get("spawned")) \
-		and not bool(player.get("falling")) and game.has_shots() and game.can_shoot()
+	return (
+		is_instance_valid(player)
+		and bool(player.get("spawned"))
+		and not bool(player.get("falling"))
+		and game.has_shots()
+		and game.can_shoot()
+	)
 
 
 func shoot(vector: Vector2) -> bool:
 	if not vector.is_finite() or vector.length() <= MIN_SHOT_LENGTH or not can_shoot():
 		return false
 	var player = _game().get("player_ball")
+	_update_player_hook()
 	player.pause_cancel_shot()
 	_settled_seconds = 0.0
-	player.shoot(vector.limit_length(MAX_SHOT_LENGTH))
+	player.together_play_shot(vector.limit_length(MAX_SHOT_LENGTH))
 	return true
 
 
@@ -85,7 +100,6 @@ func shot_score() -> float:
 
 
 func game_data() -> Dictionary:
-	var viewport_size = get_viewport().get_visible_rect().size
 	var data = {
 		"available": false,
 		"table_active": false,
@@ -100,9 +114,6 @@ func game_data() -> Dictionary:
 		"rounds_played": 0,
 		"shots_left": 0,
 		"score": 0.0,
-		"cue_screen": [0.0, 0.0],
-		"viewport_size": [viewport_size.x, viewport_size.y],
-		"aim_scale": [1.0, 1.0],
 	}
 	var game = _game()
 	if game == null:
@@ -119,12 +130,6 @@ func game_data() -> Dictionary:
 	data.rounds_played = int(game.get("rounds_played"))
 	data.shots_left = game.get_shots_left()
 	data.score = score()
-	var player = game.get("player_ball")
-	if is_instance_valid(player):
-		var screen_position: Vector2 = player.get_global_transform_with_canvas().origin
-		data.cue_screen = [screen_position.x, screen_position.y]
-		var inverse_canvas: Transform2D = player.get_canvas_transform().affine_inverse()
-		data.aim_scale = [inverse_canvas.x.length(), inverse_canvas.y.length()]
 	return data
 
 
@@ -141,8 +146,13 @@ func _game():
 func _table_active(game) -> bool:
 	if game == null or get_tree().paused:
 		return false
-	if game.get("in_shop") or game.get("in_menu") or game.get("game_ended") \
-		or game.get("round_ended") or not game.get("balls_spawned"):
+	if (
+		game.get("in_shop")
+		or game.get("in_menu")
+		or game.get("game_ended")
+		or game.get("round_ended")
+		or not game.get("balls_spawned")
+	):
 		return false
 	var global_node = get_node("/root/Global")
 	if global_node.get("transitioning"):
@@ -175,35 +185,43 @@ func _raw_settled(game) -> bool:
 	return not is_instance_valid(events) or not bool(events.get("_queue_busy"))
 
 
-func _update_input_gate() -> void:
+func _update_player_hook() -> void:
+	if not _session_active:
+		return
 	var game = _game()
-	if not _session_active or not _table_active(game):
-		_restore_bindings()
+	var player = game.get("player_ball") if game != null else null
+	if is_instance_valid(_hooked_player) and _hooked_player == player:
+		_hooked_player.set("together_controller", _controller)
 		return
-	var player = game.get("player_ball")
-	var player_id: int = player.get_instance_id() if is_instance_valid(player) else 0
-	if not _input_blocked or player_id != _last_player_id:
-		if is_instance_valid(player):
-			player.pause_cancel_shot()
-		_last_player_id = player_id
-	if _input_blocked:
+	_restore_player()
+	if not is_instance_valid(player):
 		return
-	for action in SHOT_ACTIONS:
-		if InputMap.has_action(action):
-			_saved_bindings[action] = InputMap.action_get_events(action)
-			Input.action_release(action)
-			InputMap.action_erase_events(action)
-	_input_blocked = true
+	player.pause_cancel_shot()
+	_original_player_script = player.get_script()
+	_replace_script(player, _native_player_script)
+	player.set("together_controller", _controller)
+	_hooked_player = player
 
 
-func _restore_bindings() -> void:
-	if not _input_blocked:
-		return
-	for action in _saved_bindings:
-		Input.action_release(action)
-		InputMap.action_erase_events(action)
-		for event in _saved_bindings[action]:
-			InputMap.action_add_event(action, event)
-	_saved_bindings.clear()
-	_input_blocked = false
-	_last_player_id = 0
+func _node_added(node: Node) -> void:
+	if _session_active and node is PlayerBall:
+		node.ready.connect(_update_player_hook, CONNECT_ONE_SHOT)
+
+
+func _restore_player() -> void:
+	if is_instance_valid(_hooked_player):
+		_hooked_player.pause_cancel_shot()
+		_replace_script(_hooked_player, _original_player_script)
+	_hooked_player = null
+	_original_player_script = null
+
+
+func _replace_script(player: Node, script: Script) -> void:
+	var values = {}
+	for property in player.get_property_list():
+		if property.usage & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			values[property.name] = player.get(property.name)
+	player.set_script(script)
+	for property in player.get_property_list():
+		if property.usage & PROPERTY_USAGE_SCRIPT_VARIABLE and values.has(property.name):
+			player.set(property.name, values[property.name])
