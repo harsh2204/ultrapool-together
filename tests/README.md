@@ -1,6 +1,8 @@
 # Validation
 
-The v0.4 runtime probes have not been run. Syntax checks do not verify engine types or gameplay. Follow [AGENTS.md](../AGENTS.md) before running any probe, including `--headless`.
+Syntax checks do not verify engine types or gameplay. Follow [AGENTS.md](../AGENTS.md) before running any probe, including `--headless`.
+
+For authorized visual tests, run `Capture-Screens.cmd` from the repository root. The [screenshot harness](../docs/screenshots.md) builds repeatable fixtures, checks native textures and shop actions, and saves an HTML gallery with logs and check results. It uses one windowed game process and separate test saves.
 
 ## Checks that do not launch the game
 
@@ -20,6 +22,8 @@ These scripts extend `SceneTree` and require a Godot 4.6 executable with `--scri
 
 | Probe | Coverage | Success marker |
 | --- | --- | --- |
+| `multiplayer_balls_probe.gd` | Eight ball abilities, accepted-shot identity, replay protection, competitive seat-count fairness, round resets, mixed abilities, utility caps, and malformed display snapshots. | `PASS: ... multiplayer ball rules checks` |
+| `bounty_probe.gd` | Completed-shot comparisons, tied rewards, disconnected tables, and idempotent standings. | `BOUNTY_PROBE PASS` |
 | `lobby_probe.gd` | Eight-player capacity, self-selected seats, readiness invalidation, host-only settings, unequal table groups, equal shots per table, start/reset, reserved disconnected seats, and leader selection. | `LOBBY_PROBE PASS` |
 | `router_probe.gd` | Authenticated actor identity, requests to the correct table leader, table-isolated broadcasts and replies, reliable actions, disconnected members, and malformed routes. | `ROUTER_PROBE PASS` |
 | `controller_probe.gd` | Main controller lifecycle using off-tree service substitutes: identity teardown, room/match generations, terminal leader disconnects and reconnects, a run closing during a shot, and targeted shop synchronization preserving the broadcast cache. | `CONTROLLER_PROBE PASS` |
@@ -83,11 +87,11 @@ SessionProbe="*C:/path/to/ultrapool-multiplayer/tests/session_probe.gd"
 
 Use `UltrapoolTogetherSessionTestguest` in the second directory. Start the first executable with `--rendering-method gl_compatibility -- --host` and the second with `--rendering-method gl_compatibility -- --guest`. The probe opens localhost UDP port 24817. Both processes must finish with their role-specific pass markers and exit code 0.
 
-The v0.4 probe uses the actual lobby scene signals and controller in two phases:
+The session probe uses the actual lobby scene signals and controller in two phases:
 
 1. **One shared co-op table.** Joining preserves the guest menu and places the guest on the unassigned bench. Starting early or readying without a seat is rejected. Both choose seats and ready up before the host starts. Native host input is blocked while the lobby is open; duplicate input cannot consume another shot. The guest checks native type textures and inspection, waits for confirmed shot input, and verifies that its ball moves across physics frames while network polling is briefly stopped. Two shots complete without a competitive cap. Returning to the lobby and closing it restores the guest's original menu.
 2. **Two separate competitive tables.** The host changes to two tables with a one-shot budget, and both players seat and ready again. Each player runs its own native game with matching seed, deck, difficulty, and initial cue position. Distinct wallet changes remain local to their respective tables. Each table consumes one shot, locks aiming when finished, and receives a scoreboard containing both finished tables. Returning to the lobby and one guest leaving must preserve the host's room. Native input bindings must remain unchanged through both phases.
 
 The probe drives UI signals rather than clicking rendered controls and takes no screenshots. It covers two local processes, not eight real players, Internet latency, Steam invitations, or a complete campaign.
 
-Multi-PC testing should cover lobby layout, Steam invitations, uneven groups, equal shot budgets, independent tables and shops, ball movement under latency, cursors and inspection, concurrent shop actions, disconnects, and rematches.
+Multi-PC testing should cover lobby layout, Steam invitations, uneven groups, equal shot budgets, independent tables and shops, ball movement under latency, cursors and inspection, concurrent shop actions, disconnects, and rematches. For the new balls, check artwork on every peer, called-pocket controls, marks and charges, shop rotation, mixed abilities, health and money updates, Encore respawns, and final Bounty awards.

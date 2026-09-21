@@ -6,7 +6,7 @@ class TransportStub:
 	var is_host = false
 	var id = 20
 	var coordinator = 10
-	var room_code = "UP4-test"
+	var room_code = "UP5-test"
 	var sent: Array = []
 
 	func local_id() -> int:
@@ -43,6 +43,7 @@ class TransportStub:
 class AdapterStub:
 	extends Node
 	var ended = 0
+	var ready_to_shoot = false
 	var state = {
 		"available": false,
 		"table_active": false,
@@ -59,7 +60,16 @@ class AdapterStub:
 		return state.duplicate(true)
 
 	func can_shoot() -> bool:
-		return false
+		return ready_to_shoot
+
+	func shoot(_vector: Vector2, accepted: Callable = Callable()) -> bool:
+		return ready_to_shoot and (not accepted.is_valid() or accepted.call())
+
+	func score() -> float:
+		return state.score
+
+	func shot_score() -> float:
+		return state.score
 
 	func is_settled() -> bool:
 		return false
@@ -71,6 +81,9 @@ class AdapterStub:
 class TableStub:
 	extends Node
 	var ended = 0
+
+	func capture() -> Dictionary:
+		return {"available": false}
 
 	func end_guest():
 		ended += 1
@@ -103,6 +116,45 @@ class PresenceStub:
 
 	func tick(_delta: float, _active: bool, _can_aim: bool):
 		pass
+
+
+class MultiplayerBallsStub:
+	extends Node
+	var ended = 0
+	var begin_calls = 0
+	var rules: RefCounted
+
+	func blocks_shot_input() -> bool:
+		return false
+
+	func end_session():
+		ended += 1
+
+	func prepare_shop():
+		pass
+
+	func begin_shot(index: int, actor: int) -> bool:
+		begin_calls += 1
+		return rules.begin_shot(index, actor, true, 2)
+
+	func finish_shot():
+		rules.finish_shot([])
+
+	func capture() -> Dictionary:
+		return {
+			"last_shooter": rules.last_shooter,
+			"pending": rules.pending,
+			"bounty_shot": rules.bounty_shot,
+			"call": rules.call_state.duplicate(),
+			"balls": [],
+			"pockets": []
+		}
+
+	func bounty_shot() -> int:
+		return rules.bounty_shot
+
+	func valid_state(data) -> bool:
+		return rules.valid_state(data)
 
 
 class RunStub:
@@ -154,6 +206,7 @@ func _initialize() -> void:
 	_abandoned_leader_rejoin()
 	_run_closes_during_shot()
 	_targeted_shop_sync()
+	_rejected_shots_preserve_ability_state()
 	print("CONTROLLER_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
@@ -168,6 +221,10 @@ func _controller():
 	controller.table_sync = TableStub.new()
 	controller.shop_sync = ShopStub.new()
 	controller.presence = PresenceStub.new()
+	controller.multiplayer_balls = MultiplayerBallsStub.new()
+	controller.multiplayer_balls.rules = load(_base.path_join("multiplayer_ball_rules.gd")).new()
+	controller.multiplayer_balls.rules.reset_round("fixture")
+	controller.bounty_race = load(_base.path_join("bounty_race.gd"))
 	controller.run_setup = RunStub.new()
 	controller.panel = PanelStub.new()
 	controller.panel.hide()
@@ -180,6 +237,7 @@ func _controller():
 		controller.table_sync,
 		controller.shop_sync,
 		controller.presence,
+		controller.multiplayer_balls,
 		controller.run_setup,
 		controller.panel,
 		controller.pass_button,
@@ -224,6 +282,7 @@ func _closed_transport_teardown():
 			controller.adapter.ended == 1
 			and controller.shop_sync.ended == 1
 			and controller.table_sync.ended == 1
+			and controller.multiplayer_balls.ended == 1
 		),
 		"disconnect tears down all table services"
 	)
@@ -257,6 +316,9 @@ func _abandoned_leader_rejoin():
 			"table": 0,
 			"leader_id": 10,
 			"score": 0.0,
+			"base_score": 0.0,
+			"bounty_shot": 0,
+			"bounty_bonus": 0.0,
 			"shots_used": 0,
 			"shot_budget": 6,
 			"finished": false,
@@ -266,6 +328,9 @@ func _abandoned_leader_rejoin():
 			"table": 1,
 			"leader_id": 20,
 			"score": 18.0,
+			"base_score": 18.0,
+			"bounty_shot": 0,
+			"bounty_bonus": 0.0,
 			"shots_used": 2,
 			"shot_budget": 6,
 			"finished": false,
@@ -408,6 +473,52 @@ func _targeted_shop_sync():
 		func(frame): return frame.message.get("payload", {}).get("kind") == "shop_state"
 	)
 	_check(repeated.size() == 2, "unchanged shop is not repeatedly broadcast")
+	controller.free()
+
+
+func _rejected_shots_preserve_ability_state():
+	var controller = _controller()
+	controller.active = true
+	var rules = controller.multiplayer_balls.rules
+	_check(
+		not controller._take_shot(20, Vector2(100, 0), 0),
+		"native adapter can reject an otherwise valid shot"
+	)
+	_check(
+		rules.shot_index == 0 and controller.multiplayer_balls.begin_calls == 0,
+		"native rejection cannot consume an accepted-shot index"
+	)
+	controller.adapter.ready_to_shoot = true
+	_check(not controller._take_shot(30, Vector2(100, 0), 0), "nonowner shot is rejected")
+	_check(not controller._take_shot(20, Vector2(100, 0), 1), "future turn is rejected")
+	_check(not controller._take_shot(20, Vector2(20, 0), 0), "weak shot is rejected")
+	_check(
+		rules.shot_index == 0 and controller.multiplayer_balls.begin_calls == 0,
+		"invalid requests cannot arm abilities"
+	)
+	_check(controller._pass(20, 0), "current player may pass before an accepted shot")
+	_check(
+		controller.shot_number == 1 and rules.shot_index == 0 and not rules.pending,
+		"passing advances the turn without advancing ball abilities"
+	)
+	_check(controller._take_shot(30, Vector2(100, 0), 1), "new owner takes first accepted shot")
+	_check(
+		rules.shot_index == 1 and rules.shooter == 30 and rules.pending,
+		"shot abilities record the actual accepted shooter"
+	)
+	_check(not controller._take_shot(30, Vector2(100, 0), 1), "duplicate active shot is rejected")
+	_check(
+		controller.multiplayer_balls.begin_calls == 1, "duplicate request cannot rearm abilities"
+	)
+	controller._finish_shot()
+	_check(
+		controller.used_shots == 1 and rules.last_shooter == 30 and not rules.pending,
+		"settlement completes the same accepted shot in controller and rules"
+	)
+	_check(
+		controller._take_shot(20, Vector2(100, 0), 2), "next accepted shot follows completed one"
+	)
+	_check(rules.shot_index == 2, "passing does not create a gap in accepted-shot indices")
 	controller.free()
 
 

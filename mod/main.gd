@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.4.0"
+const VERSION = "0.5.0"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 
@@ -10,6 +10,8 @@ var table_sync: Node
 var shop_sync: Node
 var presence: Node
 var run_setup: Node
+var multiplayer_balls: Node
+var bounty_race: Script
 var lobby_model: RefCounted
 var router: RefCounted
 var ui_root: Control
@@ -64,9 +66,17 @@ func _ready():
 	shop_sync = load(base.path_join("shop_sync.gd")).new()
 	presence = load(base.path_join("presence.gd")).new()
 	run_setup = load(base.path_join("run_setup.gd")).new()
-	for service in [transport, adapter, table_sync, shop_sync, presence, run_setup]:
+	multiplayer_balls = load(base.path_join("multiplayer_balls.gd")).new()
+	bounty_race = load(base.path_join("bounty_race.gd"))
+	for service in [
+		transport, adapter, table_sync, shop_sync, presence, run_setup, multiplayer_balls
+	]:
 		add_child(service)
 	_build_ui()
+	if not multiplayer_balls.setup(self):
+		supported = false
+		_status("Multiplayer ball art is missing. Reinstall the complete mod package.")
+		return
 	presence.setup(self, transport, shop_sync)
 	shop_sync.request.connect(_shop_request)
 	transport.connected.connect(_connected)
@@ -90,6 +100,9 @@ func _build_ui():
 	add_child(hud)
 	ui_root = Control.new()
 	ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.theme = Theme.new()
+	ui_root.theme.default_font = get_node("/root/UIManager").FONT_LATIN
+	ui_root.theme.default_font_size = 18
 	hud.add_child(ui_root)
 	ui_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var dock = VBoxContainer.new()
@@ -97,7 +110,7 @@ func _build_ui():
 	dock.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	dock.offset_left = -350
 	dock.offset_right = -16
-	dock.offset_top = 16
+	dock.offset_top = 72
 	dock.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	var row = HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
@@ -207,7 +220,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.4 and a new UP4 room code.")
+		_status("Could not join. Everyone needs v0.5 and a new UP5 room code.")
 	_render_lobby()
 
 
@@ -313,6 +326,7 @@ func _lobby_error(recipient: int, reason: String):
 
 
 func _broadcast_lobby():
+	bounty_race.resolve(table_summaries, _competitive())
 	lobby = lobby_model.snapshot()
 	lobby.table_summaries = table_summaries.duplicate(true)
 	lobby.match = match_id
@@ -347,6 +361,9 @@ func _start_match(sender: int):
 				"table": table,
 				"leader_id": lobby_model.leader_for_table(table),
 				"score": 0.0,
+				"base_score": 0.0,
+				"bounty_shot": 0,
+				"bounty_bonus": 0,
 				"shots_used": 0,
 				"shot_budget": lobby_model.shot_budget,
 				"finished": false,
@@ -395,13 +412,14 @@ func _begin_table(config: Dictionary):
 	last_shop_state.clear()
 	presence.clear()
 	active = true
+	multiplayer_balls.begin_session()
 	if not is_table_host() and not table_sync.begin_guest():
 		_match_failed("Could not create the table view. Return to the main menu and try again.")
 		return
 	adapter.begin_session(self)
 	shop_sync.begin_session(self)
 	if is_table_host():
-		if run_setup.start(config) != OK:
+		if run_setup.start(config, multiplayer_balls.catalog) != OK:
 			_match_failed("Could not start the table's run.")
 	else:
 		_table_send({"kind": "sync_request"})
@@ -437,6 +455,7 @@ func _end_table():
 	_restore_menu()
 	presence.clear()
 	shop_sync.end_session()
+	multiplayer_balls.end_session()
 	adapter.end_session()
 	table_sync.end_guest()
 	run_setup.cancel()
@@ -585,6 +604,8 @@ func _process(delta):
 func can_control() -> bool:
 	if not _turn_ready():
 		return false
+	if multiplayer_balls != null and multiplayer_balls.blocks_shot_input():
+		return false
 	if get_node("/root/InputManager").is_controller():
 		return true
 	var hovered = get_viewport().gui_get_hovered_control()
@@ -641,7 +662,7 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		return false
 	shot_start_score = adapter.score()
 	var starting_table = table_sync.capture()
-	if not adapter.shoot(vector):
+	if not adapter.shoot(vector, multiplayer_balls.begin_shot.bind(used_shots + 1, player)):
 		return false
 	shot_pending = true
 	settle_time = 0.0
@@ -661,6 +682,7 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 
 
 func _finish_shot():
+	multiplayer_balls.finish_shot()
 	total_score += maxf(0.0, adapter.shot_score() - shot_start_score)
 	used_shots += 1
 	shot_pending = false
@@ -705,7 +727,12 @@ func _pass(player: int, expected_turn: int) -> bool:
 
 
 func _update_hud():
-	pass_button.visible = active and _members(table_id).size() > 1 and not finished
+	pass_button.visible = (
+		active
+		and _members(table_id).size() > 1
+		and not finished
+		and not latest_state.get("in_shop", false)
+	)
 	pass_button.disabled = not _turn_ready()
 	turn_label.text = ""
 	score_label.text = ""
@@ -726,11 +753,15 @@ func _update_hud():
 			else _player_name(turn_owner) + "'s turn"
 		)
 	if _competitive():
+		var displayed_score = total_score
+		for summary in lobby.get("table_summaries", []):
+			if summary.table == table_id:
+				displayed_score += summary.get("bounty_bonus", 0)
 		score_label.text = (
 			"Table %d · %.0f points · %d/%d shots"
-			% [table_id + 1, total_score, used_shots, lobby.shot_budget]
+			% [table_id + 1, displayed_score, used_shots, lobby.shot_budget]
 		)
-	elif latest_state.get("available", false):
+	elif latest_state.get("available", false) and not latest_state.get("in_shop", false):
 		score_label.text = (
 			"Round %d · %d shots left · Score %.0f"
 			% [latest_state.round, latest_state.shots_left, latest_state.score]
@@ -761,6 +792,7 @@ func _result_text() -> String:
 func _publish_state(target: int = 0):
 	if not active or not is_table_host():
 		return
+	multiplayer_balls.prepare_shop()
 	latest_state = adapter.game_data()
 	latest_state.can_shoot = latest_state.can_shoot and run_setup.ready_for_input() and not finished
 	latest_state.merge(
@@ -771,6 +803,8 @@ func _publish_state(target: int = 0):
 			"pending": shot_pending,
 			"total_score": total_score,
 			"used_shots": used_shots,
+			"bounty_shot": multiplayer_balls.bounty_shot(),
+			"multiplayer_balls": multiplayer_balls.capture(),
 			"finished": finished,
 			"finish_reason": finish_reason
 		},
@@ -846,6 +880,9 @@ func _record_summary(table: int, state: Dictionary):
 		"table": table,
 		"leader_id": _leader(table),
 		"score": state.total_score,
+		"base_score": state.total_score,
+		"bounty_shot": state.bounty_shot,
+		"bounty_bonus": 0,
 		"shots_used": state.used_shots,
 		"shot_budget": lobby.shot_budget,
 		"finished": state.finished,
@@ -860,7 +897,13 @@ func _record_summary(table: int, state: Dictionary):
 		if table_summaries[index].table == table:
 			if (
 				table_summaries[index].status == "Table host disconnected"
-				or table_summaries[index] == summary
+				or (
+					table_summaries[index].base_score == summary.base_score
+					and table_summaries[index].bounty_shot == summary.bounty_shot
+					and table_summaries[index].shots_used == summary.shots_used
+					and table_summaries[index].finished == summary.finished
+					and table_summaries[index].status == summary.status
+				)
 			):
 				return
 			table_summaries[index] = summary
@@ -946,10 +989,14 @@ func _received_table(actor: int, message: Dictionary):
 			var accepted = _pass(actor, message.turn)
 			_table_send({"kind": "shot_result", "turn": message.turn, "accepted": accepted}, actor)
 		elif kind == "shop_request":
+			multiplayer_balls.prepare_shop()
 			var accepted = not finished and shop_sync.handle_request(message)
 			_table_send(
 				{"kind": "shop_result", "accepted": accepted, "error": shop_sync.last_error}, actor
 			)
+			_publish_state()
+		elif kind == "ball_call":
+			multiplayer_balls.handle_call(actor, message)
 			_publish_state()
 		elif kind == "sync_request":
 			_publish_state(actor)
@@ -981,6 +1028,7 @@ func _received_table(actor: int, message: Dictionary):
 			last_guest_snapshot = message.id
 			table_sync.begin_shot(message.vector)
 	elif kind == "state" and _valid_state(message, table_id):
+		multiplayer_balls.apply_state(message.multiplayer_balls)
 		latest_state = message
 		turn_owner = message.turn_owner
 		shot_number = message.turn
@@ -1029,13 +1077,15 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 	for key in ["available", "table_active", "can_shoot", "in_shop", "pending", "finished"]:
 		if not message.get(key) is bool:
 			return false
-	for key in ["round", "shots_left", "used_shots"]:
+	for key in ["round", "shots_left", "used_shots", "bounty_shot"]:
 		if not message.get(key) is int or message[key] < 0:
 			return false
 	return (
 		_number(message.get("score"))
 		and _number(message.get("total_score"))
 		and message.total_score >= 0
+		and message.bounty_shot <= message.used_shots
+		and multiplayer_balls.valid_state(message.get("multiplayer_balls"))
 		and message.get("finish_reason") is String
 		and message.finish_reason.length() <= 100
 	)

@@ -33,6 +33,7 @@ var _local_id = 0
 var _is_host = false
 var _room_open = false
 var _code = ""
+var _player_grids: Array[GridContainer] = []
 
 
 func _ready():
@@ -79,7 +80,14 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	%ShotBudget.set_value_no_signal(state.get("shot_budget", 6))
 	%ShotBudget.editable = is_host and not started
 	%ShotBudget.get_parent().visible = state.get("table_count", 1) > 1
-	%RoomTitle.text = "MATCH IN PROGRESS" if started else "YOUR LOBBY"
+	var summaries: Array = state.get("table_summaries", [])
+	var complete = (
+		started and not summaries.is_empty() and summaries.all(func(table): return table.finished)
+	)
+	%Settings.visible = not started
+	%RoomTitle.text = (
+		"MATCH RESULTS" if complete else ("MATCH IN PROGRESS" if started else "YOUR LOBBY")
+	)
 	%Rules.text = (
 		"One table. One shared run. Take turns and shop together."
 		if state.get("table_count", 1) == 1
@@ -96,9 +104,14 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	%Start.visible = is_host and not started
 	%Start.disabled = not state.get("can_start", false)
 	%Return.visible = is_host and started
+	%Return.text = "Return to lobby" if complete else "End match · Return to lobby"
 	%Leave.text = "Leave match" if started else "Leave lobby"
 	%Close.text = "Back to game · F8" if started else "Close · F8"
-	%FooterRule.text = _readiness_text(players, local_player, started)
+	%FooterRule.text = (
+		"Match complete. The host can return everyone to the lobby."
+		if complete
+		else _readiness_text(players, local_player, started)
+	)
 	%FooterRule.visible = _room_open
 	if roster_changed:
 		_build_tables()
@@ -210,23 +223,22 @@ func _readiness_text(players: Array, local_player: Dictionary, started: bool) ->
 
 func _build_tables():
 	_clear(%Tables)
+	_player_grids.clear()
 	for table_id in _state.get("table_count", 1):
 		var color: Color = TABLE_COLORS[table_id % TABLE_COLORS.size()]
 		var card = PanelContainer.new()
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		card.custom_minimum_size.x = 240
-		card.add_theme_stylebox_override("panel", _box(Color("102b30"), color.darkened(0.4), 2))
+		var card_style = _box(Color("102b30"), color.darkened(0.4), 2)
+		card_style.set_content_margin_all(12)
+		card.add_theme_stylebox_override("panel", card_style)
 		%Tables.add_child(card)
-		var margin = MarginContainer.new()
-		for side in ["left", "right", "top", "bottom"]:
-			margin.add_theme_constant_override("margin_" + side, 14)
-		card.add_child(margin)
 		var content = VBoxContainer.new()
-		content.add_theme_constant_override("separation", 9)
-		margin.add_child(content)
+		content.add_theme_constant_override("separation", 8)
+		card.add_child(content)
 		var title = Label.new()
 		title.text = "TABLE %d" % (table_id + 1)
-		title.add_theme_font_size_override("font_size", 20)
+		title.add_theme_font_size_override("font_size", 18)
 		title.add_theme_color_override("font_color", color)
 		content.add_child(title)
 		var summary = _table_summary(table_id)
@@ -252,22 +264,36 @@ func _build_tables():
 			progress.add_theme_font_size_override("font_size", 14)
 			progress.add_theme_color_override("font_color", MUTED)
 			content.add_child(progress)
+			if _state.get("table_count", 1) > 1 and summary.get("bounty_shot", 0) > 0:
+				var bounty = Label.new()
+				bounty.text = "Bounty · Shot %d" % summary.bounty_shot
+				if summary.get("bounty_bonus", 0) > 0:
+					bounty.text += " · +25 points"
+				bounty.add_theme_font_size_override("font_size", 14)
+				bounty.add_theme_color_override("font_color", GOLD)
+				content.add_child(bounty)
 		var table_players: Array = []
 		for player in _state.get("players", []):
 			if player.table == table_id:
 				table_players.append(player)
 		table_players.sort_custom(func(a, b): return a.slot < b.slot)
+		var players = GridContainer.new()
+		players.add_theme_constant_override("h_separation", 8)
+		players.add_theme_constant_override("v_separation", 8)
+		content.add_child(players)
+		_player_grids.append(players)
 		var occupied: Array = []
 		for player in table_players:
 			occupied.append(player.slot)
-			content.add_child(_player_row(player, color))
+			players.add_child(_player_row(player, color))
 		if _state.get("started", false):
 			continue
 		var seat = 0
 		while seat in occupied:
 			seat += 1
 		var join = Button.new()
-		join.custom_minimum_size.y = 48
+		join.custom_minimum_size.y = 40
+		join.add_theme_font_size_override("font_size", 16)
 		var here: bool = _player(_local_id).get("table", -1) == table_id
 		join.text = "You are seated here" if here else "+  Join this table"
 		join.disabled = here or seat >= _state.get("capacity", 8)
@@ -277,14 +303,16 @@ func _build_tables():
 
 func _player_row(player: Dictionary, color: Color) -> Control:
 	var panel = PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", _box(Color("0b1d24"), Color("25434a"), 1))
-	var margin = MarginContainer.new()
-	for side in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 10)
-	panel.add_child(margin)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var style = _box(Color("0b1d24"), Color("25434a"), 1)
+	style.content_margin_left = 8
+	style.content_margin_right = 8
+	style.content_margin_top = 6
+	style.content_margin_bottom = 6
+	panel.add_theme_stylebox_override("panel", style)
 	var row = HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	margin.add_child(row)
+	row.add_theme_constant_override("separation", 8)
+	panel.add_child(row)
 	var marker = ColorRect.new()
 	marker.custom_minimum_size = Vector2(5, 0)
 	marker.color = color
@@ -296,6 +324,7 @@ func _player_row(player: Dictionary, color: Color) -> Control:
 	row.add_child(content)
 	var name_label = Label.new()
 	name_label.text = str(player.name)
+	name_label.add_theme_font_size_override("font_size", 17)
 	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name_label.custom_minimum_size.x = 80
 	content.add_child(name_label)
@@ -305,7 +334,9 @@ func _player_row(player: Dictionary, color: Color) -> Control:
 		badges.append("YOU")
 	if player.id == _state.get("host_id", 0):
 		badges.append("ROOM HOST")
-	if player.get("leader", false) or player.id == _table_summary(player.table).get("leader_id", 0):
+	elif (
+		player.get("leader", false) or player.id == _table_summary(player.table).get("leader_id", 0)
+	):
 		badges.append("TABLE HOST")
 	if not player.get("connected", false):
 		badges.append("DISCONNECTED" if _state.get("started", false) else "CONNECTING…")
@@ -354,11 +385,15 @@ func _clear(parent: Node):
 func _resize_tables():
 	if not is_node_ready():
 		return
-	var columns = clampi(int((size.x - 64) / 280), 1, 4)
-	%Tables.columns = mini(columns, _state.get("table_count", 1))
 	var margin = 16 if size.x < 700 else 32
 	$Margin.add_theme_constant_override("margin_left", margin)
 	$Margin.add_theme_constant_override("margin_right", margin)
+	var width = size.x - margin * 2
+	var columns = clampi(int((width + 16) / 256), 1, 4)
+	%Tables.columns = mini(columns, _state.get("table_count", 1))
+	var card_width = (width - (%Tables.columns - 1) * 16) / %Tables.columns
+	for players in _player_grids:
+		players.columns = clampi(int((card_width - 16) / 240), 1, 4)
 
 
 func _apply_theme():
@@ -379,6 +414,11 @@ func _apply_theme():
 	palette.set_stylebox("focus", "LineEdit", _box(Color("0b1d24"), GOLD, 2))
 	palette.set_color("font_color", "LineEdit", INK)
 	palette.set_color("font_placeholder_color", "LineEdit", MUTED)
+	palette.set_stylebox("panel", "PopupMenu", _box(Color("102b30"), Color("36535a"), 1))
+	palette.set_stylebox("hover", "PopupMenu", _box(Color("21484a"), GOLD, 1))
+	palette.set_color("font_color", "PopupMenu", INK)
+	palette.set_color("font_hover_color", "PopupMenu", Color.WHITE)
+	palette.set_color("font_disabled_color", "PopupMenu", MUTED)
 	theme = palette
 	for button in [%Host, %Ready, %Start]:
 		button.add_theme_stylebox_override("normal", _box(FELT.darkened(0.13), FELT, 1))

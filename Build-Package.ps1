@@ -2,7 +2,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-$packageFiles = @('mod', 'Install.ps1', 'Install.cmd', 'Uninstall.ps1', 'Launch.cmd', 'README.md')
+$packageFiles = @('mod', 'docs', 'Install.ps1', 'Install.cmd', 'Uninstall.ps1', 'Launch.cmd', 'README.md')
 $paths = foreach ($name in $packageFiles) {
     $path = Join-Path $PSScriptRoot $name
     if (-not (Test-Path -LiteralPath $path)) { throw "Package file is missing: $name" }

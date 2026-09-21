@@ -2,12 +2,12 @@
 
 Steam multiplayer for **2–8 players**. Share a table in co-op or compete across separate tables, each with its own board, shop, and run.
 
-**[Download v0.4.0](https://github.com/harsh2204/ultrapool-together/releases/tag/v0.4.0)** · Requires **Ultrapool 0.15.7**, Windows Steam build **25298901**.
+**Source version: v0.5.0** · Requires **Ultrapool 0.15.7**, Windows Steam build **25298901**. [Released builds](https://github.com/harsh2204/ultrapool-together/releases) may be older than this branch.
 
 ## Install
 
 1. Every player needs their own copy of Ultrapool installed through Steam.
-2. Download and extract `UltrapoolTogether-v0.4.0.zip`.
+2. Download and extract the matching `UltrapoolTogether` installation ZIP.
 3. Close the game and run `Install.cmd`.
 4. Start `UltrapoolTogether/Launch.cmd` inside the game's installation folder.
 
@@ -23,7 +23,7 @@ On first install, your Steam progression, unlocks, settings, and customization a
 4. Choose the number of tables. Each player joins a table and selects **Ready up**.
 5. The host selects **Start match** once everyone is ready and every table has a player.
 
-Everyone must use v0.4 and a **UP4** room code. Changing seats or settings clears readiness.
+Everyone must use v0.5 and a **UP5** room code. Changing seats or settings clears readiness.
 
 ## Match rules
 
@@ -33,6 +33,10 @@ Everyone must use v0.4 and a **UP4** room code. Changing seats or settings clear
 - Everyone at a table can shop and arrange items. Teammate cursors and aiming are visible on that table.
 - Competing tables start with the same deck, difficulty, and seed. The highest score from completed shots wins; a run ending early also ends that table's match.
 - Press **F8** for standings. The room host can end the match and return everyone to the lobby.
+
+## Multiplayer balls
+
+Relay, Called Shot, Patience, Bounty, Bankroll, Lifeline, Encore, and Domino add team setups, pocket calls, bank-shot income, recovery, and combination shots. Matches start with Relay, Patience, and Bounty in the first three rack positions; shared shops rotate through all eight. See [ball effects and rules](docs/MULTIPLAYER_BALLS.md).
 
 ## Current limits
 
@@ -50,3 +54,5 @@ Run `Uninstall.ps1` from the installed mod folder. Saves and files not owned by 
 ## Development
 
 Run `Build-Package.ps1` to create the installation ZIP. See [tests/README.md](tests/README.md) for test setup and coverage. Game binaries and assets are supplied by each player's installed copy.
+
+Run `Capture-Screens.cmd` to generate a gallery of the mod's screens without playing through a match. See the [screenshot harness](docs/screenshots.md) for fixtures and output files.

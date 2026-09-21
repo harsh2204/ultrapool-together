@@ -70,8 +70,10 @@ func can_shoot() -> bool:
 	)
 
 
-func shoot(vector: Vector2) -> bool:
+func shoot(vector: Vector2, accepted: Callable = Callable()) -> bool:
 	if not vector.is_finite() or vector.length() <= MIN_SHOT_LENGTH or not can_shoot():
+		return false
+	if accepted.is_valid() and not accepted.call():
 		return false
 	var player = _game().get("player_ball")
 	_update_player_hook()

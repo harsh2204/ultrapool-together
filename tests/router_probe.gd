@@ -35,11 +35,22 @@ func _initialize() -> void:
 	_check(router.route(roster, 20, message).is_empty(), "request cannot target another table")
 	message.target = 20
 	_check(router.route(roster, 20, message).is_empty(), "request cannot bypass its leader")
-	for kind in ["shot", "pass", "shop_request", "sync_request"]:
+	for kind in ["shot", "pass", "shop_request", "sync_request", "ball_call"]:
 		_check(
 			router.route(roster, 40, _message(1, kind)).recipients == [30],
 			"request finds first occupied seat even when slot zero is empty"
 		)
+	message = _message(1, "ball_call")
+	message.payload.merge({"actor": 30, "ball": 123, "pocket": 2, "turn": 4})
+	message["reliable"] = false
+	routed = router.route(roster, 40, message)
+	_check(
+		routed.actor == 40 and routed.recipients == [30] and not routed.unreliable,
+		"pocket call preserves authenticated sender and reliable same-table routing"
+	)
+	_check(router.route(roster, 20, message).is_empty(), "another table cannot call a pocket")
+	message["target"] = 40
+	_check(router.route(roster, 40, message).is_empty(), "pocket call cannot bypass table leader")
 	for kind in ["state", "snapshot", "shot_start", "shop_state"]:
 		_check(
 			router.route(roster, 20, _message(0, kind)).is_empty(),
