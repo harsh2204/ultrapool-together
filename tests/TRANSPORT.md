@@ -1,6 +1,6 @@
 # Transport runtime test
 
-**Runtime testing is suspended on this PC.** Follow the restriction in [AGENTS.md](../AGENTS.md) before executing any command below, including `--headless`.
+See [test setup](README.md) and the [runtime testing policy](../AGENTS.md) before running these probes.
 
 Use a private test copy of ULTRAPOOL 0.15.7's `game.exe`, `steam_api64.dll`, and `libgodotsteam.windows.template_release.x86_64.dll`. Do not put the test override in the normal game installation. Add this `override.cfg` beside the test executable, replacing the autoload path with this checkout's absolute path (use forward slashes):
 
@@ -25,4 +25,4 @@ GodotSteam exposes Steam's `GameLobbyJoinRequested_t` callback as `join_requeste
 
 API references: [GodotSteam source](https://github.com/GodotSteam/GodotSteam/blob/master/godotsteam.cpp), [Steam matchmaking](https://partner.steamgames.com/doc/api/ISteamMatchmaking), and [direct lobby invitations](https://partner.steamgames.com/doc/api/ISteamMatchmaking#InviteUserToLobby).
 
-The separate `controller_probe.gd` regression probe invokes the actual controller, lobby model, and table router with off-tree service substitutes. It covers teardown after transport identity is cleared, match generations when changing rooms, terminal table-leader reconnects, a run disappearing during a pending shot, and targeted shop synchronization preserving the broadcast cache. It creates no native game scenes or network connections, but executing it still requires authorization under the runtime restriction. It is a standalone SceneTree script and prints `CONTROLLER_PROBE PASS` with exit code 0 on success; source parsing alone does not validate its runtime behavior.
+The standalone `controller_probe.gd` tests controller teardown, match generations, table-leader reconnects, runs closing during a shot, and targeted shop synchronization. It uses service substitutes without native scenes or network connections and prints `CONTROLLER_PROBE PASS` with exit code 0 on success.
