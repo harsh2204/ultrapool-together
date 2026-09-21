@@ -24,11 +24,12 @@ These scripts extend `SceneTree` and require a Godot 4.6 executable with `--scri
 | --- | --- | --- |
 | `multiplayer_balls_probe.gd` | Eight ball abilities, accepted-shot identity, replay protection, competitive seat-count fairness, round resets, mixed abilities, utility caps, and malformed display snapshots. | `PASS: ... multiplayer ball rules checks` |
 | `bounty_probe.gd` | Completed-shot comparisons, tied rewards, disconnected tables, and idempotent standings. | `BOUNTY_PROBE PASS` |
+| `team_vote_probe.gd` | Concurrent approvals, context generations, stale-vote rejection, membership changes, and deep-copied vote context. | `TEAM_VOTE_PROBE PASS` |
 | `lobby_probe.gd` | Eight-player capacity, self-selected seats, readiness invalidation, host-only settings, unequal table groups, equal shots per table, start/reset, reserved disconnected seats, and leader selection. | `LOBBY_PROBE PASS` |
 | `router_probe.gd` | Authenticated actor identity, requests to the correct table leader, table-isolated broadcasts and replies, reliable actions, disconnected members, and malformed routes. | `ROUTER_PROBE PASS` |
 | `controller_probe.gd` | Main controller lifecycle using off-tree service substitutes: identity teardown, room/match generations, terminal leader disconnects and reconnects, a run closing during a shot, and targeted shop synchronization preserving the broadcast cache. | `CONTROLLER_PROBE PASS` |
 
-Each script exits 0 on success. The controller probe creates no native game scenes or network connections.
+Each script exits 0 on success. The controller probe creates no native game scenes or network connections. It also covers Race versus Score PvP caps, authenticated race results, finish ordering, return-vote generations, startup failure handling, and spectator routing. The screenshot harness runs all model probes in this table except the router probe inside its existing game process.
 
 ## Native game probes
 

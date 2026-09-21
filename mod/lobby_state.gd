@@ -2,14 +2,18 @@ extends RefCounted
 
 const CAPACITY = 8
 const DEFAULT_SHOT_BUDGET = 6
+const TeamVote = preload("team_vote.gd")
 
 var host_id = 0
 var table_count = 1
 var shot_budget = DEFAULT_SHOT_BUDGET
+var match_mode = "race"
 var revision = 0
 var started = false
 var last_error = ""
 var _players: Dictionary = {}
+var _return_vote = TeamVote.new()
+var _return_proposer = 0
 
 
 func setup(id: int, player_name: String) -> bool:
@@ -28,10 +32,12 @@ func clear() -> void:
 	host_id = 0
 	table_count = 1
 	shot_budget = DEFAULT_SHOT_BUDGET
+	match_mode = "race"
 	revision = 0
 	started = false
 	last_error = ""
 	_players.clear()
+	_clear_return_vote()
 
 
 func add_player(id: int, player_name: String) -> bool:
@@ -46,6 +52,7 @@ func add_player(id: int, player_name: String) -> bool:
 		var reconnected: bool = not player.connected
 		player.connected = true
 		player.name = display_name
+		_refresh_return_vote()
 		_changed(reconnected and not started)
 		return true
 	if started:
@@ -65,6 +72,7 @@ func remove_player(id: int) -> bool:
 			last_error = ""
 			return true
 		_players[id].connected = false
+		_refresh_return_vote()
 		_changed()
 		return true
 	_players.erase(id)
@@ -126,6 +134,21 @@ func set_shot_budget(sender: int, count: int) -> bool:
 	return true
 
 
+func set_match_mode(sender: int, mode: String) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can change the match mode.")
+	if started:
+		return _reject("The match mode is locked during a match.")
+	if mode not in ["race", "score"]:
+		return _reject("Choose Race or Score PvP.")
+	if match_mode == mode:
+		last_error = ""
+		return true
+	match_mode = mode
+	_changed(true)
+	return true
+
+
 func set_ready(sender: int, ready: bool) -> bool:
 	if not _players.has(sender) or not _players[sender].connected:
 		return _reject("Join the lobby before readying up.")
@@ -163,10 +186,42 @@ func start(sender: int) -> bool:
 	return true
 
 
-func reset_lobby(sender: int) -> bool:
+func request_return(sender: int) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can propose returning to the lobby.")
+	if not started:
+		return _reject("There is no active match to end.")
+	if _return_proposer != 0:
+		last_error = ""
+		return true
+	_return_proposer = sender
+	_refresh_return_vote()
+	_changed()
+	return true
+
+
+func set_return_ready(sender: int, ready: bool, expected_revision: int = -1) -> bool:
+	if _return_proposer == 0:
+		return _reject("There is no return-to-lobby vote.")
+	if not _return_vote.set_ready(sender, ready, expected_revision):
+		return _reject(_return_vote.last_error)
+	if not ready:
+		_clear_return_vote()
+	_changed()
+	return true
+
+
+func can_return() -> bool:
+	return _return_proposer != 0 and _return_vote.unanimous()
+
+
+func reset_lobby(sender: int, match_complete: bool = false) -> bool:
 	if not _is_host(sender):
 		return _reject("Only the host can reopen the lobby.")
+	if started and not match_complete and not can_return():
+		return _reject("Everyone still connected must approve ending the match.")
 	started = false
+	_clear_return_vote()
 	for id in _players.keys():
 		if not _players[id].connected:
 			_players.erase(id)
@@ -179,11 +234,16 @@ func snapshot() -> Dictionary:
 	var players = _players.values().duplicate(true)
 	for player in players:
 		player["leader"] = player.table >= 0 and leader_for_table(player.table) == player.id
+	var return_vote = _return_vote.snapshot()
+	return_vote["active"] = _return_proposer != 0
+	return_vote["proposer"] = _return_proposer
 	return {
 		"revision": revision,
 		"host_id": host_id,
 		"table_count": table_count,
 		"shot_budget": shot_budget,
+		"match_mode": match_mode,
+		"return_vote": return_vote,
 		"capacity": CAPACITY,
 		"started": started,
 		"can_start": can_start(),
@@ -233,6 +293,25 @@ func _fit_tables() -> void:
 		if player.table >= table_count:
 			player.table = -1
 			player.slot = -1
+
+
+func _refresh_return_vote() -> void:
+	if _return_proposer == 0:
+		return
+	if not _is_host(_return_proposer):
+		_clear_return_vote()
+		return
+	var connected: Array = []
+	for player in _players.values():
+		if player.connected:
+			connected.append(player.id)
+	_return_vote.configure(connected, _return_proposer)
+	_return_vote.set_ready(_return_proposer, true)
+
+
+func _clear_return_vote() -> void:
+	_return_proposer = 0
+	_return_vote.configure([])
 
 
 func _changed(clear_ready: bool = false) -> void:

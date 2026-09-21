@@ -110,6 +110,8 @@ func game_data() -> Dictionary:
 		"in_shop": false,
 		"in_menu": true,
 		"game_over": false,
+		"run_won": false,
+		"run_goal_rounds": 0,
 		"round_ended": false,
 		"round_finalized": false,
 		"round": 0,
@@ -126,6 +128,8 @@ func game_data() -> Dictionary:
 	data.in_shop = bool(game.get("in_shop"))
 	data.in_menu = bool(game.get("in_menu"))
 	data.game_over = bool(game.get("game_ended"))
+	data.run_won = is_run_won(game)
+	data.run_goal_rounds = int(game.get_target_round())
 	data.round_ended = bool(game.get("round_ended"))
 	data.round_finalized = data.round_ended and bool(game.get("round_end_stuff_happened"))
 	data.round = int(game.get("level_number")) + 1
@@ -133,6 +137,15 @@ func game_data() -> Dictionary:
 	data.shots_left = game.get_shots_left()
 	data.score = score()
 	return data
+
+
+static func is_run_won(game) -> bool:
+	return (
+		bool(game.get("game_ended"))
+		and bool(game.get("round_won"))
+		and not bool(game.get("round_game_over"))
+		and int(game.get("level_number")) == int(game.get_target_round()) - 1
+	)
 
 
 func _game():

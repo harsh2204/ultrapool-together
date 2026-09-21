@@ -67,6 +67,7 @@ func refresh(data: Dictionary) -> void:
 	_data = data
 	_overlay.visible = (
 		_controller.active
+		and not _controller.is_spectating()
 		and _controller.latest_state.get("table_active", false)
 		and not _controller.latest_state.get("in_shop", false)
 		and not _controller.finished

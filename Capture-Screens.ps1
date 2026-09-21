@@ -56,7 +56,13 @@ foreach ($name in $runtimeFiles) {
         throw "Missing Ultrapool runtime file: $name"
     }
 }
-foreach ($name in @('mod\main.gd', 'tests\render_bootstrap.gd', 'tests\render_talo.gd', 'tests\render_settings.gd', 'tests\render_ui_fixtures.gd', 'tests\render_probe.gd', 'tests\render_gallery.html')) {
+$fixtureFiles = @(
+    'mod\main.gd', 'tests\render_bootstrap.gd', 'tests\render_talo.gd', 'tests\render_settings.gd',
+    'tests\render_ui_fixtures.gd', 'tests\spectator_fixtures.gd', 'tests\render_probe.gd', 'tests\render_gallery.html',
+    'tests\team_vote_probe.gd', 'tests\lobby_probe.gd', 'tests\controller_probe.gd',
+    'tests\multiplayer_balls_probe.gd', 'tests\bounty_probe.gd'
+)
+foreach ($name in $fixtureFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $name) -PathType Leaf)) {
         throw "Missing $name. Run this harness from a complete source checkout."
     }
@@ -94,7 +100,7 @@ try {
         }
     }
     $sourceRoot = $PSScriptRoot.Replace('\', '/')
-    @"
+    $override = @"
 [application]
 config/name="Ultrapool Together Render Test"
 config/use_custom_user_dir=true
@@ -114,7 +120,8 @@ Talo="*$sourceRoot/tests/render_talo.gd"
 SettingsManager="*$sourceRoot/tests/render_settings.gd"
 UltrapoolTogether="*$sourceRoot/mod/main.gd"
 RenderProbe="*$sourceRoot/tests/render_probe.gd"
-"@ | Set-Content -LiteralPath (Join-Path $runtimeRoot 'override.cfg') -Encoding UTF8
+"@
+    [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'override.cfg'), $override, [System.Text.UTF8Encoding]::new($false))
     '4195110' | Set-Content -LiteralPath (Join-Path $runtimeRoot 'steam_appid.txt') -Encoding ASCII
     $stdout = Join-Path $outputRoot 'stdout.log'
     $stderr = Join-Path $outputRoot 'stderr.log'
@@ -139,6 +146,7 @@ RenderProbe="*$sourceRoot/tests/render_probe.gd"
     }
     $arguments = '--windowed --resolution 1280x720 --rendering-method gl_compatibility --max-fps 30 --disable-vsync -- --output "' + $outputRoot + '"'
     $process = Start-Process -FilePath (Join-Path $runtimeRoot 'game.exe') -WorkingDirectory $runtimeRoot -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    $null = $process.Handle
     $report.process_id = $process.Id
     Write-Host "Capturing screenshots with one game process (PID $($process.Id))."
     Write-Host "Output: $outputRoot"

@@ -8,9 +8,24 @@ class ShopController:
 	extends Node
 	var finished = false
 	var panel: Control
+	var table_id = 0
+	var transport = ShopTransport.new()
 
 	func is_table_host() -> bool:
 		return true
+
+	func is_spectating() -> bool:
+		return false
+
+	func _members(_table: int) -> Array:
+		return [{"id": 1}, {"id": 2}]
+
+
+class ShopTransport:
+	extends RefCounted
+
+	func local_id() -> int:
+		return 1
 
 
 func _ready():
@@ -80,11 +95,27 @@ func _run():
 		"target_id": 0
 	}
 	_check(
+		not sync.handle_request(purchase, 999),
+		"players from another table cannot use the shared shop"
+	)
+	_check(
+		sync.handle_request(_ready_request(state, true), 1),
+		"one teammate can ready without leaving the shop"
+	)
+	state = sync.capture()
+	_check(state.open and state.ready_vote.ready == [1], "shop publishes partial team readiness")
+	purchase.revision = state.revision
+	_check(
 		sync.handle_request(purchase),
 		"either participant can buy through the shared action handler"
 	)
 	var after: Dictionary = sync.capture()
 	_check(after.revision > state.revision, "purchase advances shared revision")
+	_check(after.ready_vote.ready.is_empty(), "buying clears consent for the previous inventory")
+	_check(
+		not sync.handle_request(_ready_request(state, true), 2),
+		"pre-purchase consent cannot approve the new inventory"
+	)
 	var money_after = game.player_info.money
 	_check(
 		not sync.handle_request(purchase),
@@ -141,7 +172,40 @@ func _run():
 		"completed tables reject shop transactions"
 	)
 	_check(game.player_info.money == completed_money, "completed table cannot spend money")
+	controller.finished = false
+	_check_ready_departure(sync)
 	_finish(sync)
+
+
+func _check_ready_departure(sync):
+	var state: Dictionary = sync.capture()
+	var ready = _ready_request(state, true)
+	_check(sync.handle_request(ready, 1), "first teammate readies for the next round")
+	_check(sync.handle_request(ready, 1), "replayed explicit shop readiness is idempotent")
+	state = sync.capture()
+	_check(state.ready_vote.ready == [1], "replayed consent never counts as another teammate")
+	_check(
+		sync.handle_request(_ready_request(state, false), 1),
+		"ready teammate can withdraw before everyone consents"
+	)
+	state = sync.capture()
+	_check(state.ready_vote.ready.is_empty() and state.open, "withdrawing keeps the shop open")
+	_check(sync.handle_request(_ready_request(state, true), 1), "teammate can ready again")
+	_check(
+		sync.handle_request(ready, 2),
+		"simultaneous last teammate's consent starts the next round at the same generation"
+	)
+	_check(not sync.capture().open, "unanimous readiness closes the native shop")
+	_check(not sync.handle_request(ready, 2), "duplicate final vote cannot start another round")
+
+
+func _ready_request(state: Dictionary, value: bool) -> Dictionary:
+	return {
+		"action": "ready",
+		"ready": value,
+		"revision": state.revision,
+		"ready_generation": state.ready_vote.revision
+	}
 
 
 func _check_inspected_sale(sync):

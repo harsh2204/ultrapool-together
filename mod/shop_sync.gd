@@ -32,12 +32,15 @@ var _saved_difficulty: Resource
 var _guest_context_saved = false
 var _view_slots: Dictionary = {}
 var _sell_targets: Array = []
+var _ready_vote: RefCounted
+var _continuing = false
 
 
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	process_priority = -500
 	_slot_script = load(get_script().resource_path.get_base_dir().path_join("native_shop_slot.gd"))
+	_ready_vote = load(get_script().resource_path.get_base_dir().path_join("team_vote.gd")).new()
 	_build_ui()
 
 
@@ -48,6 +51,8 @@ func begin_session(controller: Node):
 	_state.clear()
 	_selected = ""
 	_pending = false
+	_ready_vote.configure([])
+	_continuing = false
 	_was_finished = _controller.finished
 	if _controller.is_table_host():
 		var tutorial = get_node("/root/TutorialManager")
@@ -72,6 +77,8 @@ func end_session():
 	_native_slots.clear()
 	_selected = ""
 	_pending = false
+	_ready_vote.configure([])
+	_continuing = false
 	_panel.hide()
 
 
@@ -185,6 +192,17 @@ func capture() -> Dictionary:
 				var slot = groups[group][index]
 				_native_slots[key] = slot
 				data.slots.append(_pack_slot(group, index, slot))
+		var consent_context = data.duplicate(true)
+		for field in ["busy", "can_mix", "can_continue"]:
+			consent_context.erase(field)
+		var members: Array = _controller._members(_controller.table_id).map(
+			func(player): return player.id
+		)
+		_ready_vote.configure(members, consent_context)
+		data["ready_vote"] = _ready_vote.snapshot()
+	else:
+		_ready_vote.configure([])
+		_continuing = false
 	if data != _last_capture:
 		_revision += 1
 		_last_capture = data.duplicate(true)
@@ -215,31 +233,51 @@ func _pack_slot(group: String, index: int, slot) -> Dictionary:
 	return packed
 
 
-func handle_request(message: Dictionary) -> bool:
+func handle_request(message: Dictionary, actor: int = 0) -> bool:
 	last_error = ""
 	if _controller == null or not _controller.is_table_host():
 		return false
 	if _controller.finished:
 		return _reject("This table has finished. Return to the lobby to play again.")
+	if actor == 0:
+		actor = _controller.transport.local_id()
 	if not message.get("revision") is int or not message.get("action") is String:
 		return _reject("Invalid shop action.")
+	var action: String = message.action
+	if (
+		action == "ready"
+		and (not message.get("ready") is bool or not message.get("ready_generation") is int)
+	):
+		return _reject("Invalid shop ready vote.")
 	capture()
-	if not is_open() or message.get("revision") != _revision:
+	if not is_open():
 		return _reject("The shop changed. Please choose again.")
+	if action == "ready":
+		if message.ready_generation != _ready_vote.revision:
+			return _reject("The shop changed. Ready up again when you are finished shopping.")
+	elif message.revision != _revision:
+		return _reject("The shop changed. Please choose again.")
+	if not _state.ready_vote.eligible.has(actor):
+		return _reject("Only connected teammates can use this shop.")
+	if _continuing:
+		return _reject("The next round is starting.")
 	if _state.busy:
 		return _reject("Wait for the shop animation to finish.")
 	var shop = _shop()
 	_clear_inspection()
-	var action = message.get("action", "")
 	match action:
 		"reroll":
 			if shop.player_info.money < shop.roll_cost:
 				return _reject("Not enough shared money to reroll.")
 			shop._on_reroll_button_pressed()
-		"continue":
+		"ready":
 			if not _state.can_continue:
 				return _reject("Return the cocktail balls to your build before continuing.")
-			shop._on_play_button_pressed()
+			if not _ready_vote.set_ready(actor, message.ready, message.ready_generation):
+				return _reject(_ready_vote.last_error)
+			if _ready_vote.unanimous():
+				_continuing = true
+				shop._on_play_button_pressed()
 		"mix":
 			if not _state.can_mix:
 				return _reject("Choose two different, unmixed balls and a cocktail ticket.")
@@ -417,6 +455,8 @@ func _valid_state(data: Dictionary) -> bool:
 	for field in ["busy", "can_mix", "can_continue"]:
 		if not data.get(field) is bool:
 			return false
+	if not _valid_vote(data.get("ready_vote")):
+		return false
 	if not data.get("slots") is Array or data.slots.size() > MAX_SLOTS:
 		return false
 	var keys = {}
@@ -471,6 +511,26 @@ func _valid_state(data: Dictionary) -> bool:
 	return true
 
 
+func _valid_vote(vote) -> bool:
+	if not vote is Dictionary or not vote.get("revision") is int or vote.revision < 0:
+		return false
+	if not vote.get("eligible") is Array or not vote.get("ready") is Array:
+		return false
+	if vote.eligible.is_empty() or vote.eligible.size() > 8:
+		return false
+	var members = {}
+	for id in vote.eligible:
+		if not id is int or id <= 0 or members.has(id):
+			return false
+		members[id] = true
+	var consent = {}
+	for id in vote.ready:
+		if not id is int or not members.has(id) or consent.has(id):
+			return false
+		consent[id] = true
+	return true
+
+
 func _lock_native_items(shop):
 	shop.drop()
 	for container in [
@@ -492,7 +552,7 @@ func _lock_native_items(shop):
 			_disabled_slots[id] = {"node": slot, "disabled": slot.disabled_slot}
 		slot.disabled_slot = true
 	_bind_action(shop.reroll_button, "reroll")
-	_bind_action(shop.play_button, "continue")
+	_bind_action(shop.play_button, "ready")
 	_bind_action(shop.cocktail_bar.mix_button, "mix")
 
 
@@ -508,6 +568,8 @@ func _bind_action(button, action: String):
 	_bound_buttons[id] = {
 		"node": button, "connections": connections, "handler": handler, "disabled": button.disabled
 	}
+	if action == "ready":
+		_bound_buttons[id]["text"] = button.text
 
 
 func _restore_items():
@@ -527,6 +589,8 @@ func _restore_items():
 			if connection.callable.is_valid():
 				entry.node.pressed.connect(connection.callable, connection.flags)
 		entry.node.set_disabled(entry.disabled)
+		if entry.has("text"):
+			entry.node.set_text(entry.text)
 	_bound_buttons.clear()
 
 
@@ -824,8 +888,13 @@ func _submit_item(action: String, source: String, target = ""):
 func _submit(message: Dictionary):
 	if not is_open() or _pending or _controller.panel.visible or _controller.finished:
 		return
+	if _controller.is_spectating():
+		return
 	message["kind"] = "shop_request"
 	message["revision"] = _state.revision
+	if message.action == "ready":
+		message["ready"] = not _state.ready_vote.ready.has(_controller.transport.local_id())
+		message["ready_generation"] = _state.ready_vote.revision
 	if _controller.is_table_host():
 		var accepted = handle_request(message)
 		apply_result(accepted, last_error)
@@ -847,6 +916,7 @@ func _update_actions():
 		or _controller.finished
 		or _controller.panel.visible
 		or _view.moving()
+		or _controller.is_spectating()
 	)
 	if _controller.finished:
 		_notice.text = "This table has finished. Scores and purchases are locked."
@@ -858,3 +928,8 @@ func _update_actions():
 	_view.reroll_button.set_disabled(blocked or _state.money < _state.reroll)
 	_view.cocktail_bar.mix_button.set_disabled(blocked or not _state.can_mix)
 	_view.play_button.set_disabled(blocked or not _state.can_continue)
+	var vote: Dictionary = _state.ready_vote
+	var label = "Unready" if vote.ready.has(_controller.transport.local_id()) else "Ready"
+	var text = "%s\n%d/%d" % [label, vote.ready.size(), vote.eligible.size()]
+	if _view.play_button.text != text:
+		_view.play_button.set_text(text)

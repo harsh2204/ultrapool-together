@@ -18,7 +18,7 @@ const BALLS = {
 		"description":
 		(
 			"After a teammate touches this ball on an earlier shot, pocket it for +50% value. "
-			+ "In competitive play, any later shot qualifies."
+			+ "In Score PvP or at a solo table, any later shot qualifies."
 		),
 		"color": Color("29c7d8"),
 		"asset": "relay.png",
@@ -53,8 +53,8 @@ const BALLS = {
 		"name": "Bounty",
 		"description":
 		(
-			"Competitive: the table that pockets this on the earliest shot earns 25 match points; "
-			+ "tied tables each earn 25. Co-op: pocket within the first three shots for +10 points."
+			"Score PvP: earliest shot earns 25 match points; tied tables each earn 25. "
+			+ "Co-op and Race: pocket within the first three shots for +10 run points."
 		),
 		"color": Color("eb5876"),
 		"asset": "bounty.png",
