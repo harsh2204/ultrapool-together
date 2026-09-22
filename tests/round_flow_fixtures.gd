@@ -69,6 +69,84 @@ var _mod: Node
 var _wire: Wire
 
 
+func check_host_shop_drag(mod: Node, capture: Callable):
+	_mod = mod
+	var sync = mod.shop_sync
+	var state: Dictionary = sync.capture()
+	var offer: Dictionary = {}
+	var empty: Dictionary = {}
+	for slot in state.slots:
+		if slot.group == "offer" and slot.id != 0 and slot.price <= state.money:
+			offer = slot
+		if slot.group == "build" and slot.id == 0:
+			empty = slot
+	if not _check(not offer.is_empty() and not empty.is_empty(), "host drag: purchase available"):
+		return
+	var previous_transport = mod.transport
+	var transport = Wire.new()
+	mod.transport = transport
+	await _begin_shop_input()
+	await _cancel_drag(offer.key, "host")
+	var body = await _grab_item(offer.key, "host")
+	var target_position = sync.slot_screen_position(empty.key)
+	await _move_held_item(body, target_position + Vector2(0, -90), "host")
+	await capture.call("22-host-native-drag", "Host · native shop ball follows the pointer")
+	await _release_at(target_position)
+	_check(sync.slot_item(empty.key) == body, "host drag: release purchases the native ball")
+	var purchased: Dictionary = sync.capture()
+	_check(purchased.revision > state.revision, "host drag: purchase advances shop revision")
+	_check(purchased.money == state.money - offer.price, "host drag: purchase spends money once")
+	var duplicate = {
+		"action": "move",
+		"revision": state.revision,
+		"source": offer.key,
+		"item_id": offer.id,
+		"target": empty.key,
+		"target_id": 0
+	}
+	_check(
+		purchased.revision > state.revision and not sync.handle_request(duplicate, 1),
+		"host drag: duplicate purchase is rejected"
+	)
+	_check(sync.capture().money == purchased.money, "host drag: duplicate preserves money")
+	_input_fixture().finish()
+	mod.transport = previous_transport
+	transport.free()
+
+
+func check_guest_snack_drag(mod: Node, capture: Callable):
+	_mod = mod
+	var sync = mod.shop_sync
+	await _delay(0.7)
+	var key = ""
+	for entry in sync._state.slots:
+		if entry.group == "snack" and entry.id != 0:
+			key = entry.key
+			break
+	if not _check(key != "", "guest snack drag: native offer exists"):
+		return
+	await _begin_shop_input()
+	var body = await _grab_item(key, "guest snack")
+	await _move_held_item(body, Vector2(940, 500), "guest snack")
+	var retracted = 0
+	for slot in sync.native_shop().tapas_bar.slots:
+		if is_instance_valid(slot.item) and slot.item != body and slot.item.retracted:
+			retracted += 1
+	_check(retracted > 0, "guest snack drag: native neighboring offers retract while held")
+	await capture.call(
+		"52-guest-native-snack-drag", "Guest · native snack drag and offer retraction"
+	)
+	await _release_at(Vector2(24, 96))
+	_check(sync.native_shop().grabbed_passive == null, "guest snack drag: cancellation clears grab")
+	_check(sync.slot_item(key) == body, "guest snack drag: cancelled snack returns to its slot")
+	var restored = true
+	for slot in sync.native_shop().tapas_bar.slots:
+		if is_instance_valid(slot.item):
+			restored = restored and not slot.item.retracted
+	_check(restored, "guest snack drag: cancellation restores every retracted offer")
+	_input_fixture().finish()
+
+
 func record_host(mod: Node, capture: Callable):
 	_mod = mod
 	var saved = _save()
@@ -442,6 +520,7 @@ func replay_guest(mod: Node, capture: Callable) -> Array[Dictionary]:
 		"round flow: ending guest session restores UI processing and pause state"
 	)
 	_check(not ui.settings_menu.is_open, "round flow: teardown closes guest native settings")
+	await _guest_removed_drag()
 	await _cold_loss(capture)
 	_restore(saved)
 	return checks
@@ -575,9 +654,20 @@ func _guest_purchase(capture: Callable):
 	var source = sync.slot_item(purchase.source)
 	var source_id = source.get_instance_id()
 	var original_money = sync._state.money
-	var target_button = sync._buttons[purchase.target]
+	var target_slot = sync._view_slots[purchase.target]
+	await _begin_shop_input()
+	await _cancel_drag(purchase.source, "guest")
 	_wire.drain()
-	sync._submit_item("move", purchase.source, purchase.target)
+	await _grab_item(purchase.source, "guest")
+	var target_position = sync.slot_screen_position(purchase.target)
+	await _move_held_item(source, target_position + Vector2(0, -90), "guest")
+	_replay(phases.shop)
+	_check(
+		sync.native_shop().is_grabbed(source),
+		"guest drag: unchanged host inventory preserves the native grab"
+	)
+	await capture.call("67-guest-native-drag", "Guest · native shop ball follows the pointer")
+	await _release_at(target_position)
 	var requests = _wire.drain()
 	_check(
 		_has_request(requests, "move"),
@@ -592,8 +682,8 @@ func _guest_purchase(capture: Callable):
 		"round flow: shared balance updates before the delayed response"
 	)
 	_check(
-		sync._buttons[purchase.target] == target_button,
-		"round flow: optimistic move preserves its native hit target"
+		sync._view_slots[purchase.target] == target_slot,
+		"round flow: optimistic move preserves the native inventory slot"
 	)
 	var predicted_money = sync._state.money
 	_replay(phases.shop)
@@ -615,8 +705,179 @@ func _guest_purchase(capture: Callable):
 	)
 	_check(not sync._pending, "round flow: host acknowledgement clears the pending purchase")
 	_check(
-		sync._buttons[purchase.target] == target_button,
-		"round flow: host update preserves shop hit targets"
+		sync._view_slots[purchase.target] == target_slot,
+		"round flow: host update preserves native inventory slots"
+	)
+	_input_fixture().finish()
+
+
+func _guest_removed_drag():
+	_mod._guest_phase = []
+	_mod.last_guest_snapshot = 0
+	_mod.finished = false
+	_mod.table_sync.begin_guest(run_config)
+	_mod.shop_sync.begin_session(_mod)
+	_mod.adapter.begin_session(_mod)
+	_mod.multiplayer_balls.begin_session()
+	_replay(phases.shop)
+	await _delay(0.6)
+	var sync = _mod.shop_sync
+	var shop = sync.native_shop()
+	await _begin_shop_input()
+	var body = await _grab_item(purchase.source, "guest interrupted")
+	await _move_held_item(body, Vector2(24, 96), "guest interrupted")
+	var removed = sync._authoritative_state.duplicate(true)
+	removed.revision += 1
+	for slot in removed.slots:
+		if slot.key == purchase.source:
+			for field in ["data", "mixed", "level", "score", "price", "sell"]:
+				slot.erase(field)
+			slot.id = 0
+	_wire.drain()
+	_deliver_request(1, {"kind": "shop_state", "shop": removed})
+	await _delay(0.1)
+	_check(shop.grabbed_ball == null, "guest drag: authoritative removal clears the native grab")
+	await _release_at(Vector2(24, 96))
+	var requests = _wire.drain()
+	_check(
+		not _has_request(requests, "move") and not _has_request(requests, "sell"),
+		"guest drag: releasing a removed item cannot send a stale transaction"
+	)
+	_check(
+		not is_instance_valid(sync.slot_item(purchase.source)),
+		"guest drag: releasing a removed item cannot restore it"
+	)
+	_input_fixture().finish()
+	_mod.shop_sync.end_session()
+	_mod.multiplayer_balls.end_session()
+	_mod.adapter.end_session()
+	_mod.table_sync.end_guest()
+
+
+func _grab_item(key: String, role: String):
+	var sync = _mod.shop_sync
+	var body = sync.slot_item(key)
+	await _input_fixture().hover(body)
+	var position = body.get_global_transform_with_canvas().origin
+	if not _check(
+		_input_fixture().viewport.get_mouse_position().distance_to(position) < 2,
+		role + " drag: pointer reaches the native item"
+	):
+		await _abort_input()
+	_check(
+		body.can_interact.call(body) and body.interactable, role + " drag: native input is allowed"
+	)
+	await _mouse_button(position, true)
+	await _delay(0.1)
+	if not _check(
+		sync.native_shop().is_grabbed(body), role + " drag: mouse press grabs the native item"
+	):
+		print(
+			"NATIVE_DRAG_INPUT ",
+			{
+				"role": role,
+				"requested": position,
+				"viewport_pointer": _input_fixture().viewport.get_mouse_position(),
+				"world_pointer": body.get_global_mouse_position(),
+				"body_position": body.global_position,
+				"canvas": _mod.get_viewport().get_canvas_transform(),
+				"final": _mod.get_viewport().get_final_transform(),
+				"interactable": body.interactable,
+				"allowed": body.can_interact.call(body),
+				"pressed": Input.is_action_pressed("click")
+			}
+		)
+		await _abort_input()
+	return body
+
+
+func hover_shop_item(mod: Node, key: String) -> bool:
+	_mod = mod
+	await _input_fixture().hover(mod.shop_sync.slot_item(key))
+	return mod.shop_sync.native_shop().selected_ball == mod.shop_sync.slot_item(key)
+
+
+func _input_fixture():
+	return _mod.get_node("/root/RenderProbe").shop_input
+
+
+func _begin_shop_input():
+	var shop = _mod.shop_sync.native_shop()
+	await _wait(func(): return absf(shop.camera.position.x - shop.target_camera_x) < 0.1)
+	_input_fixture().begin(shop)
+	await _mod.get_tree().process_frame
+
+
+func _abort_input():
+	_input_fixture().finish()
+	_mod.get_node("/root/RenderProbe").abort_input(checks)
+	await _mod.get_tree().process_frame
+
+
+func _move_held_item(body: Node2D, position: Vector2, role: String):
+	var original_position = body.global_position
+	_mouse_motion(position, true)
+	await _delay(0.4)
+	_check(
+		body.global_position.distance_to(original_position) > 30,
+		role + " drag: the native item itself moves with the pointer"
+	)
+	_check(
+		body.global_position.distance_to(body.get_global_mouse_position()) < 4,
+		role + " drag: native movement reaches the pointer"
+	)
+	_check(body.z_index == 200, role + " drag: native item renders above its shop slot")
+	if body is ShopBall:
+		_check(
+			body.ball.material.get_shader_parameter("tex") == body.ball_item.data.texture,
+			role + " drag: the native sphere shader stays on the held ball"
+		)
+
+
+func _cancel_drag(key: String, role: String):
+	var sync = _mod.shop_sync
+	var original_state = sync._state.duplicate(true)
+	var body = await _grab_item(key, role + " cancel")
+	await _move_held_item(body, Vector2(24, 96), role + " cancel")
+	_check(
+		(
+			sync.native_shop().get_hovered_slot() == null
+			and not sync.native_shop().is_hovering_sell_area()
+		),
+		role + " drag: cancellation releases outside native drop targets"
+	)
+	await _release_at(Vector2(24, 96))
+	_check(not sync.native_shop().is_grabbed(body), role + " drag: cancelled item is released")
+	_check(sync.slot_item(key) == body, role + " drag: cancellation retains the original item")
+	_check(
+		body.global_position.distance_to(body.slot.global_position) < 4,
+		role + " drag: cancelled native ball returns to its slot"
+	)
+	_check(
+		sync._state == original_state, role + " drag: cancellation leaves shared state unchanged"
+	)
+
+
+func _release_at(position: Vector2):
+	_mouse_motion(position, true)
+	await _delay(0.1)
+	await _mouse_button(position, false)
+	await _delay(0.45)
+
+
+func _mouse_motion(position: Vector2, held: bool):
+	_input_fixture().motion(position, held)
+
+
+func _mouse_button(position: Vector2, pressed: bool):
+	await _input_fixture().button(position, pressed)
+	_check(
+		(
+			Input.is_action_just_pressed("click")
+			if pressed
+			else Input.is_action_just_released("click")
+		),
+		"native mouse event reaches the click action: " + ("press" if pressed else "release")
 	)
 
 
@@ -721,6 +982,7 @@ func _deliver_request(actor: int, request: Dictionary):
 		"kind": "table",
 		"match": _mod.match_id,
 		"table": _mod.table_id,
+		"actor": actor,
 		"payload": request,
 		"reliable": true
 	}

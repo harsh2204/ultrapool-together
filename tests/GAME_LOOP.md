@@ -10,6 +10,7 @@ Run `Capture-Screens.cmd` for the combined regression suite and screenshot galle
 | Round completion | The host's native round-end sequence produces payout and updates money. The client receives the same native payout labels and balance. A newer transient packet arriving before the reliable phase cannot skip the payout. |
 | Entering the shop | Native Continue advances the host. Client payout remains until locally dismissed. Early shop data, the phase snapshot, and the retained replica must converge on the visible native shop and its camera. |
 | Shared purchases | Routed guest purchases spend money once. With a delayed reply, the client moves the native item and updates money immediately. Unrelated updates preserve that prediction; confirmation reuses the item node. |
+| Shop dragging | Mouse input picks up the actual native shop ball on host and client. Native movement and drop animations remain active; only the completed transaction is routed through the host. Cancelled or interrupted drags cannot submit stale purchases. |
 | Rejected actions | A stale sale leaves host money unchanged and restores client money and the item. Host revision checks reject repeated or conflicting transactions. |
 | Leaving the shop | Partial readiness keeps shopping open. Concurrent approvals use the same vote generation. Native Ready responds locally, and unanimous approval starts the next native round. |
 | Next round | Client shop closes, the table is playable, the replica remains intact, and late payout/shop packets cannot reopen the previous phase. |

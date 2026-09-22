@@ -29,6 +29,8 @@ The scenes use fixture players and multiplayer state. The same process also runs
 
 The round-flow fixture records the host's serialized controller messages across native payout, Continue, shopping, purchases, unanimous Ready, and the next round, then replays them through the client controller. It checks out-of-order phase updates, delayed purchase and Ready replies, rejected transactions, item reuse, native settings, and clean teardown. It also triggers native victory and defeat and compares client results and inventory with the host. These are native game transitions with fixture progression, not a played-through campaign. See the [game-loop coverage matrix](../tests/GAME_LOOP.md).
 
+Shop interaction fixtures send mouse events to the native shop in an isolated viewport and capture host and client drags in progress. They exercise the real ball objects, slots, and drop handlers without moving the desktop pointer.
+
 Screenshots exercise the real mod UI and native game rendering; they do not establish that Steam invitations, network latency, or a live multiplayer session work correctly. Review the images as well as the pass result: a successful script cannot judge every visual issue.
 
 To extend coverage, add a scene setup and capture to `tests/render_probe.gd`. Keep fixtures repeatable, use the isolated profile, and leave process management to `Capture-Screens.ps1`. Only run the harness when runtime testing has been explicitly requested; ordinary development checks can continue using the static parser and isolated installer tests.

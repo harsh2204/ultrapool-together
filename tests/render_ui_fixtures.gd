@@ -219,14 +219,13 @@ func capture_table_states(mod: Node, capture: Callable) -> void:
 	_restore(mod, saved)
 
 
-func capture_shop_presence(mod: Node, capture: Callable) -> void:
+func capture_shop_presence(mod: Node, capture: Callable, input: Node) -> void:
 	var saved = _save(mod)
 	_set_table(mod)
 	mod.latest_state.in_shop = true
 	mod._update_hud()
 	mod.multiplayer_balls._ui.refresh({})
 	var shop = mod.shop_sync
-	var selection: String = shop._selected
 	var section: String = shop.current_section()
 	_record(shop.show_section("balls"), "native ball shop is available")
 	await mod.get_tree().create_timer(0.6).timeout
@@ -237,16 +236,23 @@ func capture_shop_presence(mod: Node, capture: Callable) -> void:
 	)
 
 	var inspected = false
+	input.begin(shop.native_shop())
 	for slot in shop._state.get("slots", []):
 		if slot.get("data", "") == "TOGETHER_CALL":
-			inspected = shop.inspect_slot(slot.key)
+			await input.hover(shop.slot_item(slot.key))
+			inspected = shop.native_shop().selected_ball == shop.slot_item(slot.key)
 			break
 	_record(inspected, "native shop displays Called Shot inspection")
 	if inspected:
 		await mod.get_tree().create_timer(0.45).timeout
+		_record(
+			mod.get_node("/root/UIManager").info_display.main_panel.is_visible_in_tree(),
+			"native shop inspection card is visibly rendered"
+		)
 		await capture.call(
 			"shop-ball-details", "A multiplayer ball's native description and shop actions."
 		)
+	input.finish()
 	mod.get_node("/root/UIManager").info_display.hide_info()
 	var snacks: bool = shop.show_section("snacks")
 	_record(snacks, "native snack counter is available")
@@ -262,7 +268,6 @@ func capture_shop_presence(mod: Node, capture: Callable) -> void:
 		)
 	shop.show_section(section)
 	await mod.get_tree().create_timer(0.6).timeout
-	shop._selected = selection
 	_restore(mod, saved)
 
 

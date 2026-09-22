@@ -12,19 +12,17 @@ var _authoritative_state: Dictionary = {}
 var _last_capture: Dictionary = {}
 var _revision = 0
 var _native_slots: Dictionary = {}
-var _disabled_items: Dictionary = {}
-var _disabled_slots: Dictionary = {}
+var _bound_items: Dictionary = {}
 var _bound_buttons: Dictionary = {}
-var _buttons: Dictionary = {}
 var _tutorial_enabled = true
 var _tutorial_saved = false
 var _was_finished = false
-var _selected = ""
 var _pending = false
 var _pending_at = 0
 var _request_id = 0
 var _pending_message: Dictionary = {}
-var _slot_script: Script
+var _ball_script: Script
+var _passive_script: Script
 var _panel: Control
 var _notice: Label
 var _view: Node
@@ -34,7 +32,6 @@ var _saved_deck: Resource
 var _saved_difficulty: Resource
 var _guest_context_saved = false
 var _view_slots: Dictionary = {}
-var _sell_targets: Array = []
 var _ready_vote: RefCounted
 var _continuing = false
 
@@ -42,7 +39,10 @@ var _continuing = false
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	process_priority = 500
-	_slot_script = load(get_script().resource_path.get_base_dir().path_join("native_shop_slot.gd"))
+	var directory = get_script().resource_path.get_base_dir()
+	_ball_script = load(directory.path_join("native_shop_ball.gd"))
+	_passive_script = load(directory.path_join("native_shop_passive.gd"))
+	get_tree().node_added.connect(_node_added)
 	_ready_vote = load(get_script().resource_path.get_base_dir().path_join("team_vote.gd")).new()
 	_build_ui()
 
@@ -53,7 +53,6 @@ func begin_session(controller: Node):
 	_last_capture.clear()
 	_state.clear()
 	_authoritative_state.clear()
-	_selected = ""
 	_pending = false
 	_pending_message.clear()
 	_request_id = 0
@@ -82,7 +81,6 @@ func end_session():
 	_authoritative_state.clear()
 	_last_capture.clear()
 	_native_slots.clear()
-	_selected = ""
 	_pending = false
 	_pending_message.clear()
 	_ready_vote.configure([])
@@ -99,18 +97,19 @@ func presence_rect() -> Rect2:
 
 
 func presence_target() -> String:
-	var hovered = get_viewport().gui_get_hovered_control()
-	while hovered != null and hovered != _panel:
-		if hovered.has_meta("shop_slot"):
-			return str(hovered.get_meta("shop_slot"))
-		hovered = hovered.get_parent()
-	return ""
+	if not is_instance_valid(_view) or not _panel.visible:
+		return ""
+	return _slot_key(_view.get_hovered_slot())
 
 
 func presence_target_position(key: String) -> Vector2:
-	if not _buttons.has(key) or not _panel.visible:
+	if not _view_slots.has(key) or not _panel.visible:
 		return Vector2(INF, INF)
-	return slot_screen_position(key) if _buttons[key].visible else Vector2(INF, INF)
+	var slot = _view_slots[key]
+	var position = slot_screen_position(key)
+	if slot.is_visible_in_tree() and get_viewport().get_visible_rect().has_point(position):
+		return position
+	return Vector2(INF, INF)
 
 
 func _process(_delta):
@@ -138,10 +137,9 @@ func _process(_delta):
 				)
 				if _view.get_node("%ShopFloor").texture != floor_texture:
 					_view.set_floor(floor_texture)
-			_lock_native_items(_view)
+			_bind_native_items(_view)
 			if _view.moving():
 				_clear_inspection()
-			_layout_targets()
 			_update_actions()
 	if _was_finished != _controller.finished:
 		_was_finished = _controller.finished
@@ -288,7 +286,7 @@ func handle_request(message: Dictionary, actor: int = 0) -> bool:
 	if _state.busy:
 		return _reject("Wait for the shop animation to finish.")
 	var shop = _shop()
-	_clear_inspection()
+	_cancel_native_drag()
 	match action:
 		"reroll":
 			if shop.player_info.money < shop.roll_cost:
@@ -455,19 +453,15 @@ func apply_state(data: Dictionary) -> bool:
 func _display_state(data: Dictionary):
 	if data == _state and (not data.get("open", false) or is_instance_valid(_view)):
 		return
-	var selection_id = _find_slot(_selected).get("id", 0)
 	var was_open: bool = _state.get("open", false)
 	_state = data.duplicate(true)
 	_panel.visible = data.open and not get_node("/root/UIManager").is_popup_open()
 	if not data.open:
-		_selected = ""
 		_restore_items()
 		_clear_guest_view()
 		_view = null
 		_view_slots.clear()
 		return
-	if _find_slot(_selected).get("id", 0) != selection_id:
-		_selected = ""
 	if not was_open:
 		get_viewport().gui_release_focus()
 	_notice.hide()
@@ -571,8 +565,10 @@ func _valid_vote(vote) -> bool:
 	return true
 
 
-func _lock_native_items(shop):
-	shop.drop()
+func _bind_native_items(shop):
+	for id in _bound_items.keys():
+		if not is_instance_valid(_bound_items[id].node):
+			_bound_items.erase(id)
 	for container in [
 		shop.items,
 		shop.shop_items,
@@ -580,20 +576,124 @@ func _lock_native_items(shop):
 		shop.cocktail_bar.get_node("Pos/Items")
 	]:
 		for item in container.get_children():
-			if not item.has_method("get_item") or item.is_queued_for_deletion():
-				continue
-			var id = item.get_instance_id()
-			if not _disabled_items.has(id):
-				_disabled_items[id] = {"node": item, "interactable": item.interactable}
-			item.interactable = false
-	for slot in _view_slots.values():
-		var id = slot.get_instance_id()
-		if not _disabled_slots.has(id):
-			_disabled_slots[id] = {"node": slot, "disabled": slot.disabled_slot}
-		slot.disabled_slot = true
+			_bind_native_item(item)
 	_bind_action(shop.reroll_button, "reroll")
 	_bind_action(shop.play_button, "ready")
 	_bind_action(shop.cocktail_bar.mix_button, "mix")
+
+
+func _node_added(node: Node):
+	if _controller == null or not (node is ShopBall or node is ShopPassive):
+		return
+	if node.is_node_ready():
+		_bind_native_item(node)
+		return
+	var callback = _bind_native_item.bind(node)
+	if not node.ready.is_connected(callback):
+		node.ready.connect(callback, CONNECT_ONE_SHOT)
+
+
+func _bind_native_item(item: Node):
+	if (
+		_controller == null
+		or not (item is ShopBall or item is ShopPassive)
+		or item.is_queued_for_deletion()
+	):
+		return
+	var id = item.get_instance_id()
+	if _bound_items.has(id):
+		return
+	_bound_items[id] = {"node": item, "script": item.get_script()}
+	_replace_item_script(item, _passive_script if item is ShopPassive else _ball_script)
+	item.drag_started = _begin_native_drag
+	item.drop_requested = _drop_native_item
+	item.can_interact = _can_drag_item
+
+
+func _replace_item_script(item: Node, script: Script):
+	var values = {}
+	for property in item.get_property_list():
+		if property.usage & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			values[property.name] = item.get(property.name)
+	item.set_script(script)
+	for property in item.get_property_list():
+		if property.usage & PROPERTY_USAGE_SCRIPT_VARIABLE and values.has(property.name):
+			item.set(property.name, values[property.name])
+
+
+func _cancel_native_drag():
+	if not is_instance_valid(_view):
+		return
+	for item in [_view.grabbed_ball, _view.grabbed_passive]:
+		if is_instance_valid(item):
+			item.drag_context.clear()
+			if is_instance_valid(item.slot):
+				item.tpos = item.slot.global_position
+	_view.drop()
+	_clear_inspection()
+	_view.hovered_slot = null
+
+
+func _interaction_blocked() -> bool:
+	return (
+		not is_open()
+		or not is_instance_valid(_view)
+		or _pending
+		or _state.busy
+		or _controller.finished
+		or _controller.panel.visible
+		or _view.moving()
+		or _controller.is_spectating()
+		or get_node("/root/UIManager").is_popup_open()
+	)
+
+
+func _can_drag_item(item: Node) -> bool:
+	return (
+		not _interaction_blocked()
+		and item.is_visible_in_tree()
+		and is_instance_valid(item.slot)
+		and item.slot.is_visible_in_tree()
+		and not item.slot.disabled_slot
+	)
+
+
+func _slot_key(slot) -> String:
+	for key in _view_slots:
+		if _view_slots[key] == slot:
+			return key
+	return ""
+
+
+func _begin_native_drag(item: Node) -> Dictionary:
+	var source = _slot_key(item.slot)
+	return {
+		"source": source, "revision": _state.revision, "item_id": _find_slot(source).get("id", 0)
+	}
+
+
+func _drop_native_item(item: Node, context: Dictionary):
+	if context.is_empty() or not _can_drag_item(item):
+		return
+	var source: String = context.source
+	if context.revision != _state.revision or _find_slot(source).get("id", 0) != context.item_id:
+		_notice.text = "The shop changed during your drag. Please choose again."
+		_notice.show()
+		return
+	if _view.is_hovering_sell_area():
+		_submit_item("sell", source)
+		return
+	var hovered = _view.get_hovered_slot()
+	if (
+		not is_instance_valid(hovered)
+		or hovered.disabled_slot
+		or not hovered.is_visible_in_tree()
+		or hovered.global_position.distance_to(hovered.get_global_mouse_position()) >= 40
+	):
+		return
+	var target = _slot_key(hovered)
+	if target != "" and target != source:
+		_submit_item("move", source, target)
 
 
 func _bind_action(button, action: String):
@@ -613,14 +713,11 @@ func _bind_action(button, action: String):
 
 
 func _restore_items():
-	for entry in _disabled_items.values():
+	_cancel_native_drag()
+	for entry in _bound_items.values():
 		if is_instance_valid(entry.node):
-			entry.node.interactable = entry.interactable
-	_disabled_items.clear()
-	for entry in _disabled_slots.values():
-		if is_instance_valid(entry.node):
-			entry.node.disabled_slot = entry.disabled
-	_disabled_slots.clear()
+			_replace_item_script(entry.node, entry.script)
+	_bound_items.clear()
 	for entry in _bound_buttons.values():
 		if not is_instance_valid(entry.node):
 			continue
@@ -688,16 +785,6 @@ func inspect_slot(key: String) -> bool:
 	return true
 
 
-func _uninspect_slot(key: String):
-	var body = slot_item(key)
-	if not is_instance_valid(body) or not is_instance_valid(_view):
-		return
-	if body is ShopPassive:
-		_view.unselect_passive(body)
-	else:
-		_view.unselect_ball(body)
-
-
 func _clear_inspection():
 	if is_instance_valid(_view.selected_ball):
 		_view.unselect_ball(_view.selected_ball)
@@ -719,7 +806,7 @@ func show_section(section: String) -> bool:
 		return false
 	if section == "snacks" and not _view.tapas_bar.visible:
 		return false
-	_clear_inspection()
+	_cancel_native_drag()
 	_view.set_state(["balls", "mix", "snacks"].find(section))
 	return true
 
@@ -797,76 +884,8 @@ func _clear_guest_view():
 func _render():
 	if not _ensure_view():
 		return
-	var present = {}
-	for slot in _state.slots:
-		present[slot.key] = true
-		var button = _buttons.get(slot.key)
-		if not is_instance_valid(button):
-			button = _new_target()
-			button.slot_key = slot.key
-			button.set_meta("shop_slot", slot.key)
-			button.pressed.connect(_select_slot.bind(slot.key))
-			button.mouse_entered.connect(inspect_slot.bind(slot.key))
-			button.mouse_exited.connect(_uninspect_slot.bind(slot.key))
-			button.drop_requested.connect(_drop_item)
-			_buttons[slot.key] = button
-		button.revision = _state.revision
-		button.item_id = slot.id
-		button.button_pressed = _selected == slot.key
-		button.preview_texture = null
-		button.preview_material = null
-		var body = slot_item(slot.key)
-		if is_instance_valid(body):
-			button.preview_texture = body.get_item().data.texture
-			if body is ShopBall:
-				button.preview_material = body.ball.material
-	for key in _buttons.keys():
-		if not present.has(key):
-			_buttons[key].queue_free()
-			_buttons.erase(key)
-	if _sell_targets.is_empty():
-		for _index in 2:
-			var button = _new_target()
-			button.toggle_mode = false
-			button.slot_key = "sell"
-			button.pressed.connect(func(): _submit_item("sell", _selected))
-			button.drop_requested.connect(_drop_item)
-			_sell_targets.append({"button": button})
-	_sell_targets[0]["zone"] = _view.sell_zone
-	_sell_targets[1]["zone"] = _view.tapas_bar.sell_zone
-	_lock_native_items(_view)
-	_layout_targets()
+	_bind_native_items(_view)
 	_update_actions()
-
-
-func _new_target():
-	var button = _slot_script.new()
-	button.toggle_mode = true
-	button.focus_mode = Control.FOCUS_NONE
-	for style in ["normal", "hover", "pressed", "disabled", "focus"]:
-		button.add_theme_stylebox_override(style, StyleBoxEmpty.new())
-	_panel.add_child(button)
-	return button
-
-
-func _layout_targets():
-	var transform = get_viewport().get_canvas_transform()
-	var area = get_viewport().get_visible_rect()
-	for key in _buttons:
-		var slot = _view_slots[key]
-		var button = _buttons[key]
-		button.size = Vector2(60, 60) * transform.get_scale().abs()
-		button.position = transform * slot.global_position - button.size * 0.5
-		button.visible = slot.is_visible_in_tree() and area.intersects(button.get_rect())
-	for target in _sell_targets:
-		var zone = target.zone
-		var top_left = transform * zone.get_node("topLeft").global_position
-		var bottom_right = transform * zone.get_node("bottomRight").global_position
-		target.button.position = top_left
-		target.button.size = bottom_right - top_left
-		target.button.visible = (
-			zone.is_visible_in_tree() and area.intersects(target.button.get_rect())
-		)
 
 
 func _find_slot(key: String) -> Dictionary:
@@ -874,33 +893,6 @@ func _find_slot(key: String) -> Dictionary:
 		if slot.key == key:
 			return slot
 	return {}
-
-
-func _select_slot(key: String):
-	if _pending or _state.busy or _controller.finished:
-		return
-	var slot = _find_slot(key)
-	if _selected == key:
-		_selected = ""
-	elif _selected != "":
-		_submit_item("move", _selected, key)
-		_selected = ""
-	elif slot.get("id", 0) != 0:
-		_selected = key
-	_render()
-	inspect_slot(key)
-
-
-func _drop_item(source: String, target: String, revision: int, item_id: int):
-	if revision != _state.revision or _find_slot(source).get("id", 0) != item_id:
-		_notice.text = "The shop changed during your drag. Please choose again."
-		_notice.show()
-		return
-	if target == "sell":
-		_submit_item("sell", source)
-	else:
-		_submit_item("move", source, target)
-	_selected = ""
 
 
 func _submit_item(action: String, source: String, target = ""):
@@ -933,7 +925,6 @@ func _submit(message: Dictionary):
 		_request_id += 1
 		message["request_id"] = _request_id
 		_pending_message = message.duplicate(true)
-		_selected = ""
 		_display_state(_predict_state(_authoritative_state, message))
 		_notice.hide()
 		_update_actions()
@@ -943,22 +934,12 @@ func _submit(message: Dictionary):
 func _update_actions():
 	if not is_open() or not is_instance_valid(_view):
 		return
-	var blocked = (
-		_pending
-		or _state.busy
-		or _controller.finished
-		or _controller.panel.visible
-		or _view.moving()
-		or _controller.is_spectating()
-		or get_node("/root/UIManager").is_popup_open()
-	)
+	var blocked = _interaction_blocked()
 	if _controller.finished:
 		_notice.text = "This table has finished. Scores and purchases are locked."
 		_notice.show()
-	for button in _buttons.values():
-		button.disabled = blocked
-	for target in _sell_targets:
-		target.button.disabled = blocked
+	if blocked:
+		_cancel_native_drag()
 	_set_disabled(_view.reroll_button, blocked or _state.money < _state.reroll)
 	_set_disabled(_view.cocktail_bar.mix_button, blocked or not _state.can_mix)
 	_set_disabled(_view.play_button, blocked or not _state.can_continue)

@@ -239,9 +239,10 @@ func _check_predictions(sync, state: Dictionary, offer: Dictionary, empty: Dicti
 		sync._predict_state(insufficient, purchase) == insufficient,
 		"unaffordable purchase does not create a local item"
 	)
-	var target = sync._buttons[offer.key]
+	var item = sync.slot_item(offer.key)
 	sync._render()
-	_check(sync._buttons[offer.key] == target, "redrawing preserves native drag targets")
+	_check(sync.slot_item(offer.key) == item, "redrawing preserves the native draggable item")
+	_check(item.can_interact.call(item), "redrawing preserves native item interaction")
 
 
 func _check_inspected_sale(sync):
@@ -295,18 +296,10 @@ func _check_rendered_slots(sync, state: Dictionary):
 			"occupied slot preserves native identity: " + slot.key
 		)
 		_check(sync.slot_item(slot.key) == object, "native item remains visible: " + slot.key)
+		_check(object.interactable, "native item retains its own input: " + slot.key)
 		_check(
-			not object.interactable, "native item cannot bypass shared transactions: " + slot.key
-		)
-		var button = sync._buttons[slot.key]
-		_check(
-			(
-				button.get_global_rect().get_center().distance_to(
-					sync.slot_screen_position(slot.key)
-				)
-				< 1
-			),
-			"shared hit target follows its native slot: " + slot.key
+			object.drop_requested.is_valid() and object.can_interact.is_valid(),
+			"native item routes drops through shared transactions: " + slot.key
 		)
 		if object is ShopBall:
 			_check(

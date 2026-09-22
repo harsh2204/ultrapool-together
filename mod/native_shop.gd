@@ -13,6 +13,8 @@ func _ready() -> void:
 	cocktail_bar.update_can_leave.connect(_on_cocktail_bar_update_can_leave)
 	cocktail_bar.leave.connect(leave_cocktails)
 	tapas_bar.leave.connect(leave_tapas)
+	passive_grabbed.connect(tapas_bar._on_passive_grabbed)
+	passive_dropped.connect(tapas_bar._on_passive_dropped)
 	get_viewport().size_changed.connect(update_shop_positions)
 	update_shop_positions()
 	var groups = {
@@ -105,12 +107,15 @@ func _sync_items(entries: Array):
 		var old: Dictionary = previous.get(entry.id, {})
 		var body = old.get("node")
 		var item_changed = old.is_empty()
+		var created = not is_instance_valid(body)
 		if not old.is_empty():
 			for field in ["data", "mixed", "level", "score"]:
 				if old.state[field] != entry[field]:
 					item_changed = true
-		if not is_instance_valid(body):
+		if created:
 			body = (passive_item_scene if passive else shop_item_scene).instantiate()
+		elif old.state.key != entry.key or item_changed:
+			_release_remote_item(body)
 		if item_changed:
 			var item = BallItem.new()
 			item.data = (
@@ -123,7 +128,6 @@ func _sync_items(entries: Array):
 			item.level = entry.level
 			item.base_score = entry.score
 			body.set_item(item)
-		body.interactable = false
 		var holder = items
 		if entry.group == "offer":
 			holder = shop_items
@@ -135,8 +139,10 @@ func _sync_items(entries: Array):
 			holder.add_child(body)
 		elif body.get_parent() != holder:
 			body.reparent(holder)
-		body.global_position = slot.global_position
-		body.tpos = body.global_position
+		if created:
+			body.global_position = slot.global_position
+		if not is_grabbed(body):
+			body.tpos = slot.global_position
 		body.slot = slot
 		if passive:
 			slot.item = body
@@ -152,14 +158,20 @@ func _sync_items(entries: Array):
 		previous.erase(entry.id)
 	for old in previous.values():
 		var body = old.node
-		Global.gameManager.unselect_ball(body, body.get_item(), true)
-		if selected_ball == body:
-			selected_ball = null
-		if selected_passive == body:
-			selected_passive = null
+		_release_remote_item(body)
 		body.slot = null
 		body.get_parent().remove_child(body)
 		body.queue_free()
+
+
+func _release_remote_item(body):
+	if is_grabbed(body):
+		drop()
+	Global.gameManager.unselect_ball(body, body.get_item(), true)
+	if selected_ball == body:
+		selected_ball = null
+	if selected_passive == body:
+		selected_passive = null
 
 
 func save_run_state() -> void:
