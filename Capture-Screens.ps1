@@ -3,7 +3,7 @@ param(
     [string]$GamePath,
     [string]$OutputPath,
     [ValidateRange(30, 300)]
-    [int]$TimeoutSeconds = 120
+    [int]$TimeoutSeconds = 180
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,8 +58,8 @@ foreach ($name in $runtimeFiles) {
 }
 $fixtureFiles = @(
     'mod\main.gd', 'tests\render_bootstrap.gd', 'tests\render_talo.gd', 'tests\render_settings.gd',
-    'tests\render_ui_fixtures.gd', 'tests\spectator_fixtures.gd', 'tests\render_probe.gd', 'tests\render_gallery.html',
-    'tests\team_vote_probe.gd', 'tests\lobby_probe.gd', 'tests\controller_probe.gd',
+    'tests\render_ui_fixtures.gd', 'tests\spectator_fixtures.gd', 'tests\round_flow_fixtures.gd', 'tests\render_probe.gd', 'tests\render_gallery.html',
+    'tests\team_vote_probe.gd', 'tests\lobby_probe.gd', 'tests\router_probe.gd', 'tests\controller_probe.gd', 'tests\snapshot_probe.gd',
     'tests\multiplayer_balls_probe.gd', 'tests\bounty_probe.gd'
 )
 foreach ($name in $fixtureFiles) {
@@ -154,7 +154,7 @@ RenderProbe="*$sourceRoot/tests/render_probe.gd"
     while (-not $process.WaitForExit(500)) {
         $report.script_errors = @(Get-Content -LiteralPath $stderr | Where-Object {
             $_ -match 'SCRIPT ERROR:|Parse Error:|Compile Error:|RENDER_PROBE_FAIL'
-        })
+        } | ForEach-Object { $_.ToString() })
         if ($report.script_errors.Count -gt 0) {
             throw 'The render probe reported a script error. Inspect stderr.log in the output directory.'
         }
@@ -167,7 +167,7 @@ RenderProbe="*$sourceRoot/tests/render_probe.gd"
     $report.exit_code = $process.ExitCode
     $log = @(Get-Content -LiteralPath $stdout, $stderr)
     $report.probe_passed = [bool]($log -match '^RENDER_PROBE_PASS\b')
-    $report.script_errors = @($log | Where-Object { $_ -match 'SCRIPT ERROR:|Parse Error:|Compile Error:|RENDER_PROBE_FAIL' })
+    $report.script_errors = @($log | Where-Object { $_ -match 'SCRIPT ERROR:|Parse Error:|Compile Error:|RENDER_PROBE_FAIL' } | ForEach-Object { $_.ToString() })
     if ($process.ExitCode -ne 0 -or -not $report.probe_passed -or $report.script_errors.Count -gt 0) {
         throw 'The render probe failed. Inspect stdout.log and stderr.log in the output directory.'
     }

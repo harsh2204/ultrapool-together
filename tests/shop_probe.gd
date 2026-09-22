@@ -86,6 +86,7 @@ func _run():
 		_check(false, "fixture has an offer and an empty build slot")
 		_finish(sync)
 		return
+	_check_predictions(sync, state, offer, empty)
 	var purchase = {
 		"action": "move",
 		"revision": state.revision,
@@ -206,6 +207,41 @@ func _ready_request(state: Dictionary, value: bool) -> Dictionary:
 		"revision": state.revision,
 		"ready_generation": state.ready_vote.revision
 	}
+
+
+func _check_predictions(sync, state: Dictionary, offer: Dictionary, empty: Dictionary):
+	var original = state.duplicate(true)
+	var purchase = {
+		"action": "move",
+		"source": offer.key,
+		"item_id": offer.id,
+		"target": empty.key,
+		"target_id": 0
+	}
+	var predicted: Dictionary = sync._predict_state(state, purchase)
+	_check(predicted.money == state.money - offer.price, "purchase prediction updates local money")
+	_check(state == original, "optimistic purchase leaves the authoritative state untouched")
+	var from: Dictionary = predicted.slots.filter(func(slot): return slot.key == offer.key)[0]
+	var to: Dictionary = predicted.slots.filter(func(slot): return slot.key == empty.key)[0]
+	_check(
+		from.id == 0 and to.id == offer.id, "purchase prediction preserves the moved item identity"
+	)
+	var ready: Dictionary = sync._predict_state(state, _ready_request(state, true))
+	_check(ready.ready_vote.ready == [1], "ready prediction updates the teammate count immediately")
+	var replay: Dictionary = sync._predict_state(ready, _ready_request(state, true))
+	_check(replay.ready_vote.ready == [1], "predicting the same approval never doubles the count")
+	var stale = _ready_request(state, true)
+	stale.ready_generation -= 1
+	_check(sync._predict_state(state, stale) == state, "stale ready generation is never predicted")
+	var insufficient = state.duplicate(true)
+	insufficient.money = -1
+	_check(
+		sync._predict_state(insufficient, purchase) == insufficient,
+		"unaffordable purchase does not create a local item"
+	)
+	var target = sync._buttons[offer.key]
+	sync._render()
+	_check(sync._buttons[offer.key] == target, "redrawing preserves native drag targets")
 
 
 func _check_inspected_sale(sync):

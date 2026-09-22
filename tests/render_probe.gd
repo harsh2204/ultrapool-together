@@ -18,6 +18,7 @@ var failures: Array[String] = []
 var checks: Array[Dictionary] = []
 var screens: Array[Dictionary] = []
 var fixtures: RefCounted
+var round_flow: RefCounted
 
 
 func _ready():
@@ -55,9 +56,28 @@ func _run():
 	if not _check(mod.multiplayer_balls != null, "ball service loaded"):
 		_finish()
 		return
+	var round_flow_script = load(
+		get_script().resource_path.get_base_dir().path_join("round_flow_fixtures.gd")
+	)
+	if not _check(
+		round_flow_script != null and round_flow_script.can_instantiate(),
+		"compiled round flow fixtures"
+	):
+		_finish()
+		return
+	round_flow = round_flow_script.new()
+	var snapshot_probe = (
+		load(get_script().resource_path.get_base_dir().path_join("snapshot_probe.gd")).new()
+	)
+	snapshot_probe.embedded = true
+	add_child(snapshot_probe)
+	await snapshot_probe.completed
+	_check(not snapshot_probe.failed, "snapshot_probe: %d checks" % snapshot_probe.checks)
+	snapshot_probe.queue_free()
 	for probe in [
 		"team_vote_probe",
 		"lobby_probe",
+		"router_probe",
 		"controller_probe",
 		"multiplayer_balls_probe",
 		"bounty_probe"
@@ -138,6 +158,7 @@ func _run():
 		await fixtures.capture_shop_presence(mod, _capture)
 		_check_shop_purchase()
 		await _check_shop_readiness()
+	await round_flow.record_host(mod, _capture)
 	mod.shop_sync.end_session()
 	mod.run_controls.end_session()
 	mod.adapter.end_session()
@@ -166,6 +187,8 @@ func _run():
 	await _capture_guest_shop(snapshot, shop_state)
 	mod.multiplayer_balls.end_session()
 	mod.table_sync.end_guest()
+	for result in await round_flow.replay_guest(mod, _capture):
+		_check(result.passed, result.name)
 	for result in fixtures.checks:
 		_check(result.passed, result.name)
 	_finish()

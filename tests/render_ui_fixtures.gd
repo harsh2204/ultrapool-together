@@ -58,7 +58,7 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 	coop.players[2].ready = false
 	coop.players[3].ready = false
 	coop.can_start = false
-	panel.set_connection("UP6-RENDER-FIXTURE", true, true)
+	panel.set_connection("UP7-RENDER-FIXTURE", true, true)
 	panel.render(coop, 1, true)
 	await capture.call("lobby-choosing-seats", "Four-player co-op with one player choosing a seat.")
 	coop = _lobby([0, 0, 0, 0], 1)

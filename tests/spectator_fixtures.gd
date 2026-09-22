@@ -30,7 +30,23 @@ func capture(mod: Node, snapshot: Dictionary, screenshot: Callable) -> Array:
 	)
 	controller.add_child(spectator)
 	spectator.setup(controller)
+	var original_spectator = mod.spectator
+	mod.spectator = spectator
+	spectator.watch_changed.connect(func(_table: int): _refresh_home_ui(mod))
+	_refresh_home_ui(mod)
+	var home_visibility = _home_visibility(mod)
 	_check(spectator.watch(1), "another table can be watched without changing seats")
+	_check(
+		(
+			mod.is_spectating()
+			and not mod.turn_label.visible
+			and not mod.score_label.visible
+			and not mod.pass_button.visible
+			and not mod.multiplayer_balls._ui._overlay.visible
+			and not mod.multiplayer_balls._ui._hint.visible
+		),
+		"watching hides the local turn controls, score, and ball selection markers"
+	)
 	spectator.apply_snapshot(1, snapshot)
 	spectator.tick(0.0)
 	await mod.get_tree().process_frame
@@ -64,6 +80,47 @@ func capture(mod: Node, snapshot: Dictionary, screenshot: Callable) -> Array:
 		copied_felt.is_visible_in_tree() and copied_felt.texture == native_felt.texture,
 		"watcher keeps the native felt visible"
 	)
+	var native_floor = original_game.table.get_node("TableCustomization").shop_floor
+	if native_floor == null:
+		native_floor = original_game.shop.get_node("%ShopFloor")
+	_check(
+		(
+			spectator._floor.texture == native_floor.texture
+			and spectator._floor.region_rect == native_floor.region_rect
+			and spectator._floor.texture_repeat == native_floor.texture_repeat
+			and spectator._floor.is_visible_in_tree()
+		),
+		"watcher uses the configured native floor with its repeat and coverage"
+	)
+	_check(
+		spectator._layer.layer < mod.get_node("/root/EffectManager").crt_overlay.get_parent().layer,
+		"watcher stays underneath the native configured screen effects"
+	)
+	var hud_visible = true
+	for name in ["ScoreDisplay", "RoundText", "ShotsInfo", "hpInfo", "MoneyLabel", "ScoreLabel"]:
+		hud_visible = (
+			hud_visible and spectator._table.find_child(name, true, false).is_visible_in_tree()
+		)
+	_check(hud_visible, "watcher retains the complete native table HUD")
+	var updated = snapshot.duplicate(true)
+	updated.score = 123
+	updated.required_score = 456
+	updated.money = 78
+	updated.hp = 1
+	updated.shots = 2
+	spectator._update_table_ui(updated)
+	_check(
+		(
+			spectator._table.get_node("ScoreDisplay/CurrentScore").text == "123"
+			and spectator._table.get_node("ScoreDisplay/TargetScore").text == "/456"
+			and spectator._table.find_child("MoneyLabel", true, false).text == "78€"
+			and spectator._table.get_node("ShotsInfo/PipsHolder").get_child_count() == 2
+			and spectator._table.get_node("hpInfo/heart/HeartFull").visible
+			and not spectator._table.get_node("hpInfo/heart2/HeartFull").visible
+		),
+		"watcher updates native score, money, hearts, and shot pips from the watched table"
+	)
+	spectator._update_table_ui(snapshot)
 	_check(
 		(
 			copied_felt.texture != null
@@ -112,6 +169,17 @@ func capture(mod: Node, snapshot: Dictionary, screenshot: Callable) -> Array:
 		),
 		"rendered felt center is visible above the background"
 	)
+	var floor_color = board_image.get_pixel(100, 360)
+	_check(
+		(
+			Vector3(floor_color.r, floor_color.g, floor_color.b).distance_to(
+				Vector3(background.r, background.g, background.b)
+			)
+			> 0.03
+		),
+		"rendered spectator background contains the native floor instead of a flat backdrop"
+	)
+	await _check_customization(mod, spectator, original_game, screenshot)
 	var shopping = snapshot.duplicate(true)
 	shopping.in_shop = true
 	spectator.apply_snapshot(1, shopping)
@@ -169,6 +237,10 @@ func capture(mod: Node, snapshot: Dictionary, screenshot: Callable) -> Array:
 		not spectator.watch(0) and not spectator.is_watching(),
 		"selecting own table closes watching"
 	)
+	_check(
+		not mod.is_spectating() and _home_visibility(mod) == home_visibility,
+		"returning to the home table restores its HUD and ball overlays"
+	)
 	var ui = mod.get_node("/root/UIManager")
 	var was_processing: bool = ui.is_processing()
 	var settings_open: bool = ui.is_settings_open()
@@ -188,8 +260,78 @@ func capture(mod: Node, snapshot: Dictionary, screenshot: Callable) -> Array:
 		ui.is_processing() == was_processing and ui.is_settings_open() == settings_open,
 		"native UI polling resumes after Escape without opening settings"
 	)
+	mod.spectator = original_spectator
+	_refresh_home_ui(mod)
 	controller.free()
+	_check(
+		mod.spectator == original_spectator and _home_visibility(mod) == home_visibility,
+		"spectator fixture restores the live controller and original HUD visibility"
+	)
 	return checks
+
+
+func _refresh_home_ui(mod: Node) -> void:
+	mod._update_hud()
+	mod.multiplayer_balls._ui.refresh(mod.multiplayer_balls.capture())
+
+
+func _home_visibility(mod: Node) -> Dictionary:
+	return {
+		"turn": mod.turn_label.visible,
+		"score": mod.score_label.visible,
+		"pass": mod.pass_button.visible,
+		"balls": mod.multiplayer_balls._ui._overlay.visible,
+		"hint": mod.multiplayer_balls._ui._hint.visible
+	}
+
+
+func _check_customization(mod: Node, spectator: Node, game: Node, screenshot: Callable) -> void:
+	var save = mod.get_node("/root/SaveManager").save
+	var original_customization = save.customization.duplicate(true)
+	var customization = mod.get_node("/root/CustomizationManager")
+	var database = mod.get_node("/root/BallDatabase")
+	var selected: Dictionary = {}
+	for type in [
+		Cosmetic.COSMETIC_TYPE.TABLE_MAIN,
+		Cosmetic.COSMETIC_TYPE.TABLE_WALLS,
+		Cosmetic.COSMETIC_TYPE.SHOP_FLOOR,
+		Cosmetic.COSMETIC_TYPE.GRADIENT
+	]:
+		var current = customization.get_cosmetic(type)
+		for cosmetic in database.cosmetics:
+			if cosmetic.type == type and cosmetic.id != current.id:
+				selected[type] = cosmetic
+				save.customization[type] = cosmetic.id
+				break
+	customization.cosmetics_changed.emit()
+	await mod.get_tree().process_frame
+	await mod.get_tree().process_frame
+	_check(
+		selected.size() == 4,
+		"customization fixture selects non-default felt, rails, floor, and palette"
+	)
+	var native = game.table.get_node("TableCustomization")
+	var felt = spectator._table.get_node(game.table.get_path_to(native.table_main))
+	var rails = spectator._table.get_node(game.table.get_path_to(native.table_walls))
+	_check(
+		(
+			felt.texture == selected[Cosmetic.COSMETIC_TYPE.TABLE_MAIN].texture
+			and rails.texture == selected[Cosmetic.COSMETIC_TYPE.TABLE_WALLS].texture
+			and spectator._floor.texture == selected[Cosmetic.COSMETIC_TYPE.SHOP_FLOOR].texture
+			and (
+				felt.material.get_shader_parameter("palette_texture")
+				== native.table_main.material.get_shader_parameter("palette_texture")
+			)
+		),
+		"watcher applies the user's changed native cosmetics without changing their running board"
+	)
+	await screenshot.call(
+		"spectate-customized", "Spectating with locally selected felt, rails, floor, and palette"
+	)
+	save.customization = original_customization
+	customization.cosmetics_changed.emit()
+	await mod.get_tree().process_frame
+	await mod.get_tree().process_frame
 
 
 func _visual_only(node: Node) -> bool:

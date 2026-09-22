@@ -110,6 +110,7 @@ func game_data() -> Dictionary:
 		"in_shop": false,
 		"in_menu": true,
 		"game_over": false,
+		"round_result_open": false,
 		"run_won": false,
 		"run_goal_rounds": 0,
 		"round_ended": false,
@@ -128,6 +129,7 @@ func game_data() -> Dictionary:
 	data.in_shop = bool(game.get("in_shop"))
 	data.in_menu = bool(game.get("in_menu"))
 	data.game_over = bool(game.get("game_ended"))
+	data.round_result_open = get_node("/root/UIManager").round_over_menu.is_open
 	data.run_won = is_run_won(game)
 	data.run_goal_rounds = int(game.get_target_round())
 	data.round_ended = bool(game.get("round_ended"))

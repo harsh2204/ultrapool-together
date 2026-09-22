@@ -6,7 +6,7 @@ class TransportStub:
 	var is_host = false
 	var id = 20
 	var coordinator = 10
-	var room_code = "UP6-test"
+	var room_code = "UP7-test"
 	var sent: Array = []
 
 	func local_id() -> int:
@@ -83,6 +83,7 @@ class AdapterStub:
 class TableStub:
 	extends Node
 	var ended = 0
+	var shots: Array[Vector2] = []
 
 	func capture() -> Dictionary:
 		return {"available": false}
@@ -92,6 +93,13 @@ class TableStub:
 
 	func _valid_snapshot(data: Dictionary) -> bool:
 		return data.get("available") is bool
+
+	func apply_snapshot(data: Dictionary) -> bool:
+		return _valid_snapshot(data)
+
+	func begin_shot(vector: Vector2) -> bool:
+		shots.append(vector)
+		return true
 
 
 class SpectatorStub:
@@ -126,6 +134,10 @@ class ShopStub:
 
 	func end_session():
 		ended += 1
+
+	func apply_state(data: Dictionary) -> bool:
+		state = data.duplicate(true)
+		return true
 
 
 class PresenceStub:
@@ -231,6 +243,7 @@ func _initialize() -> void:
 	_run_closes_during_shot()
 	_targeted_shop_sync()
 	_rejected_shots_preserve_ability_state()
+	_first_shot_phase_order()
 	_race_and_score_limits()
 	_race_finishes()
 	_return_vote_lifecycle()
@@ -551,6 +564,65 @@ func _rejected_shots_preserve_ability_state():
 	)
 	_check(rules.shot_index == 2, "passing does not create a gap in accepted-shot indices")
 	controller.free()
+
+
+func _first_shot_phase_order():
+	var host = _controller()
+	host.active = true
+	host.adapter.ready_to_shoot = true
+	host.adapter.state.available = true
+	host.adapter.state.table_active = true
+	host.adapter.state.can_shoot = true
+	var vector = Vector2(125, -50)
+	_check(
+		host._take_shot(20, vector, 0), "first shot is accepted before the first periodic update"
+	)
+	var phase_index = -1
+	var shot_index = -1
+	var baseline: Dictionary = {}
+	var shot: Dictionary = {}
+	for index in host.transport.sent.size():
+		var frame: Dictionary = host.transport.sent[index]
+		var payload: Dictionary = frame.message.get("payload", {})
+		if payload.get("kind") == "snapshot" and payload.has("shop"):
+			phase_index = index
+			baseline = payload
+			_check(not frame.unreliable, "first-shot phase baseline uses reliable delivery")
+		if payload.get("kind") == "shot_start":
+			shot_index = index
+			shot = payload
+			_check(not frame.unreliable, "first-shot vector uses reliable delivery")
+	_check(
+		phase_index >= 0 and shot_index > phase_index,
+		"first-shot phase baseline is sent before the shot vector"
+	)
+	if baseline.is_empty() or shot.is_empty():
+		host.free()
+		return
+	_check(shot.id > baseline.id, "first-shot vector has a newer sequence than its phase baseline")
+	_check(
+		shot.vector == vector and shot.turn == 0,
+		"phase publication preserves the first shot vector and turn"
+	)
+	var guest = _controller()
+	guest.active = true
+	guest._local_id = 30
+	guest.transport.id = 30
+	guest._received_table(20, shot)
+	_check(
+		guest.last_started_turn == -1 and guest.table_sync.shots.is_empty(),
+		"an early vector cannot consume the turn before its phase baseline"
+	)
+	guest._received_table(20, baseline)
+	guest._received_table(20, shot)
+	_check(
+		guest.last_started_turn == 0 and guest.table_sync.shots == [vector],
+		"the first vector starts after its phase baseline arrives"
+	)
+	guest._received_table(20, shot)
+	_check(guest.table_sync.shots.size() == 1, "a repeated first-shot packet cannot launch twice")
+	guest.free()
+	host.free()
 
 
 func _host_controller(mode: String):

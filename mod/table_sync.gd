@@ -1,6 +1,8 @@
 extends Node
 
 const MAX_BALLS = 128
+const RoundPresentation = preload("round_presentation.gd")
+const PlayerInventory = preload("player_inventory_sync.gd")
 const ITEM_NUMBERS = {
 	"base_score": [-1.0e18, 1.0e18],
 	"temp_extra_score": [-1.0e18, 1.0e18],
@@ -19,6 +21,7 @@ var _saved_nodes: Array = []
 var _saved_shapes: Array = []
 var _saved_balls: Array = []
 var _saved_tutorial: Dictionary = {}
+var _results: Node
 
 
 func capture() -> Dictionary:
@@ -41,6 +44,8 @@ func capture() -> Dictionary:
 		"money": game.player_info.money,
 		"hp": game.player_info.hp,
 		"max_hp": game.get_max_hp(),
+		"inventory": PlayerInventory.capture(game.player_info),
+		"results": RoundPresentation.capture(game, get_node("/root/UIManager")),
 		"daily": game.is_daily(),
 		"rotated": game.table.scene_file_path == game.table_rotated_scene.resource_path,
 		"table_position": game.table.global_position,
@@ -111,7 +116,7 @@ func capture() -> Dictionary:
 	return data
 
 
-func begin_guest() -> bool:
+func begin_guest(config: Dictionary = {}) -> bool:
 	if _guest:
 		return true
 	var global_node = get_node("/root/Global")
@@ -126,20 +131,41 @@ func begin_guest() -> bool:
 	_guest = true
 	for key in [
 		"gameManager",
+		"shopManager",
 		"camera",
 		"in_run",
 		"IS_HOVER_SUPPRESSED",
 		"hovered_item",
 		"hovered_item_object",
-		"sticker_manager"
+		"sticker_manager",
+		"floating_ui",
+		"chosen_deck",
+		"chosen_difficulty",
+		"seed",
+		"seed_text",
+		"seeded_run",
+		"run_mode"
 	]:
 		_saved_global[key] = global_node.get(key)
+	if not is_instance_valid(_saved_global.shopManager):
+		_saved_global.shopManager = null
 	_saved_shapes = get_node("/root/GlobalPhysics").shapes.duplicate()
 	_saved_balls = get_node("/root/GlobalPhysics").balls.duplicate()
 	_suspend(current_scene)
 	_suspend(get_node("/root/UIManager"))
-	_resume_display(get_node("/root/UIManager").info_display)
-	_resume_display(get_node("/root/UIManager").locked_info_display)
+	_resume_display(get_node("/root/UIManager"))
+	_results = RoundPresentation.new()
+	add_child(_results)
+	_results.setup()
+	global_node.in_run = true
+	global_node.run_mode = global_node.RunMode.NORMAL
+	if not config.is_empty():
+		var database = get_node("/root/BallDatabase")
+		global_node.chosen_deck = database.id_to_deck[config.deck]
+		global_node.chosen_difficulty = database.id_to_difficulty[config.difficulty]
+		global_node.seed = config.seed
+		global_node.seed_text = str(config.seed)
+		global_node.seeded_run = true
 	_suspend(get_node("/root/TutorialManager"))
 	var tutorial = get_node("/root/TutorialManager")
 	_saved_tutorial = {"ENABLED": tutorial.ENABLED, "active_popup": tutorial.active_popup}
@@ -155,6 +181,16 @@ func begin_guest() -> bool:
 func end_guest() -> void:
 	if not _guest:
 		return
+	_results.end_session()
+	_results.queue_free()
+	_results = null
+	var ui = get_node("/root/UIManager")
+	for popup in ui.active_popups.duplicate():
+		popup.just_opened_or_closed = false
+		popup.instant_close_menu()
+		popup.underlay_canvas.hide()
+	ui.popup_queue.clear()
+	ui.update_pause()
 	_clear_replica()
 	var global_node = get_node("/root/Global")
 	for key in _saved_global:
@@ -196,7 +232,7 @@ func apply_snapshot(data: Dictionary) -> bool:
 	if not data.available:
 		_clear_replica()
 		return true
-	var key = "%s:%s:%s" % [data.scene_id, data.rounds_played, data.rotated]
+	var key = "%s:%s" % [data.scene_id, data.rotated]
 	if key == _scene_key:
 		for body in data.balls:
 			if (
@@ -241,6 +277,7 @@ func apply_snapshot(data: Dictionary) -> bool:
 		_scene_key = key
 		global_node.camera.make_current()
 	_replica.apply_table(data)
+	_results.apply(data)
 	return true
 
 
@@ -260,6 +297,8 @@ func ready_for_input() -> bool:
 
 
 func _clear_replica() -> void:
+	if is_instance_valid(_results):
+		_results.clear()
 	get_node("/root/Global").clear_hovered_item()
 	if is_instance_valid(_replica):
 		remove_child(_replica)
@@ -314,6 +353,10 @@ func _valid_snapshot(data: Dictionary) -> bool:
 		return false
 	if not data.available:
 		return data.size() == 1
+	if not RoundPresentation.valid(data.get("results")):
+		return false
+	if not PlayerInventory.valid(data.get("inventory"), get_node("/root/BallDatabase")):
+		return false
 	for key in TABLE_FLAGS:
 		if typeof(data.get(key)) != TYPE_BOOL:
 			return false
