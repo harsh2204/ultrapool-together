@@ -21,6 +21,8 @@ var _layer: CanvasLayer
 var _root: Control
 var _world: Node2D
 var _table: Node2D
+var _floor: Sprite2D
+var _shots = -1
 var _ball_scene: PackedScene
 var _player_scene: PackedScene
 var _hole_scene: PackedScene
@@ -40,6 +42,9 @@ func setup(controller: Node) -> void:
 	_player_scene = _scene_reader.exported(game_scene, "player_ball_scene")
 	_hole_scene = _scene_reader.exported(game_scene, "hole_scene")
 	_build_ui()
+	get_node("/root/CustomizationManager").cosmetics_changed.connect(
+		_refresh_cosmetics, CONNECT_DEFERRED
+	)
 
 
 func watch(table: int) -> bool:
@@ -122,6 +127,7 @@ func tick(_delta: float) -> void:
 	var weight = clampf((time - before.time) / duration, 0.0, 1.0) if duration > 0 else 1.0
 	_render_balls(before.data, after.data, weight)
 	_update_pockets(after.data)
+	_update_table_ui(after.data)
 	_layout()
 	if _now() - _last_received > STALE_SECONDS:
 		_status.text = "Waiting for table updates… · Your table keeps playing."
@@ -141,7 +147,7 @@ func _input(event: InputEvent) -> void:
 
 func _build_ui() -> void:
 	_layer = CanvasLayer.new()
-	_layer.layer = 130
+	_layer.layer = 90
 	add_child(_layer)
 	_root = Control.new()
 	_root.theme = _controller.ui_root.theme
@@ -217,22 +223,7 @@ func _create_table(data: Dictionary) -> void:
 	_table = _scene_reader.create(_scene_reader.exported(game_scene, property))
 	_world.add_child(_table)
 	_table.position = Vector2.ZERO
-	_apply_table_skin()
-	for name in [
-		"ScoreDisplay",
-		"RoundText",
-		"ShotsInfo",
-		"hpInfo",
-		"EndRoundButton",
-		"ScoreLabel",
-		"MoneyLabel",
-		"Pentagram",
-		"graveyard"
-	]:
-		_hide_named(_table, name)
-	for control in _table.find_children("*", "Control", true, false):
-		if ClassDB.is_parent_class(control.get_meta("native_type", "Control"), "BaseButton"):
-			control.hide()
+	_refresh_cosmetics()
 	var points: Array[Vector2] = []
 	for pocket in data.pockets:
 		if pocket.base_index >= 0:
@@ -245,10 +236,21 @@ func _create_table(data: Dictionary) -> void:
 	_layout()
 
 
-func _apply_table_skin() -> void:
+func _refresh_cosmetics() -> void:
+	if not is_instance_valid(_table):
+		return
 	var game = get_node("/root/Global").gameManager
 	if not is_instance_valid(game) or not is_instance_valid(game.table):
 		return
+	var source_floor = game.table.get_node("TableCustomization").shop_floor
+	if source_floor == null:
+		source_floor = game.shop.get_node("%ShopFloor")
+	if is_instance_valid(_floor):
+		_floor.free()
+	_floor = _scene_reader.copy_live(source_floor)
+	_world.add_child(_floor)
+	_floor.position = Vector2.ZERO
+	_floor.show()
 	for source in game.table.find_children("*", "CanvasItem", true, false):
 		var target = _table.get_node_or_null(game.table.get_path_to(source))
 		if not target is CanvasItem:
@@ -259,6 +261,65 @@ func _apply_table_skin() -> void:
 		target.material = source.material.duplicate() if source.material != null else null
 		if target is Sprite2D and source is Sprite2D:
 			target.texture = source.texture
+	var stickers = _table.get_node("StickerLayer")
+	for child in stickers.get_children():
+		child.free()
+	for source in game.table.get_node("StickerLayer").get_children():
+		stickers.add_child(_scene_reader.copy_live(source))
+	for name in ["EndRoundButton", "Pentagram", "graveyard", "Tutorial", "AimReminder"]:
+		_hide_named(_table, name)
+	for control in _table.find_children("*", "Control", true, false):
+		if ClassDB.is_parent_class(control.get_meta("native_type", "Control"), "BaseButton"):
+			control.hide()
+
+
+func _update_table_ui(data: Dictionary) -> void:
+	var global_node = get_node("/root/Global")
+	var required = maxf(data.required_score, 1.0)
+	var score_text: String = global_node.format_number(data.score, 4, 1)
+	var target_text: String = global_node.format_number(required, 4, 1)
+	var score_display = _table.get_node("ScoreDisplay")
+	score_display.get_node("CurrentScore").text = score_text
+	score_display.get_node("TargetScore").text = "/" + target_text
+	score_display.get_node("ScoreFill").material.set_shader_parameter(
+		"percent", data.score / required
+	)
+	score_display.get_node("ScoreFill2").material.set_shader_parameter(
+		"percent", data.score / maxf(required * 10.0, 100.0)
+	)
+	_table.find_child("ScoreLabel", true, false).text = score_text + " / " + target_text
+	_table.find_child("MoneyLabel", true, false).text = global_node.format_number(data.money) + "€"
+	_table.get_node("RoundText").text = tr("UI_ROUND") + " " + str(data.round + 1)
+	var hearts = _table.get_node("hpInfo")
+	hearts.visible = not data.daily
+	_table.find_child("HPPanel", true, false).visible = not data.daily
+	_table.find_child("DailyMedalPanel", true, false).visible = data.daily
+	var index = 0
+	for heart in hearts.get_children():
+		if not heart.has_node("HeartFull"):
+			continue
+		heart.visible = index < data.max_hp
+		var full: bool = index < data.hp
+		heart.get_node("HeartFull").visible = full
+		heart.get_node("HeartLeft").visible = not full
+		heart.get_node("HeartRight").visible = not full
+		heart.get_node("HeartLeft").position = Vector2(-2.5, -2.5)
+		heart.get_node("HeartRight").position = Vector2(2.5, 2.5)
+		heart.modulate.a = 0.75 if full else 0.3
+		index += 1
+	if _shots == data.shots:
+		return
+	_shots = data.shots
+	var holder = _table.get_node("ShotsInfo/PipsHolder")
+	for child in holder.get_children():
+		child.free()
+	holder.position = Vector2(-20.0 * (_shots - 1) * 0.5, 0)
+	for pip_index in _shots:
+		var pip = _scene_reader.create(load("res://ui/shot_pip.tscn"))
+		holder.add_child(pip)
+		pip.position = Vector2(pip_index * 20.0, 0)
+		pip.scale = Vector2.ONE * 0.4
+		pip.material.set_shader_parameter("color", Color.WHITE)
 
 
 func _render_balls(before: Dictionary, after: Dictionary, weight: float) -> void:
@@ -368,7 +429,11 @@ func _update_pockets(data: Dictionary) -> void:
 		pocket.rotation = state.rotation
 		pocket.scale = state.scale
 		pocket.modulate = Color("888888") if state.closed else Color.WHITE
-		pocket.get_node("Label").text = "×" if state.closed else "x%s" % str(state.multiplier)
+		pocket.get_node("Label").text = (
+			"×"
+			if state.closed
+			else "x%s" % get_node("/root/Global").format_number(state.multiplier)
+		)
 		pocket.get_node("ShieldIndicator").visible = state.shielded
 		pocket.get_node("SkullIndicator").visible = state.has_held_balls
 		var extra_score = pocket.find_child("ExtraScore", true, false)
@@ -403,6 +468,8 @@ func _clear_board() -> void:
 	for child in _world.get_children():
 		child.free()
 	_table = null
+	_floor = null
+	_shots = -1
 	_balls.clear()
 	_holes.clear()
 	_frames.clear()

@@ -18,6 +18,8 @@ var failures: Array[String] = []
 var checks: Array[Dictionary] = []
 var screens: Array[Dictionary] = []
 var fixtures: RefCounted
+var round_flow: RefCounted
+var shop_input: Node
 
 
 func _ready():
@@ -55,9 +57,38 @@ func _run():
 	if not _check(mod.multiplayer_balls != null, "ball service loaded"):
 		_finish()
 		return
+	var round_flow_script = load(
+		get_script().resource_path.get_base_dir().path_join("round_flow_fixtures.gd")
+	)
+	if not _check(
+		round_flow_script != null and round_flow_script.can_instantiate(),
+		"compiled round flow fixtures"
+	):
+		_finish()
+		return
+	round_flow = round_flow_script.new()
+	var input_script = load(
+		get_script().resource_path.get_base_dir().path_join("shop_input_fixture.gd")
+	)
+	if not _check(
+		input_script != null and input_script.can_instantiate(), "compiled shop input fixture"
+	):
+		_finish()
+		return
+	shop_input = input_script.new()
+	add_child(shop_input)
+	var snapshot_probe = (
+		load(get_script().resource_path.get_base_dir().path_join("snapshot_probe.gd")).new()
+	)
+	snapshot_probe.embedded = true
+	add_child(snapshot_probe)
+	await snapshot_probe.completed
+	_check(not snapshot_probe.failed, "snapshot_probe: %d checks" % snapshot_probe.checks)
+	snapshot_probe.queue_free()
 	for probe in [
 		"team_vote_probe",
 		"lobby_probe",
+		"router_probe",
 		"controller_probe",
 		"multiplayer_balls_probe",
 		"bounty_probe"
@@ -135,9 +166,10 @@ func _run():
 		await _capture(
 			"20-shared-shop", "Shared shop · native offers and all eight balls in the build"
 		)
-		await fixtures.capture_shop_presence(mod, _capture)
-		_check_shop_purchase()
+		await fixtures.capture_shop_presence(mod, _capture, shop_input)
+		await round_flow.check_host_shop_drag(mod, _capture)
 		await _check_shop_readiness()
+	await round_flow.record_host(mod, _capture)
 	mod.shop_sync.end_session()
 	mod.run_controls.end_session()
 	mod.adapter.end_session()
@@ -166,6 +198,8 @@ func _run():
 	await _capture_guest_shop(snapshot, shop_state)
 	mod.multiplayer_balls.end_session()
 	mod.table_sync.end_guest()
+	for result in await round_flow.replay_guest(mod, _capture):
+		_check(result.passed, result.name)
 	for result in fixtures.checks:
 		_check(result.passed, result.name)
 	_finish()
@@ -207,7 +241,11 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 		if slot.data == "TOGETHER_CALL":
 			inspected_key = slot.key
 			break
-	_check(mod.shop_sync.inspect_slot(inspected_key), "guest shop item can be inspected")
+	shop_input.begin(shop)
+	_check(
+		await round_flow.hover_shop_item(mod, inspected_key),
+		"guest shop item can be inspected by native pointer hover"
+	)
 	var inspected = mod.shop_sync.slot_item(inspected_key)
 	_check(mod.table_sync.apply_snapshot(shopping), "guest accepts repeated shop snapshot")
 	_check(mod.shop_sync.apply_state(shop_state), "guest accepts repeated shop inventory")
@@ -222,11 +260,13 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 		"guest snapshots keep the camera in the shop"
 	)
 	await _capture("51-guest-shop-details", "Guest native shop · inspect a shared ball")
+	shop_input.finish()
 	mod.shop_sync.show_section("snacks")
 	_check(
 		shop.selected_ball == null and shop.selected_passive == null,
 		"changing native shop counter clears inspection"
 	)
+	await round_flow.check_guest_snack_drag(mod, _capture)
 	mod.shop_sync.end_session()
 
 
@@ -248,33 +288,6 @@ func _check_shop():
 		if slot.id != 0 and slot.group == "build" and slot.data.begins_with("TOGETHER_"):
 			multiplayer_ids.append(slot.data)
 	_check(multiplayer_ids.size() == 8, "shop contains all eight multiplayer balls")
-
-
-func _check_shop_purchase():
-	var sync = mod.shop_sync
-	var state: Dictionary = sync.capture()
-	var offer: Dictionary = {}
-	var empty: Dictionary = {}
-	for slot in state.slots:
-		if slot.group == "offer" and slot.id != 0:
-			offer = slot
-		if slot.group == "build" and slot.id == 0:
-			empty = slot
-	if not _check(not offer.is_empty() and not empty.is_empty(), "shop purchase fixture available"):
-		return
-	var purchase = {
-		"action": "move",
-		"revision": state.revision,
-		"source": offer.key,
-		"item_id": offer.id,
-		"target": empty.key,
-		"target_id": 0
-	}
-	_check(sync.handle_request(purchase, 1), "shared shop accepts occupied offer purchase")
-	var purchased: Dictionary = sync.capture()
-	_check(purchased.revision > state.revision, "purchase advances shop revision")
-	_check(not sync.handle_request(purchase, 1), "duplicate purchase rejected")
-	_check(sync.capture().money == purchased.money, "duplicate purchase preserves money")
 
 
 func _check_shop_readiness():
@@ -400,6 +413,12 @@ func _capture(label: String, caption: String = ""):
 		}
 	)
 	print("RENDER_CAPTURE ", label, " ", image.get_size())
+
+
+func abort_input(input_checks: Array):
+	for result in input_checks:
+		_check(result.passed, result.name)
+	_finish()
 
 
 func _wait(condition: Callable) -> bool:

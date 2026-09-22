@@ -1,5 +1,7 @@
 extends "res://Game.gd"
 
+const PlayerInventory = preload("player_inventory_sync.gd")
+
 var remote_ready = false
 var remote_shots = 0
 var remote_required_score = 1.0
@@ -9,9 +11,29 @@ var remote_rotated = false
 var replicas: Dictionary = {}
 var pocket_replicas: Dictionary = {}
 var corrections: Dictionary = {}
+var remote_round_reward = 0.0
+var _inventory_state: Dictionary = {}
 
 
 func prepare_scene() -> void:
+	var floating_ui = get_node("UI/FloatingUI")
+	floating_ui.get_parent().remove_child(floating_ui)
+	var native_shop = get_node("UI/Shop")
+	var source_floor: Sprite2D = native_shop.get_node("%ShopFloor")
+	var floor_target: Sprite2D = source_floor.duplicate()
+	var floor_transform = source_floor.transform
+	var floor_parent = source_floor.get_parent()
+	while floor_parent != self:
+		if floor_parent is Node2D:
+			floor_transform = floor_parent.transform * floor_transform
+		floor_parent = floor_parent.get_parent()
+	floor_target.transform = floor_transform
+	var posters = native_shop.posters
+	native_shop.get_parent().remove_child(native_shop)
+	native_shop.set_script(
+		load(get_script().resource_path.get_base_dir().path_join("native_shop.gd"))
+	)
+	native_shop.posters = posters
 	var cameras = find_children("*", "Camera2D", true, false)
 	var camera = cameras[0] if not cameras.is_empty() else null
 	if camera != null:
@@ -27,9 +49,9 @@ func prepare_scene() -> void:
 	var ui = Node2D.new()
 	ui.name = "UI"
 	add_child(ui)
-	var empty_shop = Node2D.new()
-	empty_shop.name = "Shop"
-	ui.add_child(empty_shop)
+	ui.add_child(floating_ui)
+	ui.add_child(floor_target)
+	ui.add_child(native_shop)
 	var holder = Node2D.new()
 	holder.name = "Balls"
 	add_child(holder)
@@ -38,11 +60,7 @@ func prepare_scene() -> void:
 func _ready() -> void:
 	Global.gameManager = self
 	table = (table_rotated_scene if remote_rotated else table_scene).instantiate()
-	# Native customization expects a shop floor even though the guest has no shop.
-	var floor_target = Sprite2D.new()
-	floor_target.visible = false
-	table.add_child(floor_target)
-	table.get_node("TableCustomization").shop_floor = floor_target
+	table.get_node("TableCustomization").shop_floor = get_node("UI/ShopFloor")
 	add_child(table)
 	table.position = Vector2.ZERO
 	base_pockets = table.get_pockets().duplicate()
@@ -53,6 +71,7 @@ func _ready() -> void:
 	table.score_display_diamond.set_process(true)
 	table.shots_info.set_process(true)
 	table.hide_end_round()
+	table.get_graveyard()._process(0.0)
 	playing = false
 	balls_spawned = true
 
@@ -113,17 +132,30 @@ func apply_table(data: Dictionary) -> void:
 	in_shop = data.in_shop
 	round_ended = data.round_ended
 	game_ended = data.game_over
+	var result: Dictionary = data.results
+	round_won = result.won
+	score_this_round = result.score
+	extra_money_earned = result.bonus_money
+	money_last_round = result.money_before
+	remote_round_reward = result.round_reward
+	balls_pocketed = result.balls_pocketed
+	money_earned = result.money_earned
+	game_time = result.game_time
+	get_node("UI/FloatingUI").show_time(game_time)
 	score = data.score
 	player_info.money = data.money
 	player_info.hp = data.hp
+	if _inventory_state != data.inventory:
+		PlayerInventory.apply(player_info, data.inventory, BallDatabase)
+		_inventory_state = data.inventory.duplicate(true)
 	table.global_position = data.table_position
-	if data.in_shop and is_instance_valid(shop) and shop.has_method("get_camera_target"):
+	if is_instance_valid(shop) and shop.has_method("apply_state") and shop.is_open:
 		Global.camera.move(shop.get_camera_target())
 	else:
 		Global.camera.move(data.table_position)
 	table.update_score_display(score, maxf(remote_required_score, 1.0))
 	table.update_money(data.money)
-	table.update_round_text(str(data.round + 1))
+	table.update_round_text(tr("UI_ROUND") + " " + str(data.round + 1))
 	table.get_hp_info().display_hp(data.hp, data.max_hp, true)
 	_update_shots(data.shots)
 	_update_pockets(data.pockets)
@@ -330,7 +362,14 @@ func _disable_gameplay(node: Node) -> void:
 
 
 func can_shoot():
-	return remote_ready and not in_menu and not in_shop and not round_ended and not game_ended
+	return (
+		remote_ready
+		and not in_menu
+		and not in_shop
+		and not round_ended
+		and not game_ended
+		and not UIManager.is_popup_open()
+	)
 
 
 func has_shots():
@@ -343,6 +382,10 @@ func get_shots_left():
 
 func get_required_score():
 	return remote_required_score
+
+
+func get_round_win_reward():
+	return remote_round_reward
 
 
 func get_max_hp():

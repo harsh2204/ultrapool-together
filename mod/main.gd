@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.6.0"
+const VERSION = "0.7.0"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 
@@ -48,6 +48,8 @@ var snapshot_id = 0
 var last_guest_snapshot = 0
 var last_started_turn = -1
 var last_shop_state: Dictionary = {}
+var _last_phase: Array = []
+var _guest_phase: Array = []
 var roster_time = 0.0
 var saw_table = false
 var _suspended_menu: Node
@@ -62,10 +64,12 @@ var _watch_snapshots: Dictionary = {}
 var _watch_states: Dictionary = {}
 var _watched_snapshot = -1
 var _starting_players: Array = []
+var _native_ui: Node
 
 
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_native_ui = get_node("/root/UIManager")
 	var base = get_script().resource_path.get_base_dir()
 	lobby_model = load(base.path_join("lobby_state.gd")).new()
 	router = load(base.path_join("table_router.gd")).new()
@@ -256,7 +260,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.6 and a new UP6 room code.")
+		_status("Could not join. Everyone needs v0.7 and a new UP7 room code.")
 	_render_lobby()
 
 
@@ -481,10 +485,12 @@ func _begin_table(config: Dictionary):
 	saw_table = false
 	latest_state.clear()
 	last_shop_state.clear()
+	_last_phase.clear()
+	_guest_phase.clear()
 	presence.clear()
 	active = true
 	multiplayer_balls.begin_session()
-	if not is_table_host() and not table_sync.begin_guest():
+	if not is_table_host() and not table_sync.begin_guest(config):
 		_match_failed("Could not create the table view. Return to the main menu and try again.")
 		return
 	adapter.begin_session(self)
@@ -548,6 +554,8 @@ func _end_table():
 	awaiting_shot_turn = -1
 	latest_state.clear()
 	last_shop_state.clear()
+	_last_phase.clear()
+	_guest_phase.clear()
 	table_id = -1
 	table_leader_id = 0
 	if return_native:
@@ -865,6 +873,7 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 	shot_pending = true
 	settle_time = 0.0
 	elapsed_shot = 0.0
+	_publish_state()
 	snapshot_id += 1
 	_table_send(
 		{
@@ -875,7 +884,6 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 			"scene": starting_table
 		}
 	)
-	_publish_state()
 	return true
 
 
@@ -939,9 +947,14 @@ func _pass(player: int, expected_turn: int) -> bool:
 
 
 func _update_hud():
+	var watching = is_spectating()
+	var popup_open = _native_ui != null and _native_ui.is_popup_open()
+	turn_label.visible = not watching and not popup_open
+	score_label.visible = not watching and not popup_open
 	pass_button.visible = (
 		active
 		and not is_spectating()
+		and not popup_open
 		and _members(table_id).size() > 1
 		and not finished
 		and not latest_state.get("in_shop", false)
@@ -1040,19 +1053,34 @@ func _publish_state(target: int = 0):
 	)
 	_table_send(latest_state, target)
 	var shop_state = shop_sync.capture()
+	var phase = [
+		latest_state.get("available", false),
+		latest_state.get("round", 0),
+		latest_state.get("rounds_played", 0),
+		latest_state.get("in_shop", false),
+		latest_state.get("game_over", false),
+		latest_state.get("round_result_open", false),
+		shop_state.get("open", false),
+		shop_state.get("scene", 0)
+	]
+	if target != 0 or phase != _last_phase:
+		if target == 0:
+			_last_phase = phase
+		_publish_snapshot(true, target, shop_state)
 	if target != 0 or shop_state != last_shop_state:
 		if target == 0:
 			last_shop_state = shop_state.duplicate(true)
 		_table_send({"kind": "shop_state", "shop": shop_state}, target)
 
 
-func _publish_snapshot(reliable: bool = false, target: int = 0):
+func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary = {}):
 	if not active or not is_table_host() or not adapter.game_data().available:
 		return
 	snapshot_id += 1
-	_table_send(
-		{"kind": "snapshot", "id": snapshot_id, "scene": table_sync.capture()}, target, reliable
-	)
+	var message = {"kind": "snapshot", "id": snapshot_id, "scene": table_sync.capture()}
+	if not shop.is_empty():
+		message["shop"] = shop
+	_table_send(message, target, reliable)
 
 
 func _shop_request(message: Dictionary):
@@ -1243,7 +1271,14 @@ func _received_table(actor: int, message: Dictionary):
 			multiplayer_balls.prepare_shop()
 			var accepted = not finished and shop_sync.handle_request(message, actor)
 			_table_send(
-				{"kind": "shop_result", "accepted": accepted, "error": shop_sync.last_error}, actor
+				{
+					"kind": "shop_result",
+					"accepted": accepted,
+					"error": shop_sync.last_error,
+					"request_id": message.get("request_id", 0),
+					"shop": shop_sync.capture()
+				},
+				actor
 			)
 			_publish_state()
 		elif kind == "ball_call":
@@ -1251,12 +1286,17 @@ func _received_table(actor: int, message: Dictionary):
 			_publish_state()
 		elif kind == "sync_request":
 			_publish_state(actor)
-			_publish_snapshot(true, actor)
 		return
 	if actor != table_leader_id:
 		return
-	if kind == "shop_result" and message.get("accepted") is bool and message.get("error") is String:
-		shop_sync.apply_result(message.accepted, message.error)
+	if (
+		kind == "shop_result"
+		and message.get("accepted") is bool
+		and message.get("error") is String
+		and message.get("request_id") is int
+		and message.get("shop") is Dictionary
+	):
+		shop_sync.apply_result(message.accepted, message.error, message.request_id, message.shop)
 	elif kind == "shop_state" and message.get("shop") is Dictionary:
 		if not shop_sync.apply_state(message.shop):
 			_bad_table("shop")
@@ -1271,13 +1311,18 @@ func _received_table(actor: int, message: Dictionary):
 		and message.vector.length() <= 200.1
 		and message.get("scene") is Dictionary
 	):
-		last_started_turn = message.turn
 		if message.id > last_guest_snapshot:
+			if not table_sync._valid_snapshot(message.scene):
+				_bad_table("shot")
+				return
+			if _snapshot_phase(message.scene) != _guest_phase:
+				return
 			if not table_sync.apply_snapshot(message.scene):
 				_bad_table("shot")
 				return
 			last_guest_snapshot = message.id
 			table_sync.begin_shot(message.vector)
+		last_started_turn = message.turn
 	elif kind == "state" and _valid_state(message, table_id):
 		multiplayer_balls.apply_state(message.multiplayer_balls)
 		latest_state = message
@@ -1302,10 +1347,28 @@ func _received_table(actor: int, message: Dictionary):
 		and message.id > last_guest_snapshot
 		and message.get("scene") is Dictionary
 	):
+		if not table_sync._valid_snapshot(message.scene):
+			_bad_table("table")
+			return
+		var phase = _snapshot_phase(message.scene)
+		# Ball updates must wait for the reliable scene transition.
+		if not message.has("shop") and phase != _guest_phase:
+			return
 		if not table_sync.apply_snapshot(message.scene):
 			_bad_table("table")
 			return
+		if message.has("shop"):
+			if not message.shop is Dictionary or not shop_sync.apply_state(message.shop):
+				_bad_table("shop")
+				return
+			_guest_phase = phase
 		last_guest_snapshot = message.id
+
+
+func _snapshot_phase(scene: Dictionary) -> Array:
+	if not scene.available:
+		return [false]
+	return [scene.scene_id, scene.rounds_played, scene.rotated, scene.results.phase]
 
 
 func _bad_table(part: String):

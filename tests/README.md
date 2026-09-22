@@ -29,7 +29,9 @@ These scripts extend `SceneTree` and require a Godot 4.6 executable with `--scri
 | `router_probe.gd` | Authenticated actor identity, requests to the correct table leader, table-isolated broadcasts and replies, reliable actions, disconnected members, and malformed routes. | `ROUTER_PROBE PASS` |
 | `controller_probe.gd` | Main controller lifecycle using off-tree service substitutes: identity teardown, room/match generations, terminal leader disconnects and reconnects, a run closing during a shot, and targeted shop synchronization preserving the broadcast cache. | `CONTROLLER_PROBE PASS` |
 
-Each script exits 0 on success. The controller probe creates no native game scenes or network connections. It also covers Race versus Score PvP caps, authenticated race results, finish ordering, return-vote generations, startup failure handling, and spectator routing. The screenshot harness runs all model probes in this table except the router probe inside its existing game process.
+Each script exits 0 on success. The controller probe creates no native game scenes or network connections. It also covers Race versus Score PvP caps, authenticated race results, finish ordering, return-vote generations, startup failure handling, and spectator routing. The screenshot harness runs all model probes in this table inside its existing game process.
+
+The harness also records and replays native host/client round transitions, including delayed shop acknowledgements, packet reordering, payout, victory, defeat, and teardown. The [game-loop coverage matrix](GAME_LOOP.md) separates runtime assertions, model checks, and remaining multi-PC coverage.
 
 ## Native game probes
 
@@ -60,7 +62,7 @@ Launch the test executable from its own directory and capture stdout and stderr.
 
 The adapter probe starts a classic run and exercises the native aiming hook, unchanged mouse/controller bindings, off-turn drag and precise-confirmation rejection, cue state preservation, shot consumption and settling, round-end cash-out, a paused result popup, and restoration of the original player script.
 
-The snapshot probe covers malformed values, duplicate identities, resource-path injection, base pockets, and dynamic holes. It validates packet handling; it does not prove that guest visuals or ball movement are correct.
+The snapshot probe covers malformed values, duplicate identities, resource-path injection, base pockets, dynamic holes, round results, and complete native inventory reconstruction. It also runs inside the screenshot harness. It validates packet handling; it does not prove that guest visuals or ball movement are correct.
 
 The shop probe needs this additional autoload before `ShopProbe`:
 
