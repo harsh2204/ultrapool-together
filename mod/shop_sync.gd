@@ -102,8 +102,16 @@ func presence_target() -> String:
 	return _slot_key(_view.get_hovered_slot())
 
 
+static func presence_slot_key(group: String, index: int) -> String:
+	return "%s:%d" % [group, index]
+
+
+static func presence_target_resolves(slots: Dictionary, key: String, panel_visible: bool) -> bool:
+	return panel_visible and not key.is_empty() and slots.has(key)
+
+
 func presence_target_position(key: String) -> Vector2:
-	if not _view_slots.has(key) or not _panel.visible:
+	if not presence_target_resolves(_view_slots, key, _panel.visible):
 		return Vector2(INF, INF)
 	var slot = _view_slots[key]
 	var position = slot_screen_position(key)
@@ -836,11 +844,13 @@ func _ensure_view() -> bool:
 			_guest_view.set_floor(floor_target.texture)
 			global_node.camera.move(_guest_view.get_camera_target())
 		_view = _guest_view
-		if _state.slots.size() != _guest_view.remote_slots.size():
+		# Host slot layout is authoritative. Guest remote_slots are built in replica
+		# _ready() before apply_table syncs inventory, so counts often mismatch until
+		# ensure_remote_layout() rebuilds against the shared player_info.
+		if not _guest_view.ensure_remote_layout(_state.slots):
+			# Leave _view unset so _process retries after the next inventory snapshot.
+			_view = null
 			return false
-		for slot in _state.slots:
-			if not _guest_view.remote_slots.has(slot.key):
-				return false
 		_guest_view.apply_state(_state)
 	if not is_instance_valid(_view):
 		return false
@@ -859,7 +869,7 @@ func _ensure_view() -> bool:
 	_view_slots.clear()
 	for group in groups:
 		for index in groups[group].size():
-			_view_slots["%s:%d" % [group, index]] = groups[group][index]
+			_view_slots[presence_slot_key(group, index)] = groups[group][index]
 	return true
 
 

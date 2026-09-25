@@ -88,8 +88,10 @@ func _run():
 	for probe in [
 		"team_vote_probe",
 		"lobby_probe",
+		"presence_probe",
 		"router_probe",
 		"controller_probe",
+		"shop_layout_probe",
 		"multiplayer_balls_probe",
 		"bounty_probe"
 	]:
@@ -218,6 +220,23 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 	await get_tree().create_timer(1.0).timeout
 	var game = get_node("/root/Global").gameManager
 	var shop = mod.shop_sync.native_shop()
+	_check(
+		(
+			is_instance_valid(shop)
+			and shop.is_open
+			and shop.is_visible_in_tree()
+			and mod.shop_sync.is_open()
+			and mod.shop_sync._panel.visible
+		),
+		"guest native shop opens from shared shop_state"
+	)
+	_check(
+		(
+			is_instance_valid(shop)
+			and shop.remote_slots_cover(shop.remote_slots, shop_state.slots)
+		),
+		"guest remote slots cover the host shop layout"
+	)
 	_check(
 		(
 			shop.get_node("%ShopFloor").texture

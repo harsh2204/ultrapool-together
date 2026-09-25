@@ -709,6 +709,20 @@ func player_table(id: int) -> int:
 	return -1
 
 
+func player_color(id: int) -> Color:
+	var ui = (
+		panel.get_script()
+		if is_instance_valid(panel)
+		else load(get_script().resource_path.get_base_dir().path_join("lobby_scene.gd"))
+	)
+	for player in lobby.get("players", []):
+		if player.id == id:
+			return ui.player_color_for(
+				int(player.get("table", -1)), int(player.get("slot", -1)), id
+			)
+	return ui.player_color_for(-1, -1, id)
+
+
 func _members(table: int, connected_only: bool = true) -> Array:
 	var members: Array = []
 	for player in lobby.get("players", []):

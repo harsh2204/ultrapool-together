@@ -191,7 +191,7 @@ func _draw_cursor(canvas: Control, id: int, remote: Dictionary) -> void:
 	var message: Dictionary = remote.message
 	var position: Vector2
 	var shop_rect: Rect2 = _shop.presence_rect()
-	var color = Color.from_hsv(posmod(hash(str(id)), 360) / 360.0, 0.55, 1.0)
+	var color: Color = _controller.player_color(id)
 	color.a = clampf((STALE_SECONDS - remote.age) / 0.4, 0.0, 1.0)
 	if message.space == "shop":
 		if not shop_rect.has_area():
@@ -199,9 +199,8 @@ func _draw_cursor(canvas: Control, id: int, remote: Dictionary) -> void:
 		position = shop_rect.position + remote.position * shop_rect.size
 		if not message.target.is_empty():
 			var target: Vector2 = _shop.presence_target_position(message.target)
-			if not target.is_finite():
-				return
-			position = target
+			if target.is_finite():
+				position = target
 	else:
 		if shop_rect.has_area():
 			return
