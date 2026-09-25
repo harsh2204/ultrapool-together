@@ -31,6 +31,13 @@ const TABLE_COLORS = [
 	Color("c9b394")
 ]
 
+
+static func player_color_for(table: int, slot: int, id: int = 0) -> Color:
+	if table >= 0 and slot >= 0:
+		return TABLE_COLORS[slot % TABLE_COLORS.size()]
+	return Color.from_hsv(posmod(hash(str(id)), 360) / 360.0, 0.55, 1.0)
+
+
 var _state: Dictionary = {}
 var _local_id = 0
 var _is_host = false
@@ -286,7 +293,9 @@ func _build_tables():
 		var occupied: Array = []
 		for player in table_players:
 			occupied.append(player.slot)
-			players.add_child(_player_row(player, color))
+			players.add_child(
+				_player_row(player, player_color_for(player.table, player.slot, player.id))
+			)
 		if _state.get("started", false):
 			_add_watch_button(content, table_id, summary)
 			continue
@@ -434,7 +443,7 @@ func _build_bench():
 		if player.table >= 0:
 			continue
 		unassigned += 1
-		var row = _player_row(player, GOLD)
+		var row = _player_row(player, player_color_for(player.table, player.slot, player.id))
 		row.custom_minimum_size.x = 220
 		%Unassigned.add_child(row)
 	%Bench.visible = unassigned > 0

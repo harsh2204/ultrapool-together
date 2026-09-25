@@ -4,6 +4,8 @@ Syntax checks do not verify engine types or gameplay. Follow [AGENTS.md](../AGEN
 
 For authorized visual tests, run `Capture-Screens.cmd` from the repository root. The [screenshot harness](../docs/screenshots.md) builds repeatable fixtures, checks native textures and shop actions, and saves an HTML gallery with logs and check results. It uses one windowed game process and separate test saves.
 
+For authorized same-PC host+guest play over LAN loopback (not Steam), see [LOCAL_SESSION.md](LOCAL_SESSION.md) and run `Test-LocalSession.cmd` from the repository root. It starts two isolated windowed processes and leaves them open for manual testing.
+
 ## Checks that do not launch the game
 
 Installer boundary tests use fake executable fixtures:
@@ -28,6 +30,7 @@ These scripts extend `SceneTree` and require a Godot 4.6 executable with `--scri
 | `lobby_probe.gd` | Eight-player capacity, self-selected seats, readiness invalidation, host-only settings, unequal table groups, equal shots per table, start/reset, reserved disconnected seats, and leader selection. | `LOBBY_PROBE PASS` |
 | `router_probe.gd` | Authenticated actor identity, requests to the correct table leader, table-isolated broadcasts and replies, reliable actions, disconnected members, and malformed routes. | `ROUTER_PROBE PASS` |
 | `controller_probe.gd` | Main controller lifecycle using off-tree service substitutes: identity teardown, room/match generations, terminal leader disconnects and reconnects, a run closing during a shot, and targeted shop synchronization preserving the broadcast cache. | `CONTROLLER_PROBE PASS` |
+| `shop_layout_probe.gd` | Guest remote-slot coverage for host-authoritative shop layouts, including stale pre-inventory replicas and extra local unlock slots. | `SHOP_LAYOUT_PROBE PASS` |
 
 Each script exits 0 on success. The controller probe creates no native game scenes or network connections. It also covers Race versus Score PvP caps, authenticated race results, finish ordering, return-vote generations, startup failure handling, and spectator routing. The screenshot harness runs all model probes in this table inside its existing game process.
 
@@ -75,6 +78,8 @@ It opens a native shop under a table-host controller substitute, buys and rearra
 See [TRANSPORT.md](TRANSPORT.md) for the eight-peer loopback transport probe and optional Steam room check.
 
 ## Two-process session flow
+
+For manual same-PC play without Steam, prefer `Test-LocalSession.cmd` ([LOCAL_SESSION.md](LOCAL_SESSION.md)). The automated probe below still exits on its own after scripted checks.
 
 Create two separate private runtime directories. The host's override is:
 

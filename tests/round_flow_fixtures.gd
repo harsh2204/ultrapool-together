@@ -369,6 +369,10 @@ func replay_guest(mod: Node, capture: Callable) -> Array[Dictionary]:
 			"round flow: shop belongs to the current guest scene"
 		)
 		_check(
+			shop.is_open and shop.remote_slots_cover(shop.remote_slots, mod.shop_sync._state.slots),
+			"round flow: guest remote slots cover the shared shop layout"
+		)
+		_check(
 			global_node.camera.move_position == shop.get_camera_target(),
 			"round flow: guest camera reaches native shop"
 		)

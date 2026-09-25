@@ -17,16 +17,7 @@ func _ready() -> void:
 	passive_dropped.connect(tapas_bar._on_passive_dropped)
 	get_viewport().size_changed.connect(update_shop_positions)
 	update_shop_positions()
-	var groups = {
-		"offer": shop_slots,
-		"build": get_inventory_slots(),
-		"snack": tapas_bar.slots,
-		"passive": get_passive_slots(),
-		"mix": [cocktail_bar.slot_left, cocktail_bar.slot_right, cocktail_bar.slot_center]
-	}
-	for group in groups:
-		for index in groups[group].size():
-			remote_slots["%s:%d" % [group, index]] = groups[group][index]
+	rebuild_remote_slots()
 	is_open = false
 	moving_time = -1.0
 	girl.react_none()
@@ -37,6 +28,40 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	moving_time = maxf(-1.0, moving_time - delta)
 	camera.position.x = lerpf(camera.position.x, target_camera_x, minf(delta * 12.0, 1.0))
+
+
+static func remote_slots_cover(slots: Dictionary, entries: Array) -> bool:
+	for entry in entries:
+		if not entry is Dictionary or not slots.has(entry.get("key", "")):
+			return false
+	return true
+
+
+func rebuild_remote_slots() -> void:
+	remote_slots.clear()
+	var groups = {
+		"offer": shop_slots,
+		"build": get_inventory_slots(),
+		"snack": tapas_bar.slots,
+		"passive": get_passive_slots(),
+		"mix": [cocktail_bar.slot_left, cocktail_bar.slot_right, cocktail_bar.slot_center]
+	}
+	for group in groups:
+		for index in groups[group].size():
+			remote_slots["%s:%d" % [group, index]] = groups[group][index]
+
+
+func ensure_remote_layout(entries: Array) -> bool:
+	if remote_slots_cover(remote_slots, entries):
+		return true
+	# Replica _ready() often runs before the host inventory snapshot arrives, so rebuild
+	# once player_info matches the shared run. Avoid rebuilding under live remote items.
+	if not remote_items.is_empty():
+		return false
+	inventory.setup()
+	shop_slots = %ShopSlots.get_children()
+	rebuild_remote_slots()
+	return remote_slots_cover(remote_slots, entries)
 
 
 func apply_state(data: Dictionary) -> void:
