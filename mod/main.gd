@@ -786,8 +786,18 @@ func _members(table: int, connected_only: bool = true) -> Array:
 
 
 func _leader(table: int) -> int:
+	for entry in lobby.get("table_leaders", []):
+		if entry.table == table:
+			return entry.id
 	var members = _members(table, false)
 	return members[0].id if not members.is_empty() else 0
+
+
+func _leader_epoch(table: int) -> int:
+	for entry in lobby.get("table_leaders", []):
+		if entry.table == table:
+			return entry.epoch
+	return 0
 
 
 func _player_name(id: int) -> String:
@@ -1172,6 +1182,7 @@ func _table_send(payload: Dictionary, target: int = 0, reliable: bool = true):
 		"kind": "table",
 		"match": match_id,
 		"table": table_id,
+		"epoch": _leader_epoch(table_id),
 		"payload": payload,
 		"reliable": reliable
 	}
@@ -1201,6 +1212,7 @@ func _route_table(actor: int, envelope: Dictionary):
 		"kind": "table",
 		"match": match_id,
 		"table": routed.table,
+		"epoch": routed.epoch,
 		"actor": actor,
 		"payload": payload
 	}
@@ -1320,6 +1332,7 @@ func _received(sender: int, message: Dictionary):
 				active
 				and message.get("match") == match_id
 				and message.get("table") == table_id
+				and message.get("epoch") == _leader_epoch(table_id)
 				and message.get("actor") is int
 				and message.get("payload") is Dictionary
 			):

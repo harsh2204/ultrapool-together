@@ -974,7 +974,8 @@ func _setup(id: int):
 		[
 			{"id": 1, "name": "Host", "table": 0, "slot": 0, "connected": true},
 			{"id": 2, "name": "Guest", "table": 0, "slot": 1, "connected": true}
-		]
+		],
+		"table_leaders": [{"table": 0, "id": 1, "epoch": 1}]
 	}
 	_mod._set_panel(false)
 
@@ -1010,6 +1011,7 @@ func _deliver_request(actor: int, request: Dictionary):
 		"kind": "table",
 		"match": _mod.match_id,
 		"table": _mod.table_id,
+		"epoch": _mod._leader_epoch(_mod.table_id),
 		"actor": actor,
 		"payload": request,
 		"reliable": true

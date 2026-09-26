@@ -26,10 +26,12 @@ func route(roster: Dictionary, actor: int, envelope: Dictionary) -> Dictionary:
 	var kind = payload.get("kind")
 	if kind not in REQUESTS and kind not in BROADCASTS and kind not in RESULTS:
 		return {}
+	var authority = _table_leader(roster, envelope.table)
+	if authority.is_empty():
+		return {}
+	var leader: int = authority.id
 	var members: Dictionary = {}
 	var occupied: Dictionary = {}
-	var leader = 0
-	var first_slot = 8
 	for player in roster.players:
 		if not player is Dictionary or not player.get("table") is int:
 			return {}
@@ -48,10 +50,7 @@ func route(roster: Dictionary, actor: int, envelope: Dictionary) -> Dictionary:
 			return {}
 		members[player.id] = player
 		occupied[player.slot] = true
-		if player.slot < first_slot:
-			first_slot = player.slot
-			leader = player.id
-	if not members.has(actor) or not members[actor].connected:
+	if not members.has(leader) or not members.has(actor) or not members[actor].connected:
 		return {}
 	var target = 0
 	if envelope.has("target"):
@@ -68,7 +67,7 @@ func route(roster: Dictionary, actor: int, envelope: Dictionary) -> Dictionary:
 			return {}
 		recipients.append(leader)
 	else:
-		if actor != leader:
+		if actor != leader or envelope.get("epoch") != authority.epoch:
 			return {}
 		if kind in RESULTS:
 			if target == 0:
@@ -86,5 +85,28 @@ func route(roster: Dictionary, actor: int, envelope: Dictionary) -> Dictionary:
 		"payload": payload.duplicate(true),
 		"actor": actor,
 		"table": envelope.table,
+		"epoch": authority.epoch,
 		"unreliable": kind == "snapshot" and not envelope.get("reliable", true)
 	}
+
+
+func _table_leader(roster: Dictionary, table: int) -> Dictionary:
+	var leaders = roster.get("table_leaders")
+	if not leaders is Array or leaders.size() > 8:
+		return {}
+	var found: Dictionary = {}
+	for entry in leaders:
+		if (
+			not entry is Dictionary
+			or not entry.get("table") is int
+			or not entry.get("id") is int
+			or entry.id <= 0
+			or not entry.get("epoch") is int
+			or entry.epoch < 1
+		):
+			return {}
+		if entry.table == table:
+			if not found.is_empty():
+				return {}
+			found = entry
+	return found

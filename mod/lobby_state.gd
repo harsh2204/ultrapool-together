@@ -21,6 +21,8 @@ var _run_options: Dictionary = {}
 var _run_defaults: Dictionary = {}
 var _run_catalog_revision = 0
 var _frozen_selection: Dictionary = {}
+# Started tables keep their authority here; epochs fence a replaced leader's traffic.
+var _table_leaders: Dictionary = {}
 
 
 func setup(id: int, player_name: String) -> bool:
@@ -49,6 +51,7 @@ func clear() -> void:
 	_run_defaults.clear()
 	_run_catalog_revision = 0
 	_frozen_selection.clear()
+	_table_leaders.clear()
 	_clear_return_vote()
 
 
@@ -311,9 +314,36 @@ func start(sender: int) -> bool:
 	if not can_start():
 		return _reject("Every player must choose a seat and ready up, with someone at each table.")
 	_frozen_selection = resolved_run_selection()
+	_table_leaders.clear()
+	for table in range(table_count):
+		_table_leaders[table] = {"id": _first_seated(table), "epoch": 1}
 	started = true
 	_changed()
 	return true
+
+
+func promote_leader(sender: int, table: int, successor: int) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the room host can hand over a table.")
+	if not started or not _table_leaders.has(table):
+		return _reject("There is no active table to hand over.")
+	var leader: Dictionary = _table_leaders[table]
+	if leader.id == successor:
+		last_error = ""
+		return true
+	if _players.has(leader.id) and _players[leader.id].connected:
+		return _reject("The table host is still connected.")
+	var player: Dictionary = _players.get(successor, {})
+	if player.is_empty() or player.table != table or not player.connected:
+		return _reject("Choose a connected player seated at that table.")
+	leader.id = successor
+	leader.epoch += 1
+	_changed()
+	return true
+
+
+func leader_epoch(table: int) -> int:
+	return _table_leaders.get(table, {}).get("epoch", 0)
 
 
 func request_return(sender: int) -> bool:
@@ -352,6 +382,7 @@ func reset_lobby(sender: int, match_complete: bool = false) -> bool:
 		return _reject("Everyone still connected must approve ending the match.")
 	started = false
 	_frozen_selection.clear()
+	_table_leaders.clear()
 	_clear_return_vote()
 	for id in _players.keys():
 		if not _players[id].connected:
@@ -380,7 +411,8 @@ func snapshot() -> Dictionary:
 		"capacity": CAPACITY,
 		"started": started,
 		"can_start": can_start(),
-		"players": players
+		"players": players,
+		"table_leaders": _table_leader_snapshot()
 	}
 
 
@@ -396,8 +428,28 @@ func members_for_table(table: int) -> Array:
 
 
 func leader_for_table(table: int) -> int:
+	if started and _table_leaders.has(table):
+		return _table_leaders[table].id
+	return _first_seated(table)
+
+
+func _first_seated(table: int) -> int:
 	var members = members_for_table(table)
 	return members[0].id if not members.is_empty() else 0
+
+
+func _table_leader_snapshot() -> Array:
+	var leaders: Array = []
+	for table in range(table_count):
+		if _table_leaders.has(table):
+			leaders.append(
+				{
+					"table": table,
+					"id": _table_leaders[table].id,
+					"epoch": _table_leaders[table].epoch
+				}
+			)
+	return leaders
 
 
 func _player(id: int, player_name: String) -> Dictionary:

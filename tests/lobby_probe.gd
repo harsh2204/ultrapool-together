@@ -180,6 +180,7 @@ func _initialize() -> void:
 	_check(_find(uneven, 40).connected, "membership helper cannot mutate the authoritative roster")
 	_check_return_votes(model_script)
 	_check_run_votes(model_script)
+	_check_table_leaders(model_script)
 	print("LOBBY_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
@@ -393,6 +394,72 @@ func _check_run_votes(model_script) -> void:
 		"old generation cannot vote after refresh"
 	)
 	_check(lobby.snapshot().run_vote.counts.deck.is_empty(), "new catalog requires fresh ballots")
+
+
+func _check_table_leaders(model_script) -> void:
+	var lobby = model_script.new()
+	lobby.setup(10, "Host")
+	_configure(lobby)
+	for id in [20, 30, 40]:
+		lobby.add_player(id, "Player %d" % id)
+	lobby.set_table_count(10, 2)
+	lobby.choose_slot(20, 1, 0)
+	lobby.choose_slot(30, 1, 1)
+	lobby.choose_slot(40, 0, 1)
+	_check(
+		lobby.snapshot().table_leaders.is_empty(), "pre-match lobby publishes no table authority"
+	)
+	_ready_all(lobby)
+	lobby.start(10)
+	_check(
+		(
+			lobby.snapshot().table_leaders
+			== [{"table": 0, "id": 10, "epoch": 1}, {"table": 1, "id": 20, "epoch": 1}]
+		),
+		"match start records each table's first-seat leader at epoch one"
+	)
+	_check(not lobby.promote_leader(10, 1, 30), "connected leader cannot be replaced")
+	lobby.remove_player(20)
+	_check(not lobby.promote_leader(30, 1, 30), "only the room host can hand over a table")
+	_check(not lobby.promote_leader(10, 1, 999), "unknown successor is rejected")
+	_check(not lobby.promote_leader(10, 1, 40), "successor must sit at the handed-over table")
+	_check(not lobby.promote_leader(10, 2, 30), "nonexistent table cannot be handed over")
+	var revision: int = lobby.revision
+	_check(lobby.promote_leader(10, 1, 30), "connected teammate replaces a disconnected leader")
+	_check(
+		lobby.leader_for_table(1) == 30 and lobby.leader_epoch(1) == 2,
+		"handover advances the table epoch"
+	)
+	_check(lobby.revision > revision, "handover publishes a new lobby revision")
+	_check(
+		_find(lobby, 30).leader and not _find(lobby, 20).leader,
+		"snapshot badges the promoted leader"
+	)
+	_check(
+		lobby.promote_leader(10, 1, 30) and lobby.leader_epoch(1) == 2,
+		"repeated handover to the same leader keeps its epoch"
+	)
+	lobby.add_player(20, "Player 20")
+	_check(
+		lobby.leader_for_table(1) == 30 and not lobby.promote_leader(10, 1, 20),
+		"returning former leader cannot reclaim a connected successor's table"
+	)
+	lobby.remove_player(30)
+	_check(lobby.promote_leader(10, 1, 20), "former leader can take back an abandoned table")
+	_check(lobby.leader_epoch(1) == 3, "every handover receives a fresh epoch")
+	_check(lobby.leader_epoch(0) == 1, "handover leaves other tables' epochs unchanged")
+	var copied: Dictionary = lobby.snapshot()
+	copied.table_leaders[1].id = 40
+	_check(lobby.leader_for_table(1) == 20, "snapshot cannot mutate table authority")
+	lobby.request_return(10)
+	for id in [20, 40]:
+		lobby.set_return_ready(id, true)
+	lobby.reset_lobby(10)
+	_check(
+		lobby.snapshot().table_leaders.is_empty() and lobby.leader_epoch(1) == 0,
+		"reopened lobby discards match authority"
+	)
+	_check(lobby.leader_for_table(1) == 20, "reopened lobby previews the first occupied seat")
 
 
 func _find(lobby, id: int) -> Dictionary:

@@ -275,7 +275,8 @@ func _controller():
 			{"id": 10, "name": "Room host", "table": 0, "slot": 0, "connected": true},
 			{"id": 20, "name": "Table host", "table": 1, "slot": 0, "connected": true},
 			{"id": 30, "name": "Teammate", "table": 1, "slot": 1, "connected": true}
-		]
+		],
+		"table_leaders": [{"table": 0, "id": 10, "epoch": 1}, {"table": 1, "id": 20, "epoch": 1}]
 	}
 	return controller
 
@@ -434,6 +435,7 @@ func _abandoned_leader_rejoin():
 			"kind": "table",
 			"match": host.match_id,
 			"table": 1,
+			"epoch": host._leader_epoch(1),
 			"payload": {"kind": "snapshot", "id": 1, "scene": {"available": false}}
 		}
 	)
@@ -769,6 +771,7 @@ func _send_table(controller, actor: int, table: int, payload: Dictionary, match_
 			"kind": "table",
 			"match": controller.match_id if match_value < 0 else match_value,
 			"table": table,
+			"epoch": controller._leader_epoch(table),
 			"payload": payload
 		}
 	)
