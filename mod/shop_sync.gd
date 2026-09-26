@@ -34,6 +34,7 @@ var _guest_context_saved = false
 var _view_slots: Dictionary = {}
 var _ready_vote: RefCounted
 var _continuing = false
+var _actions_blocked = false
 
 
 func _ready():
@@ -58,6 +59,7 @@ func begin_session(controller: Node):
 	_request_id = 0
 	_ready_vote.configure([])
 	_continuing = false
+	_actions_blocked = false
 	_was_finished = _controller.finished
 	if _controller.is_table_host():
 		var tutorial = get_node("/root/TutorialManager")
@@ -145,9 +147,6 @@ func _process(_delta):
 				)
 				if _view.get_node("%ShopFloor").texture != floor_texture:
 					_view.set_floor(floor_texture)
-			_bind_native_items(_view)
-			if _view.moving():
-				_clear_inspection()
 			_update_actions()
 	if _was_finished != _controller.finished:
 		_was_finished = _controller.finished
@@ -469,6 +468,7 @@ func _display_state(data: Dictionary):
 		_clear_guest_view()
 		_view = null
 		_view_slots.clear()
+		_actions_blocked = false
 		return
 	if not was_open:
 		get_viewport().gui_release_focus()
@@ -948,8 +948,11 @@ func _update_actions():
 	if _controller.finished:
 		_notice.text = "This table has finished. Scores and purchases are locked."
 		_notice.show()
-	if blocked:
+	# A pending acknowledgement can span many frames. Cancel the native drag once
+	# when interaction becomes blocked, preserving local camera/hover frame time.
+	if blocked and not _actions_blocked:
 		_cancel_native_drag()
+	_actions_blocked = blocked
 	_set_disabled(_view.reroll_button, blocked or _state.money < _state.reroll)
 	_set_disabled(_view.cocktail_bar.mix_button, blocked or not _state.can_mix)
 	_set_disabled(_view.play_button, blocked or not _state.can_continue)

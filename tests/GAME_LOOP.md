@@ -6,7 +6,7 @@ Run `Capture-Screens.cmd` for the combined regression suite and screenshot galle
 | --- | --- |
 | Lobby and match start | Lobby/controller models check seats, readiness, unequal table sizes, configuration, start failures, and match generations. Render fixtures cover lobby and vote screens. |
 | Table presentation | Native host and client textures, ball inspection, floor, configured cosmetics, score, money, health, and shot pips. Spectator fixtures check the same presentation and isolation from the local table. |
-| Turns and scoring | Controller/ball models check valid actors, rejected and replayed shots, turn ownership, abilities, Race completion, Score PvP budgets, and Bounty settlement. |
+| Turns and scoring | Controller models check valid actors, rejected and replayed shots, turn ownership, Race completion, and Score PvP budgets. |
 | Round completion | The host's native round-end sequence produces payout and updates money. The client receives the same native payout labels and balance. A newer transient packet arriving before the reliable phase cannot skip the payout. |
 | Entering the shop | Native Continue advances the host. Client payout remains until locally dismissed. Early shop data, the phase snapshot, and the retained replica must converge on the visible native shop and its camera. |
 | Shared purchases | Routed guest purchases spend money once. With a delayed reply, the client moves the native item and updates money immediately. Unrelated updates preserve that prediction; confirmation reuses the item node. |

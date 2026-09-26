@@ -20,6 +20,7 @@ var screens: Array[Dictionary] = []
 var fixtures: RefCounted
 var round_flow: RefCounted
 var shop_input: Node
+var fixture_config = {"deck": "1_CLASSIC", "difficulty": "diff_3", "seed": 24681}
 
 
 func _ready():
@@ -54,9 +55,6 @@ func _run():
 	get_node("/root/CloudSaveManager").backend = null
 	get_node("/root/TutorialManager").ENABLED = false
 	Engine.max_fps = 30
-	if not _check(mod.multiplayer_balls != null, "ball service loaded"):
-		_finish()
-		return
 	var round_flow_script = load(
 		get_script().resource_path.get_base_dir().path_join("round_flow_fixtures.gd")
 	)
@@ -91,20 +89,22 @@ func _run():
 		"presence_probe",
 		"router_probe",
 		"controller_probe",
-		"shop_layout_probe",
-		"multiplayer_balls_probe",
-		"bounty_probe"
+		"transport_budget_probe",
+		"shop_layout_probe"
 	]:
 		_run_model_probe(probe)
 	_check_run_completion()
-	await _wait(mod.run_setup.at_main_menu)
+	if not _check(
+		await _wait(_menu_capture_ready), "native menu transition finishes before lobby captures"
+	):
+		_finish()
+		return
 	fixtures = (
 		load(get_script().resource_path.get_base_dir().path_join("render_ui_fixtures.gd")).new()
 	)
+	await fixtures.check_native_run_votes(mod, _capture)
 	await fixtures.capture_all_menu(mod, _capture)
 	var global_node = get_node("/root/Global")
-	var database = get_node("/root/BallDatabase")
-	var catalog = mod.multiplayer_balls.catalog
 	mod._local_id = 1
 	mod.table_leader_id = 1
 	mod.table_id = 0
@@ -118,22 +118,10 @@ func _run():
 		]
 	}
 	mod.latest_state = {"table_active": true, "in_shop": false}
-	mod.multiplayer_balls.begin_session()
 	mod.adapter.begin_session(mod)
-	global_node.chosen_deck = database.id_to_deck["1_CLASSIC"].duplicate(true)
-	global_node.chosen_deck.balls.assign(catalog.BALLS.keys())
-	global_node.chosen_difficulty = database.id_to_difficulty["diff_1"]
-	for id in ["diff_1", "diff_2", "diff_3", "diff_4"]:
-		var difficulty = database.id_to_difficulty[id]
-		if difficulty.hasCocktailBar and difficulty.has_tapas_bar:
-			global_node.chosen_difficulty = difficulty
-			break
-	global_node.chosen_run_state = null
-	global_node.run_mode = global_node.RunMode.NORMAL
-	global_node.seed_text = "24681"
-	global_node.set_seeded(true)
-	global_node.set_seed(24681)
-	global_node.go_to_game()
+	if not _check(mod.run_setup.start(fixture_config) == OK, "selected native run config starts"):
+		_finish()
+		return
 	if not _check(await _wait(_native_ready), "native table spawned"):
 		_finish()
 		return
@@ -141,8 +129,9 @@ func _run():
 	var game = global_node.gameManager
 	mod.run_controls.begin_session()
 	_check(not mod.run_controls._bindings.is_empty(), "native run exits route to lobby voting")
+	_check_run_config("host")
 	_check_balls(game.balls, "host")
-	await _capture("10-host-table", "Host table · all eight multiplayer balls")
+	await _capture("10-host-table", "Host table · the selected native Classic starting set")
 	await fixtures.capture_table_states(mod, _capture)
 	var snapshot = mod.table_sync.capture()
 	var spectator_fixtures = (
@@ -150,7 +139,6 @@ func _run():
 	)
 	for result in await spectator_fixtures.capture(mod, snapshot, _capture):
 		_check(result.passed, result.name)
-	var ball_state = mod.multiplayer_balls.capture()
 	mod.shop_sync.begin_session(mod)
 	game.player_info.money = 92.0
 	game.player_info.set_tickets(1, 2)
@@ -166,7 +154,7 @@ func _run():
 		shop_report.store_string(JSON.stringify(shop_state, "\t"))
 		shop_report.close()
 		await _capture(
-			"20-shared-shop", "Shared shop · native offers and all eight balls in the build"
+			"20-shared-shop", "Shared shop · native offers and the selected starting build"
 		)
 		await fixtures.capture_shop_presence(mod, _capture, shop_input)
 		await round_flow.check_host_shop_drag(mod, _capture)
@@ -175,7 +163,6 @@ func _run():
 	mod.shop_sync.end_session()
 	mod.run_controls.end_session()
 	mod.adapter.end_session()
-	mod.multiplayer_balls.end_session()
 	mod.active = false
 	mod.run_setup.return_menu()
 	if not _check(await _wait(mod.run_setup.at_main_menu), "returned to menu"):
@@ -184,21 +171,19 @@ func _run():
 	mod._local_id = 2
 	mod.active = true
 	mod.latest_state.in_shop = false
-	if not _check(mod.table_sync.begin_guest(), "guest scene begins"):
+	if not _check(mod.table_sync.begin_guest(fixture_config), "guest scene begins"):
 		_finish()
 		return
-	mod.multiplayer_balls.begin_session()
 	_check(mod.table_sync.apply_snapshot(snapshot), "guest snapshot accepted")
-	mod.multiplayer_balls.apply_state(ball_state)
 	await get_tree().create_timer(1.0).timeout
 	game = global_node.gameManager
 	mod.latest_state = mod.adapter.game_data()
 	mod._update_hud()
+	_check_run_config("guest")
 	_check_balls(game.replicas.values(), "guest")
 	await _capture("30-guest-table", "Guest table · reconstructed from the host snapshot")
 	await _capture_ball_previews(game)
 	await _capture_guest_shop(snapshot, shop_state)
-	mod.multiplayer_balls.end_session()
 	mod.table_sync.end_guest()
 	for result in await round_flow.replay_guest(mod, _capture):
 		_check(result.passed, result.name)
@@ -217,9 +202,12 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 	_check(mod.shop_sync.apply_state(shop_state), "guest native shop state accepted")
 	mod.latest_state.in_shop = true
 	mod._update_hud()
-	await get_tree().create_timer(1.0).timeout
 	var game = get_node("/root/Global").gameManager
 	var shop = mod.shop_sync.native_shop()
+	if is_instance_valid(shop):
+		_check_shop_wallet_refresh(shop, shop_state)
+		_check_shop_offer_refresh(shop, shop_state)
+	await get_tree().create_timer(1.0).timeout
 	_check(
 		(
 			is_instance_valid(shop)
@@ -231,10 +219,7 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 		"guest native shop opens from shared shop_state"
 	)
 	_check(
-		(
-			is_instance_valid(shop)
-			and shop.remote_slots_cover(shop.remote_slots, shop_state.slots)
-		),
+		is_instance_valid(shop) and shop.remote_slots_cover(shop.remote_slots, shop_state.slots),
 		"guest remote slots cover the host shop layout"
 	)
 	_check(
@@ -257,7 +242,7 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 	await _capture("50-guest-shop", "Guest native shop · shared build and offers")
 	var inspected_key = ""
 	for slot in shop_state.slots:
-		if slot.data == "TOGETHER_CALL":
+		if slot.id != 0 and slot.group == "build":
 			inspected_key = slot.key
 			break
 	shop_input.begin(shop)
@@ -266,6 +251,7 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 		"guest shop item can be inspected by native pointer hover"
 	)
 	var inspected = mod.shop_sync.slot_item(inspected_key)
+	_check_idle_replica_refresh(game, shopping)
 	_check(mod.table_sync.apply_snapshot(shopping), "guest accepts repeated shop snapshot")
 	_check(mod.shop_sync.apply_state(shop_state), "guest accepts repeated shop inventory")
 	await get_tree().create_timer(0.45).timeout
@@ -289,24 +275,136 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 	mod.shop_sync.end_session()
 
 
+func _check_shop_wallet_refresh(shop: Node, original: Dictionary) -> void:
+	var map = shop.inventory.map
+	var pip_ids: Array = map.pips.map(func(pip): return pip.get_instance_id())
+	if not _check(not pip_ids.is_empty(), "guest shop has native round-map pips"):
+		return
+	var changed = original.duplicate(true)
+	changed.money = 20.0 if original.money == 0 else 0.0
+	shop.apply_state(changed)
+	_check(
+		map.pips.map(func(pip): return pip.get_instance_id()) == pip_ids,
+		"money-only shop update preserves every round-map pip"
+	)
+	var wallet = shop.inventory.get_node("%Wallet")
+	_check(
+		wallet.get_node("WalletSprite").texture == wallet.textures[3 if changed.money > 15 else 0],
+		"money-only shop update refreshes the native wallet"
+	)
+	changed.hp = original.hp - 1 if original.hp > 0 else 1
+	shop.apply_state(changed)
+	_check(
+		map.pips.map(func(pip): return pip.get_instance_id()) == pip_ids,
+		"health-only shop update preserves every round-map pip"
+	)
+	_check(
+		shop.inventory.get_node("%hpInfo").index == changed.hp - 1,
+		"health-only shop update refreshes the native hearts"
+	)
+	shop.apply_state(original)
+
+
+func _check_shop_offer_refresh(shop: Node, original: Dictionary) -> void:
+	var changed = original.duplicate(true)
+	var offers: Array = changed.slots.filter(
+		func(slot): return slot.group == "offer" and slot.id != 0
+	)
+	var build: Array = changed.slots.filter(
+		func(slot): return slot.group == "build" and slot.id != 0
+	)
+	if not _check(
+		not offers.is_empty() and build.size() >= 2,
+		"shop refresh fixture has offer and build slots"
+	):
+		return
+	var database = get_node("/root/BallDatabase")
+	var rare_id = ""
+	for id in database.id_to_ball:
+		if database.id_to_ball[id].rarity == Global.RARITY.RARE:
+			rare_id = id
+			break
+	if not _check(rare_id != "", "shop refresh fixture has a native rare ball"):
+		return
+	var offer: Dictionary = offers[0]
+	offer.data = rare_id
+	offer.mixed = ""
+	shop.apply_state(changed)
+	var slot = shop.remote_slots[offer.key]
+	var offer_body = slot.ball
+	_check(
+		slot.has_rarity_star and slot.star_pivot.visible,
+		"rare offer starts with native rarity star"
+	)
+	var left_key: String = build[0].key
+	var left_index: int = build[0].index
+	build[0].key = build[1].key
+	build[0].index = build[1].index
+	build[1].key = left_key
+	build[1].index = left_index
+	shop.apply_state(changed)
+	_check(
+		slot.ball == offer_body and slot.has_rarity_star and slot.star_pivot.visible,
+		"unrelated build swap preserves unchanged offer body and rarity star"
+	)
+	shop.apply_state(original)
+
+
+func _check_idle_replica_refresh(game: Node, shopping: Dictionary) -> void:
+	for body in game.replicas.values():
+		body.sleeping = true
+	_check(mod.table_sync.apply_snapshot(shopping), "idle guest shop snapshot accepted")
+	for body in game.replicas.values():
+		_check(body.freeze and body.sleeping, "idle shop snapshot preserves sleeping table bodies")
+	if shopping.balls.is_empty():
+		return
+	var state: Dictionary = shopping.balls[0]
+	var body = game.replicas[state.id]
+	body.transform3d.rotation = state.spin + Vector3(0.0, 0.5, 0.0)
+	_check(mod.table_sync.apply_snapshot(shopping), "guest reconciles local visual drift")
+	var basis: Basis = body.transform3d.global_transform.basis
+	_check(
+		(
+			body.transform3d.rotation.is_equal_approx(state.spin)
+			and body.ball.material.get_shader_parameter("rotation_x").is_equal_approx(basis.x)
+			and body.ball.material.get_shader_parameter("rotation_y").is_equal_approx(basis.y)
+			and body.ball.material.get_shader_parameter("rotation_z").is_equal_approx(basis.z)
+		),
+		"unchanged authoritative spin still reconciles live transform and material"
+	)
+
+
+func _menu_capture_ready() -> bool:
+	if not mod.run_setup.at_main_menu():
+		return false
+	# Global clears transitioning immediately after uncover(); the native overlay
+	# hides its CanvasLayer only once that animated wipe has actually finished.
+	var overlay = get_node("/root/UIManager").overlay
+	return is_instance_valid(overlay) and not overlay.canvas_layer.visible
+
+
 func _native_ready() -> bool:
 	var game = get_node("/root/Global").gameManager
 	return is_instance_valid(game) and game.balls_spawned
 
 
 func _shop_ready() -> bool:
-	mod.multiplayer_balls.prepare_shop()
 	var state = mod.shop_sync.capture()
 	return state.get("open", false) and not state.get("busy", true)
 
 
 func _check_shop():
 	var state: Dictionary = mod.shop_sync.capture()
-	var multiplayer_ids = []
+	var build_ids: Array = []
+	var native_ids: Dictionary = get_node("/root/BallDatabase").id_to_ball
 	for slot in state.slots:
-		if slot.id != 0 and slot.group == "build" and slot.data.begins_with("TOGETHER_"):
-			multiplayer_ids.append(slot.data)
-	_check(multiplayer_ids.size() == 8, "shop contains all eight multiplayer balls")
+		if slot.id == 0:
+			continue
+		if slot.group == "build":
+			build_ids.append(slot.data)
+		if slot.group in ["build", "offer"]:
+			_check(native_ids.has(slot.data), "shop contains native ball " + slot.data)
+	_check_native_starters(build_ids, "shop")
 
 
 func _check_shop_readiness():
@@ -376,10 +474,12 @@ func _capture_ball_previews(game):
 	_check(inspection.can_process(), "guest inspection processes")
 	for body in game.replicas.values():
 		body.set_process(false)
+	var inspected_ids: Array[String] = []
 	for body in game.replicas.values():
 		var id = str(body.ball_item.data.id)
-		if not id.begins_with("TOGETHER_"):
+		if id == "PLAYER" or inspected_ids.has(id):
 			continue
+		inspected_ids.append(id)
 		game.select_ball(body, body.ball_item)
 		await get_tree().create_timer(0.45).timeout
 		_check(inspection.showing and inspection.ball == body, "guest inspection selection " + id)
@@ -388,8 +488,7 @@ func _capture_ball_previews(game):
 			"guest inspection visible " + id
 		)
 		await _capture(
-			"40-ball-" + id.trim_prefix("TOGETHER_").to_lower(),
-			body.ball_item.data.name + " · guest inspection card"
+			"40-ball-" + id.to_lower(), body.ball_item.data.name + " · guest inspection card"
 		)
 		game.unselect_ball(body, body.ball_item)
 	inspection.hide_info()
@@ -397,22 +496,50 @@ func _capture_ball_previews(game):
 		body.set_process(true)
 
 
+func _check_run_config(role: String):
+	var global_node = get_node("/root/Global")
+	_check(
+		(
+			global_node.chosen_deck.id == fixture_config.deck
+			and global_node.chosen_difficulty.id == fixture_config.difficulty
+		),
+		role + " uses the selected native deck and difficulty"
+	)
+	_check(
+		(
+			global_node.chosen_difficulty.hasCocktailBar
+			and global_node.chosen_difficulty.has_tapas_bar
+		),
+		role + " selected difficulty exposes both native shop counters"
+	)
+
+
 func _check_balls(balls: Array, role: String):
-	var ids = []
+	var ids: Array = []
+	var database = get_node("/root/BallDatabase")
 	for body in balls:
-		if body.ball_item == null or not str(body.ball_item.data.id).begins_with("TOGETHER_"):
+		if body.ball_item == null or str(body.ball_item.data.id) == "PLAYER":
 			continue
 		var item = body.ball_item
 		ids.append(item.data.id)
+		_check(database.id_to_ball.has(item.data.id), role + " native identity " + item.data.id)
 		_check(
 			body.ball.material.get_shader_parameter("tex") == item.data.texture,
 			role + " shader texture " + item.data.id
 		)
 		_check(
-			item.data.texture.get_size() == Vector2(1024, 768),
-			role + " native-resolution cube atlas " + item.data.id
+			item.data.texture != null and item.data.texture.get_size().x > 0,
+			role + " native texture is loaded " + item.data.id
 		)
-	_check(ids.size() == 8, role + " displays all eight balls")
+	_check_native_starters(ids, role)
+
+
+func _check_native_starters(ids: Array, role: String):
+	var expected: Array = Array(get_node("/root/Global").chosen_deck.balls)
+	var actual = ids.duplicate()
+	expected.sort()
+	actual.sort()
+	_check(actual == expected, role + " preserves every selected native starter and duplicate")
 
 
 func _capture(label: String, caption: String = ""):

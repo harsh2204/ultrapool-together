@@ -42,10 +42,8 @@ func capture(mod: Node, snapshot: Dictionary, screenshot: Callable) -> Array:
 			and not mod.turn_label.visible
 			and not mod.score_label.visible
 			and not mod.pass_button.visible
-			and not mod.multiplayer_balls._ui._overlay.visible
-			and not mod.multiplayer_balls._ui._hint.visible
 		),
-		"watching hides the local turn controls, score, and ball selection markers"
+		"watching hides the local turn controls and score"
 	)
 	spectator.apply_snapshot(1, snapshot)
 	spectator.tick(0.0)
@@ -239,7 +237,7 @@ func capture(mod: Node, snapshot: Dictionary, screenshot: Callable) -> Array:
 	)
 	_check(
 		not mod.is_spectating() and _home_visibility(mod) == home_visibility,
-		"returning to the home table restores its HUD and ball overlays"
+		"returning to the home table restores its HUD"
 	)
 	var ui = mod.get_node("/root/UIManager")
 	var was_processing: bool = ui.is_processing()
@@ -272,7 +270,6 @@ func capture(mod: Node, snapshot: Dictionary, screenshot: Callable) -> Array:
 
 func _refresh_home_ui(mod: Node) -> void:
 	mod._update_hud()
-	mod.multiplayer_balls._ui.refresh(mod.multiplayer_balls.capture())
 
 
 func _home_visibility(mod: Node) -> Dictionary:
@@ -280,8 +277,6 @@ func _home_visibility(mod: Node) -> Dictionary:
 		"turn": mod.turn_label.visible,
 		"score": mod.score_label.visible,
 		"pass": mod.pass_button.visible,
-		"balls": mod.multiplayer_balls._ui._overlay.visible,
-		"hint": mod.multiplayer_balls._ui._hint.visible
 	}
 
 

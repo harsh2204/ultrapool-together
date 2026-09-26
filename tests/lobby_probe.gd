@@ -11,6 +11,7 @@ func _initialize() -> void:
 	var lobby = model_script.new()
 	_check(not lobby.setup(0, "Host"), "invalid host rejected")
 	_check(lobby.setup(10, "Host"), "host creates lobby")
+	_configure(lobby)
 	_check(lobby.snapshot().match_mode == "race", "new lobbies default to a full-run race")
 	_check(
 		_find(lobby, 10).table == 0 and _find(lobby, 10).slot == 0, "host starts in the first seat"
@@ -133,6 +134,7 @@ func _initialize() -> void:
 	)
 	var uneven = model_script.new()
 	uneven.setup(10, "Host")
+	_configure(uneven)
 	for id in [20, 30, 40, 50]:
 		uneven.add_player(id, "Player %d" % id)
 	uneven.set_table_count(10, 4)
@@ -177,6 +179,7 @@ func _initialize() -> void:
 	members[0].connected = false
 	_check(_find(uneven, 40).connected, "membership helper cannot mutate the authoritative roster")
 	_check_return_votes(model_script)
+	_check_run_votes(model_script)
 	print("LOBBY_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
@@ -186,6 +189,7 @@ func _initialize() -> void:
 func _check_return_votes(model_script) -> void:
 	var lobby = model_script.new()
 	lobby.setup(10, "Host")
+	_configure(lobby)
 	for id in [20, 30]:
 		lobby.add_player(id, "Player %d" % id)
 		lobby.choose_slot(id, 0, id / 10 - 1)
@@ -238,6 +242,157 @@ func _check_return_votes(model_script) -> void:
 	lobby.start(10)
 	_check(lobby.reset_lobby(10, true), "completed matches return without an end-run vote")
 	_check(not lobby.request_return(10), "pre-match lobby rejects end-run proposals")
+
+
+func _configure(lobby) -> void:
+	lobby.configure_run_options(
+		10,
+		{
+			"deck":
+			[{"id": "1_CLASSIC", "label": "Classic"}, {"id": "2_NATURE", "label": "Nature"}],
+			"difficulty":
+			[{"id": "diff_1", "label": "Chill Pool Night"}, {"id": "diff_2", "label": "Wine Mixer"}]
+		},
+		{"deck": "2_NATURE", "difficulty": "diff_2"}
+	)
+
+
+func _check_run_votes(model_script) -> void:
+	var lobby = model_script.new()
+	lobby.setup(10, "Host")
+	lobby.add_player(20, "Partner")
+	lobby.choose_slot(20, 0, 1)
+	_ready_all(lobby)
+	_check(not lobby.can_start(), "available run choices are required before starting")
+	_configure(lobby)
+	_check(not _find(lobby, 10).ready, "publishing run choices clears readiness")
+	var catalog: int = lobby.snapshot().run_vote.catalog_revision
+	_check(
+		(
+			lobby.resolved_run_selection().deck == "2_NATURE"
+			and lobby.resolved_run_selection().difficulty == "diff_2"
+		),
+		"no votes preserves the initial native selection"
+	)
+	var options: Dictionary = lobby.snapshot().run_vote.options
+	_check(not lobby.configure_run_options(20, options), "guest cannot publish its own unlocks")
+	var malformed: Dictionary = options.duplicate(true)
+	malformed.deck.append(malformed.deck[0])
+	_check(not lobby.configure_run_options(10, malformed), "duplicate catalog IDs are rejected")
+	malformed.deck = []
+	_check(not lobby.configure_run_options(10, malformed), "empty starting sets are rejected")
+	var before = lobby.snapshot()
+	_check(not lobby.set_run_vote(999, "deck", "1_CLASSIC", catalog), "unknown actor cannot vote")
+	_check(
+		not lobby.set_run_vote(20, "seed", "1", catalog), "voters cannot choose arbitrary fields"
+	)
+	_check(
+		not lobby.set_run_vote(20, "deck", "DAILY", catalog), "unpublished run choice is rejected"
+	)
+	_check(
+		not lobby.set_run_vote(20, "difficulty", "diff_6", catalog),
+		"locked difficulty cannot be voted"
+	)
+	_check(
+		not lobby.set_run_vote(20, "deck", "1_CLASSIC", catalog - 1),
+		"stale catalog vote is rejected"
+	)
+	_check(lobby.snapshot() == before, "invalid ballots preserve settings and readiness")
+	_ready_all(lobby)
+	var old_generation: int = lobby.snapshot().ready_generation
+	_check(lobby.set_run_vote(20, "deck", "1_CLASSIC", catalog), "guest votes for starting set")
+	_check(lobby.resolved_run_selection().deck == "1_CLASSIC", "guest vote resolves on host")
+	_check(
+		not _find(lobby, 10).ready and not _find(lobby, 20).ready,
+		"ballot clears everyone's readiness"
+	)
+	_check(
+		not lobby.set_ready(20, true, old_generation),
+		"delayed ready cannot approve a changed ballot"
+	)
+	var generation: int = lobby.snapshot().ready_generation
+	_check(lobby.set_ready(10, true, generation), "host readies for the current choices")
+	_check(
+		lobby.set_ready(20, true, generation),
+		"concurrent ready accepts the same settings generation"
+	)
+	_check(
+		lobby.snapshot().ready_generation == generation,
+		"readiness alone does not invalidate others"
+	)
+	var previous: int = lobby.revision
+	_check(lobby.set_run_vote(20, "deck", "1_CLASSIC", catalog), "duplicate ballot is accepted")
+	_check(
+		lobby.revision == previous and lobby.can_start(), "duplicate ballot cannot reset readiness"
+	)
+	_check(lobby.set_run_vote(10, "deck", "2_NATURE", catalog), "host has one equal vote")
+	_check(lobby.resolved_run_selection().deck == "1_CLASSIC", "tie follows native menu order")
+	_check(lobby.set_run_vote(20, "deck", "2_NATURE", catalog), "player can replace a ballot")
+	_check(
+		lobby.snapshot().run_vote.counts.deck == {"2_NATURE": 2},
+		"replacement is one vote per player"
+	)
+	_check(
+		lobby.set_run_vote(20, "difficulty", "diff_1", catalog), "difficulty has a separate ballot"
+	)
+	_check(lobby.set_run_vote(20, "match_mode", "score", catalog), "guest can vote Score PvP")
+	_check(lobby.match_mode == "score", "resolved mode controls the match")
+	_check(lobby.set_run_vote(10, "match_mode", "race", catalog), "host can vote Race")
+	_check(lobby.match_mode == "race", "mode tie follows the same published rule")
+	_check(lobby.set_run_vote(20, "deck", "", catalog), "no preference removes a ballot")
+	_check(lobby.snapshot().run_vote.counts.deck == {"2_NATURE": 1}, "abstention removes its count")
+	var copied = lobby.snapshot()
+	copied.players[0].run_votes.clear()
+	copied.run_vote.options.deck.clear()
+	copied.run_vote.selected.deck = "DAILY"
+	_check(
+		lobby.snapshot().run_vote.counts.deck == {"2_NATURE": 1}, "snapshot cannot mutate ballots"
+	)
+	_check(lobby.snapshot().run_vote.options.deck.size() == 2, "snapshot cannot mutate choices")
+	var members = lobby.members_for_table(0)
+	members[0].run_votes.clear()
+	_check(
+		lobby.snapshot().run_vote.counts.deck == {"2_NATURE": 1},
+		"membership snapshots isolate ballots"
+	)
+	_ready_all(lobby)
+	var resolved: Dictionary = lobby.resolved_run_selection()
+	_check(lobby.start(10), "fully ready voted match starts")
+	_check(not lobby.set_run_vote(20, "deck", "1_CLASSIC", catalog), "started match locks ballots")
+	_check(not lobby.configure_run_options(10, options), "started match locks catalog")
+	lobby.remove_player(20)
+	_check(lobby.resolved_run_selection() == resolved, "disconnect cannot change the frozen run")
+	_check(lobby.match_mode == resolved.match_mode, "disconnect cannot change frozen mode")
+	var frozen = lobby.resolved_run_selection()
+	frozen.deck = "DAILY"
+	_check(lobby.resolved_run_selection() == resolved, "callers cannot mutate frozen configuration")
+	lobby.reset_lobby(10, true)
+	_check(
+		lobby.resolved_run_selection().difficulty == "diff_2",
+		"departed voters do not vote in next lobby"
+	)
+	lobby.add_player(20, "Partner")
+	_check(_find(lobby, 20).run_votes.is_empty(), "rejoined player does not inherit an old ballot")
+	lobby.choose_slot(20, 0, 1)
+	lobby.set_run_vote(20, "deck", "1_CLASSIC", catalog)
+	lobby.remove_player(20)
+	_check(
+		lobby.resolved_run_selection().deck == "2_NATURE",
+		"pre-match departures remove their ballots"
+	)
+	var replacement = {
+		"deck": [{"id": "1_CLASSIC", "label": "Classic"}],
+		"difficulty": [{"id": "diff_1", "label": "Chill Pool Night"}]
+	}
+	_check(lobby.configure_run_options(10, replacement), "host can refresh a changed catalog")
+	_check(
+		lobby.snapshot().run_vote.catalog_revision > catalog, "changed catalog advances generation"
+	)
+	_check(
+		not lobby.set_run_vote(10, "deck", "1_CLASSIC", catalog),
+		"old generation cannot vote after refresh"
+	)
+	_check(lobby.snapshot().run_vote.counts.deck.is_empty(), "new catalog requires fresh ballots")
 
 
 func _find(lobby, id: int) -> Dictionary:

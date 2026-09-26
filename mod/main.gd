@@ -1,8 +1,9 @@
 extends Node
 
-const VERSION = "0.7.0"
+const VERSION = "0.8.0"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
+const SHOP_SNAPSHOT_INTERVAL = 0.50
 
 var transport: Node
 var adapter: Node
@@ -10,10 +11,8 @@ var table_sync: Node
 var shop_sync: Node
 var presence: Node
 var run_setup: Node
-var multiplayer_balls: Node
 var spectator: Node
 var run_controls: Node
-var bounty_race: Script
 var lobby_model: RefCounted
 var router: RefCounted
 var ui_root: Control
@@ -79,30 +78,16 @@ func _ready():
 	shop_sync = load(base.path_join("shop_sync.gd")).new()
 	presence = load(base.path_join("presence.gd")).new()
 	run_setup = load(base.path_join("run_setup.gd")).new()
-	multiplayer_balls = load(base.path_join("multiplayer_balls.gd")).new()
 	spectator = load(base.path_join("table_spectator.gd")).new()
 	run_controls = load(base.path_join("run_controls.gd")).new()
-	bounty_race = load(base.path_join("bounty_race.gd"))
 	for service in [
-		transport,
-		adapter,
-		table_sync,
-		shop_sync,
-		presence,
-		run_setup,
-		multiplayer_balls,
-		spectator,
-		run_controls
+		transport, adapter, table_sync, shop_sync, presence, run_setup, spectator, run_controls
 	]:
 		add_child(service)
 	_build_ui()
 	spectator.setup(self)
 	spectator.watch_changed.connect(_watch_changed)
 	run_controls.setup(self)
-	if not multiplayer_balls.setup(self):
-		supported = false
-		_status("Multiplayer ball art is missing. Reinstall the complete mod package.")
-		return
 	presence.setup(self, transport, shop_sync)
 	shop_sync.request.connect(_shop_request)
 	transport.connected.connect(_connected)
@@ -169,7 +154,17 @@ func _build_ui():
 	panel.shot_budget_requested.connect(
 		func(count): _lobby_request({"action": "budget", "count": count})
 	)
-	panel.match_mode_requested.connect(func(mode): _lobby_request({"action": "mode", "mode": mode}))
+	panel.run_vote_requested.connect(
+		func(field, choice, catalog_revision):
+			_lobby_request(
+				{
+					"action": "run_vote",
+					"field": field,
+					"choice": choice,
+					"catalog_revision": catalog_revision
+				}
+			)
+	)
 	panel.watch_requested.connect(_watch_table)
 	panel.return_vote_requested.connect(
 		func(ready):
@@ -260,13 +255,20 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.7 and a new UP7 room code.")
+		_status("Could not join. Everyone needs v0.8 and a new UP8 room code.")
 	_render_lobby()
 
 
 func _room_ready():
 	_local_id = transport.local_id()
 	lobby_model.setup(transport.local_id(), _transport_name(transport.local_id()))
+	if not lobby_model.configure_run_options(
+		transport.local_id(), run_setup.available_choices(), run_setup.native_defaults()
+	):
+		var reason: String = lobby_model.last_error
+		_leave()
+		_status(reason)
+		return
 	_broadcast_lobby()
 	_set_panel(true)
 
@@ -324,7 +326,9 @@ func _ready_requested(value: bool):
 	if value and not run_setup.at_main_menu():
 		_status("Return to the main menu before readying up.")
 		return
-	_lobby_request({"action": "ready", "ready": value})
+	_lobby_request(
+		{"action": "ready", "ready": value, "generation": lobby.get("ready_generation", -1)}
+	)
 
 
 func _lobby_request(message: Dictionary):
@@ -337,7 +341,10 @@ func _lobby_request(message: Dictionary):
 
 
 func _apply_lobby_request(sender: int, message: Dictionary):
-	if message.get("action") in ["reset", "return_ready"] and message.get("match") != match_id:
+	if (
+		message.get("action") in ["reset", "return_ready", "run_vote"]
+		and message.get("match") != match_id
+	):
 		return
 	var accepted = false
 	match message.get("action"):
@@ -345,17 +352,28 @@ func _apply_lobby_request(sender: int, message: Dictionary):
 			if message.get("table") is int and message.get("slot") is int:
 				accepted = lobby_model.choose_slot(sender, message.table, message.slot)
 		"ready":
-			if message.get("ready") is bool:
-				accepted = lobby_model.set_ready(sender, message.ready)
+			if (
+				message.get("ready") is bool
+				and message.get("generation") is int
+				and message.generation >= 0
+			):
+				accepted = lobby_model.set_ready(sender, message.ready, message.generation)
 		"tables":
 			if message.get("count") is int:
 				accepted = lobby_model.set_table_count(sender, message.count)
 		"budget":
 			if message.get("count") is int:
 				accepted = lobby_model.set_shot_budget(sender, message.count)
-		"mode":
-			if message.get("mode") is String:
-				accepted = lobby_model.set_match_mode(sender, message.mode)
+		"run_vote":
+			if (
+				message.get("field") is String
+				and message.get("choice") is String
+				and message.get("catalog_revision") is int
+				and message.catalog_revision >= 0
+			):
+				accepted = lobby_model.set_run_vote(
+					sender, message.field, message.choice, message.catalog_revision
+				)
 		"start":
 			_start_match(sender)
 			return
@@ -388,7 +406,6 @@ func _lobby_error(recipient: int, reason: String):
 
 
 func _broadcast_lobby():
-	bounty_race.resolve(table_summaries, _score_match())
 	lobby = lobby_model.snapshot()
 	lobby.table_summaries = table_summaries.duplicate(true)
 	lobby.match = match_id
@@ -410,9 +427,9 @@ func _start_match(sender: int):
 	if not run_setup.at_main_menu():
 		_status("Return to the main menu before starting the match.")
 		return
-	run_config = run_setup.capture_config()
+	run_config = run_setup.capture_config(lobby_model.resolved_run_selection())
 	if not run_setup.validate_config(run_config):
-		_status("Choose a standard deck and difficulty before opening the lobby.")
+		_status("The voted starting set or difficulty is unavailable. Recreate the lobby.")
 		return
 	if not lobby_model.start(sender):
 		_status(lobby_model.last_error)
@@ -431,9 +448,6 @@ func _start_match(sender: int):
 				"table": table,
 				"leader_id": lobby_model.leader_for_table(table),
 				"score": 0.0,
-				"base_score": 0.0,
-				"bounty_shot": 0,
-				"bounty_bonus": 0,
 				"shots_used": 0,
 				"shot_budget": lobby_model.shot_budget,
 				"finished": false,
@@ -458,7 +472,10 @@ func _begin_table(config: Dictionary):
 		_status("Your table host disconnected. Wait for the host to reopen the lobby.")
 		_set_panel(true)
 		return
-	if not run_setup.validate_config(config) or not run_setup.at_main_menu():
+	if not run_setup.validate_config(config):
+		_match_failed("The selected starting set or difficulty is unavailable on this game build.")
+		return
+	if not run_setup.at_main_menu():
 		_match_failed("A player could not start a fresh run. Everyone must be at the main menu.")
 		return
 	if get_tree().paused or get_node("/root/UIManager").is_popup_open():
@@ -489,7 +506,6 @@ func _begin_table(config: Dictionary):
 	_guest_phase.clear()
 	presence.clear()
 	active = true
-	multiplayer_balls.begin_session()
 	if not is_table_host() and not table_sync.begin_guest(config):
 		_match_failed("Could not create the table view. Return to the main menu and try again.")
 		return
@@ -497,7 +513,7 @@ func _begin_table(config: Dictionary):
 	shop_sync.begin_session(self)
 	run_controls.begin_session()
 	if is_table_host():
-		if run_setup.start(config, multiplayer_balls.catalog) != OK:
+		if run_setup.start(config) != OK:
 			_match_failed("Could not start the table's run.")
 			return
 	else:
@@ -546,7 +562,6 @@ func _end_table():
 	_restore_menu()
 	presence.clear()
 	shop_sync.end_session()
-	multiplayer_balls.end_session()
 	adapter.end_session()
 	table_sync.end_guest()
 	run_setup.cancel()
@@ -771,7 +786,8 @@ func _roster_changed():
 				turn_owner = _next_player()
 				shot_number += 1
 				_publish_state()
-	_render_lobby()
+	if panel.visible:
+		_render_lobby()
 
 
 func _process(delta):
@@ -787,7 +803,8 @@ func _process(delta):
 	roster_time += delta
 	if roster_time >= 1.0:
 		roster_time = 0.0
-		_render_lobby()
+		if panel.visible:
+			_render_lobby()
 	if active and is_table_host():
 		var state = adapter.game_data()
 		if state.available:
@@ -814,7 +831,8 @@ func _process(delta):
 			state_time = 0.0
 			_publish_state()
 		snapshot_time += delta
-		if snapshot_time >= SNAPSHOT_INTERVAL:
+		var snapshot_interval = SHOP_SNAPSHOT_INTERVAL if state.in_shop else SNAPSHOT_INTERVAL
+		if snapshot_time >= snapshot_interval:
 			snapshot_time = 0.0
 			_publish_snapshot()
 	_update_hud()
@@ -822,8 +840,6 @@ func _process(delta):
 
 func can_control() -> bool:
 	if not _turn_ready():
-		return false
-	if multiplayer_balls != null and multiplayer_balls.blocks_shot_input():
 		return false
 	if get_node("/root/InputManager").is_controller():
 		return true
@@ -882,7 +898,7 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		return false
 	shot_start_score = adapter.score()
 	var starting_table = table_sync.capture()
-	if not adapter.shoot(vector, multiplayer_balls.begin_shot.bind(used_shots + 1, player)):
+	if not adapter.shoot(vector):
 		return false
 	shot_pending = true
 	settle_time = 0.0
@@ -902,7 +918,6 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 
 
 func _finish_shot():
-	multiplayer_balls.finish_shot()
 	total_score += maxf(0.0, adapter.shot_score() - shot_start_score)
 	used_shots += 1
 	shot_pending = false
@@ -974,43 +989,49 @@ func _update_hud():
 		and not latest_state.get("in_shop", false)
 	)
 	pass_button.disabled = not _turn_ready()
-	turn_label.text = ""
-	score_label.text = ""
+	var turn_text = ""
+	var score_text = ""
 	if not active:
+		_set_hud_text(turn_text, score_text)
 		return
 	if finished:
-		turn_label.text = _result_text()
+		turn_text = _result_text()
 	elif shot_pending or awaiting_shot_turn >= 0:
-		turn_label.text = "Shot in play"
+		turn_text = "Shot in play"
 	elif latest_state.get("in_shop", false):
-		turn_label.text = "Shared shop · Table %d" % (table_id + 1)
+		turn_text = "Shared shop · Table %d" % (table_id + 1)
 	elif not latest_state.get("table_active", false):
-		turn_label.text = "Waiting for the table"
+		turn_text = "Waiting for the table"
 	else:
-		turn_label.text = (
+		turn_text = (
 			"Your turn"
 			if turn_owner == transport.local_id()
 			else _player_name(turn_owner) + "'s turn"
 		)
 	if _race_match():
-		score_label.text = (
+		score_text = (
 			"Table %d · Round %d/%d"
 			% [table_id + 1, latest_state.get("round", 1), latest_state.get("run_goal_rounds", 0)]
 		)
 	elif _score_match():
-		var displayed_score = total_score
-		for summary in lobby.get("table_summaries", []):
-			if summary.table == table_id:
-				displayed_score += summary.get("bounty_bonus", 0)
-		score_label.text = (
+		score_text = (
 			"Table %d · %.0f points · %d/%d shots"
-			% [table_id + 1, displayed_score, used_shots, lobby.shot_budget]
+			% [table_id + 1, total_score, used_shots, lobby.shot_budget]
 		)
 	elif latest_state.get("available", false) and not latest_state.get("in_shop", false):
-		score_label.text = (
+		score_text = (
 			"Round %d · %d shots left · Score %.0f"
 			% [latest_state.round, latest_state.shots_left, latest_state.score]
 		)
+
+	_set_hud_text(turn_text, score_text)
+
+
+func _set_hud_text(turn_text: String, score_text: String):
+	if turn_label.text != turn_text:
+		turn_label.text = turn_text
+	if score_label.text != score_text:
+		score_label.text = score_text
 
 
 func _result_text() -> String:
@@ -1043,10 +1064,11 @@ func _result_text() -> String:
 	return "Match ended · Open lobby for standings"
 
 
-func _publish_state(target: int = 0):
+func _publish_state(
+	target: int = 0, captured_shop: Dictionary = {}, captured_lobby_revision: int = -1
+):
 	if not active or not is_table_host():
 		return
-	multiplayer_balls.prepare_shop()
 	latest_state = adapter.game_data()
 	latest_state.run_won = latest_state.run_won and finished
 	latest_state.can_shoot = latest_state.can_shoot and run_setup.ready_for_input() and not finished
@@ -1058,15 +1080,20 @@ func _publish_state(target: int = 0):
 			"pending": shot_pending,
 			"total_score": total_score,
 			"used_shots": used_shots,
-			"bounty_shot": multiplayer_balls.bounty_shot(),
-			"multiplayer_balls": multiplayer_balls.capture(),
 			"finished": finished,
 			"finish_reason": finish_reason
 		},
 		true
 	)
 	_table_send(latest_state, target)
-	var shop_state = shop_sync.capture()
+	# A reliable send failure may synchronously change membership or end this
+	# session. Such changes invalidate shop consent even without an await.
+	if not active or not is_table_host():
+		return
+	var reuse_shop = (
+		not captured_shop.is_empty() and captured_lobby_revision == lobby.get("revision", -1)
+	)
+	var shop_state = captured_shop if reuse_shop else shop_sync.capture()
 	var phase = [
 		latest_state.get("available", false),
 		latest_state.get("round", 0),
@@ -1151,9 +1178,6 @@ func _record_summary(table: int, state: Dictionary):
 		"table": table,
 		"leader_id": _leader(table),
 		"score": state.total_score,
-		"base_score": state.total_score,
-		"bounty_shot": state.bounty_shot,
-		"bounty_bonus": 0,
 		"shots_used": state.used_shots,
 		"shot_budget": lobby.shot_budget,
 		"finished": state.finished,
@@ -1178,8 +1202,7 @@ func _record_summary(table: int, state: Dictionary):
 				_finish_count += 1
 				summary.finish_order = _finish_count
 			if (
-				previous.base_score == summary.base_score
-				and previous.bounty_shot == summary.bounty_shot
+				previous.score == summary.score
 				and previous.shots_used == summary.shots_used
 				and previous.finished == summary.finished
 				and previous.status == summary.status
@@ -1282,22 +1305,21 @@ func _received_table(actor: int, message: Dictionary):
 			var accepted = _pass(actor, message.turn)
 			_table_send({"kind": "shot_result", "turn": message.turn, "accepted": accepted}, actor)
 		elif kind == "shop_request":
-			multiplayer_balls.prepare_shop()
 			var accepted = not finished and shop_sync.handle_request(message, actor)
+			var shop_state = shop_sync.capture()
+			var captured_lobby_revision: int = lobby.get("revision", -1)
 			_table_send(
 				{
 					"kind": "shop_result",
 					"accepted": accepted,
 					"error": shop_sync.last_error,
 					"request_id": message.get("request_id", 0),
-					"shop": shop_sync.capture()
+					"shop": shop_state
 				},
 				actor
 			)
-			_publish_state()
-		elif kind == "ball_call":
-			multiplayer_balls.handle_call(actor, message)
-			_publish_state()
+			# Share the final capture unless sending the result changed membership.
+			_publish_state(0, shop_state, captured_lobby_revision)
 		elif kind == "sync_request":
 			_publish_state(actor)
 		return
@@ -1338,7 +1360,6 @@ func _received_table(actor: int, message: Dictionary):
 			table_sync.begin_shot(message.vector)
 		last_started_turn = message.turn
 	elif kind == "state" and _valid_state(message, table_id):
-		multiplayer_balls.apply_state(message.multiplayer_balls)
 		latest_state = message
 		turn_owner = message.turn_owner
 		shot_number = message.turn
@@ -1407,14 +1428,13 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 	]:
 		if not message.get(key) is bool:
 			return false
-	for key in ["round", "shots_left", "used_shots", "bounty_shot", "run_goal_rounds"]:
+	for key in ["round", "shots_left", "used_shots", "run_goal_rounds"]:
 		if not message.get(key) is int or message[key] < 0:
 			return false
 	return (
 		_number(message.get("score"))
 		and _number(message.get("total_score"))
 		and message.total_score >= 0
-		and message.bounty_shot <= message.used_shots
 		and (
 			not message.run_won
 			or (
@@ -1424,7 +1444,6 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 				and message.round == message.run_goal_rounds
 			)
 		)
-		and multiplayer_balls.valid_state(message.get("multiplayer_balls"))
 		and message.get("finish_reason") is String
 		and message.finish_reason.length() <= 100
 	)

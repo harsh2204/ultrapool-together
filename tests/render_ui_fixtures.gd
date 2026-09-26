@@ -20,29 +20,109 @@ const MAIN_FIELDS = [
 var checks: Array[Dictionary] = []
 
 
-class CallRecorder:
-	extends Node
-
-	var service: Node
-	var calls: Array[Dictionary] = []
-
-	func ball_position(id: int, fallback: Vector2) -> Vector2:
-		return service.ball_position(id, fallback)
-
-	func request_call(ball: int, pocket: int) -> void:
-		calls.append({"ball": ball, "pocket": pocket})
-
-
 class OfflineTransport:
 	extends Node
 
 	var people: Array = []
+	var is_host = true
+	var room_code = "UP8-RENDER-FIXTURE"
+	var sent: Array = []
+
+	func session_open() -> bool:
+		return true
+
+	func invite_ready() -> bool:
+		return false
+
+	func send(message: Dictionary):
+		sent.append(message.duplicate(true))
+
+	func send_to(_id: int, message: Dictionary):
+		send(message)
 
 	func local_id() -> int:
 		return 1
 
 	func participants() -> Array:
 		return people
+
+
+func check_native_run_votes(mod: Node, capture: Callable) -> void:
+	var saved = _save(mod)
+	var previous_model = mod.lobby_model
+	mod.active = false
+	mod._local_id = 1
+	mod.lobby_model = (
+		load(get_script().resource_path.get_base_dir().path_join("../mod/lobby_state.gd")).new()
+	)
+	var options: Dictionary = mod.run_setup.available_choices()
+	var defaults: Dictionary = mod.run_setup.native_defaults()
+	_record(
+		not options.deck.is_empty() and not options.difficulty.is_empty(),
+		"native host unlock catalog contains starting sets and difficulties"
+	)
+	_record(
+		mod.run_setup.validate_config(mod.run_setup.capture_config(defaults)),
+		"native menu defaults produce a valid shared run config"
+	)
+	mod.lobby_model.setup(1, "Host")
+	mod.lobby_model.add_player(2, "Guest")
+	mod.lobby_model.set_table_count(1, 2)
+	mod.lobby_model.choose_slot(2, 1, 0)
+	var configured: bool = mod.lobby_model.configure_run_options(1, options, defaults)
+	_record(configured, "native catalog publishes through the real lobby model")
+	if configured:
+		mod.panel.show()
+		mod.panel.set_block_signals(false)
+		mod._broadcast_lobby()
+		for field in ["deck", "difficulty", "match_mode"]:
+			for player in [1, 2]:
+				mod.lobby_model.set_ready(player, true)
+			mod._broadcast_lobby()
+			var generation: int = mod.lobby.ready_generation
+			var controls = {
+				"deck": mod.panel.get_node("%StartingSet"),
+				"difficulty": mod.panel.get_node("%Difficulty"),
+				"match_mode": mod.panel.get_node("%MatchMode")
+			}
+			var control: OptionButton = controls[field]
+			var index = 2 if field == "match_mode" else 1
+			var choice: String = control.get_item_metadata(index)
+			control.select(index)
+			control.item_selected.emit(index)
+			_record(
+				(
+					mod.lobby.run_vote.counts[field].get(choice, 0) == 1
+					and mod.lobby.run_vote.selected[field] == choice
+				),
+				"native " + field + " selector sends its ballot through the controller"
+			)
+			_record(
+				(
+					mod.lobby.ready_generation > generation
+					and mod.lobby.players.all(func(player): return not player.ready)
+				),
+				"native " + field + " ballot invalidates everyone's old Ready"
+			)
+		var generation: int = mod.lobby.ready_generation
+		mod.panel.get_node("%Ready").pressed.emit()
+		_record(
+			mod.lobby.players[0].ready and not mod.lobby.players[1].ready,
+			"native Ready button approves the current vote generation through the controller"
+		)
+		mod._apply_lobby_request(2, {"action": "ready", "ready": true, "generation": generation})
+		_record(mod.lobby.can_start, "guest Ready on the same generation makes the lobby startable")
+		_record(
+			mod.run_setup.validate_config(
+				mod.run_setup.capture_config(mod.lobby.run_vote.selected)
+			),
+			"native vote result hydrates a valid shared run config"
+		)
+		await capture.call(
+			"lobby-native-vote-input", "Native run votes and Ready travel through the controller."
+		)
+	mod.lobby_model = previous_model
+	_restore(mod, saved)
 
 
 func capture_all_menu(mod: Node, capture: Callable) -> void:
@@ -58,13 +138,27 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 	coop.players[2].ready = false
 	coop.players[3].ready = false
 	coop.can_start = false
-	panel.set_connection("UP7-RENDER-FIXTURE", true, true)
+	panel.set_connection("UP8-RENDER-FIXTURE", true, true)
 	panel.render(coop, 1, true)
 	await capture.call("lobby-choosing-seats", "Four-player co-op with one player choosing a seat.")
 	coop = _lobby([0, 0, 0, 0], 1)
 	panel.render(coop, 1, true)
 	_record(panel.get_node("%Leave").visible, "host can leave a pre-match lobby")
 	await capture.call("lobby-coop-ready", "Four players ready at a shared table.")
+
+	var choices = coop.duplicate(true)
+	choices.run_vote.selected.deck = "2_NATURE"
+	choices.run_vote.selected.difficulty = "diff_2"
+	choices.run_vote.counts.deck = {"1_CLASSIC": 1, "2_NATURE": 3}
+	choices.run_vote.counts.difficulty = {"diff_1": 1, "diff_2": 3}
+	choices.can_start = false
+	for player in choices.players:
+		player.ready = false
+	panel.render(choices, 1, true)
+	await capture.call(
+		"lobby-native-run-vote", "Lobby voting selects the native starting set and difficulty."
+	)
+	panel.render(coop, 1, true)
 
 	panel.set_friends([{"id": 5, "name": "Erin"}, {"id": 6, "name": "Finley"}])
 	var invite = panel.get_node("%Invite")
@@ -82,6 +176,7 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 	await capture.call("lobby-four-tables", "A 1v1v1v3 match with equal shot budgets per table.")
 	var race = _lobby([0, 0, 1, 1], 2)
 	race.match_mode = "race"
+	race.run_vote.selected.match_mode = "race"
 	panel.render(race, 1, true)
 	await capture.call("lobby-race", "Race mode · two teams racing to finish the full run")
 	race.started = true
@@ -149,7 +244,9 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 		"completed match removes obsolete end-run voting controls"
 	)
 	_record(panel.get_node("%Leave").visible, "host can close a completed match")
-	await capture.call("lobby-standings", "Completed table standings, including the Bounty award.")
+	await capture.call(
+		"lobby-standings", "Completed table standings with authoritative native scores."
+	)
 	_restore(mod, saved)
 
 
@@ -172,40 +269,15 @@ func clipped_players(mod: Node) -> Array[String]:
 func capture_table_states(mod: Node, capture: Callable) -> void:
 	var saved = _save(mod)
 	_set_table(mod)
-	var data: Dictionary = mod.multiplayer_balls.capture().duplicate(true)
-	data.last_shooter = 2
-	data.pending = false
-	data.call = {}
-	var called_ball = 0
-	for ball in data.get("balls", []):
-		if "TOGETHER_RELAY" in ball.kinds:
-			ball.marker = 2
-		if "TOGETHER_PATIENCE" in ball.kinds:
-			ball.charge = 3
-		if "TOGETHER_CALL" in ball.kinds:
-			called_ball = ball.id
-	_check_call_input(mod, data, called_ball)
-	mod.multiplayer_balls._ui.refresh(data)
 	mod._update_hud()
-	await capture.call("table-your-turn", "Your turn with Relay, Patience and Bounty markers.")
+	await capture.call("table-your-turn", "Your turn with the selected native starting set.")
 
 	mod.turn_owner = 2
-	data.last_shooter = 1
 	var game = mod.get_node("/root/Global").gameManager
 	var origin: Vector2 = game.player_ball.global_position
 	_cursor(mod, 2, "table", origin + Vector2(70, -100), origin, Vector2(70, -100))
-	mod.multiplayer_balls._ui.refresh(data)
 	mod._update_hud()
-	await capture.call(
-		"table-teammate-aim", "Teammate turn, shared aim preview and a call made on the table."
-	)
-
-	data.call = {"ball": called_ball, "pocket": 4, "actor": 1}
-	mod.multiplayer_balls._ui._selected_ball = called_ball
-	mod.multiplayer_balls._ui.refresh(data)
-	await capture.call(
-		"called-shot-selected", "Called Shot selects a ball and highlights pocket five."
-	)
+	await capture.call("table-teammate-aim", "Teammate turn with the shared native aim preview.")
 
 	mod.presence.clear()
 	mod.lobby = _results()
@@ -213,7 +285,6 @@ func capture_table_states(mod: Node, capture: Callable) -> void:
 	mod.finish_reason = "Shot budget used"
 	mod.total_score = 260.0
 	mod.used_shots = 6
-	mod.multiplayer_balls._ui.refresh(data)
 	mod._update_hud()
 	await capture.call("table-match-result", "The winning table's end-of-match HUD.")
 	_restore(mod, saved)
@@ -224,34 +295,29 @@ func capture_shop_presence(mod: Node, capture: Callable, input: Node) -> void:
 	_set_table(mod)
 	mod.latest_state.in_shop = true
 	mod._update_hud()
-	mod.multiplayer_balls._ui.refresh({})
 	var shop = mod.shop_sync
 	var section: String = shop.current_section()
 	_record(shop.show_section("balls"), "native ball shop is available")
 	await mod.get_tree().create_timer(0.6).timeout
 	_cursor(mod, 2, "shop", Vector2(0.3, 0.35))
 	_cursor(mod, 3, "shop", Vector2(0.72, 0.55))
-	await capture.call(
-		"shop-shared", "Native shared shop, player cursors and multiplayer ball offers."
-	)
+	await capture.call("shop-shared", "Native shared shop, player cursors and native ball offers.")
 
 	var inspected = false
 	input.begin(shop.native_shop())
 	for slot in shop._state.get("slots", []):
-		if slot.get("data", "") == "TOGETHER_CALL":
+		if slot.get("group", "") == "build" and slot.get("id", 0) != 0:
 			await input.hover(shop.slot_item(slot.key))
 			inspected = shop.native_shop().selected_ball == shop.slot_item(slot.key)
 			break
-	_record(inspected, "native shop displays Called Shot inspection")
+	_record(inspected, "native shop displays selected starter inspection")
 	if inspected:
 		await mod.get_tree().create_timer(0.45).timeout
 		_record(
 			mod.get_node("/root/UIManager").info_display.main_panel.is_visible_in_tree(),
 			"native shop inspection card is visibly rendered"
 		)
-		await capture.call(
-			"shop-ball-details", "A multiplayer ball's native description and shop actions."
-		)
+		await capture.call("shop-ball-details", "A native starter's description and shop actions.")
 	input.finish()
 	mod.get_node("/root/UIManager").info_display.hide_info()
 	var snacks: bool = shop.show_section("snacks")
@@ -269,68 +335,6 @@ func capture_shop_presence(mod: Node, capture: Callable, input: Node) -> void:
 	shop.show_section(section)
 	await mod.get_tree().create_timer(0.6).timeout
 	_restore(mod, saved)
-
-
-func _check_call_input(mod: Node, data: Dictionary, ball_id: int) -> void:
-	var ui = mod.multiplayer_balls._ui
-	var recorder = CallRecorder.new()
-	recorder.service = ui._service
-	ui._service = recorder
-	var state = data.duplicate(true)
-	state.last_shooter = 1
-	state.pending = false
-	state.call = {}
-	ui.refresh(state)
-	var pocket: Dictionary = state.pockets[4]
-	var transform: Transform2D = mod.get_viewport().get_canvas_transform()
-	var position: Vector2 = transform * pocket.position
-	_record(ui._choose_at(position), "Called Shot accepts its caller's pocket click")
-	_record(
-		recorder.calls == [{"ball": ball_id, "pocket": pocket.index}],
-		"Called Shot requests the selected ball and clicked pocket"
-	)
-	state.last_shooter = 2
-	ui.refresh(state)
-	_record(
-		not ui._choose_at(position) and recorder.calls.size() == 1,
-		"non-callers cannot call a pocket"
-	)
-	state.last_shooter = 1
-	state.pending = true
-	ui.refresh(state)
-	_record(
-		not ui._choose_at(position) and recorder.calls.size() == 1,
-		"pending ball state blocks calls"
-	)
-	state.pending = false
-	mod.shot_pending = true
-	ui.refresh(state)
-	_record(
-		not ui._choose_at(position) and recorder.calls.size() == 1, "a shot in play blocks calls"
-	)
-	mod.shot_pending = false
-
-	var second: Dictionary = {}
-	for ball in state.balls:
-		if ball.id == ball_id:
-			second = ball.duplicate(true)
-			break
-	second.id = 999999999
-	second.position += Vector2(70, 0)
-	state.balls.append(second)
-	state.call = {"ball": ball_id, "pocket": pocket.index, "actor": 1}
-	ui.refresh(state)
-	_record(ui._choose_at(transform * second.position), "another Called Shot ball can be selected")
-	ui.refresh(state)
-	_record(ui._selected_ball == second.id, "unchanged call state preserves a new ball selection")
-	ui._choose_at(position)
-	_record(
-		recorder.calls.size() == 2 and recorder.calls.back().ball == second.id,
-		"the next pocket click requests the newly selected ball"
-	)
-	ui._service = recorder.service
-	recorder.free()
-	ui.refresh(data)
 
 
 func _record(passed: bool, name: String) -> void:
@@ -362,6 +366,24 @@ func _lobby(tables: Array, count: int) -> Dictionary:
 		"table_count": count,
 		"shot_budget": 6,
 		"match_mode": "score",
+		"run_vote":
+		{
+			"catalog_revision": 1,
+			"options":
+			{
+				"deck":
+				[{"id": "1_CLASSIC", "label": "Classic"}, {"id": "2_NATURE", "label": "Nature"}],
+				"difficulty":
+				[
+					{"id": "diff_1", "label": "Chill Pool Night"},
+					{"id": "diff_2", "label": "Wine Mixer"}
+				],
+				"match_mode":
+				[{"id": "race", "label": "Race"}, {"id": "score", "label": "Score PvP"}]
+			},
+			"counts": {"deck": {"1_CLASSIC": 2}, "difficulty": {"diff_1": 2}},
+			"selected": {"deck": "1_CLASSIC", "difficulty": "diff_1", "match_mode": "score"}
+		},
 		"started": false,
 		"can_start": true,
 		"table_summaries": []
@@ -381,9 +403,7 @@ func _results() -> Dictionary:
 				"shots_used": 6,
 				"shot_budget": 6,
 				"status": "Finished",
-				"finished": true,
-				"bounty_shot": [2, 4, 0, 3][table],
-				"bounty_bonus": 25 if table == 0 else 0
+				"finished": true
 			}
 		)
 	return state
@@ -439,11 +459,6 @@ func _save(mod: Node) -> Dictionary:
 		"process": mod.is_processing(),
 		"input": mod.is_processing_input(),
 		"transport": mod.transport,
-		"ball_process": mod.multiplayer_balls.is_processing(),
-		"ball_ui": mod.multiplayer_balls._ui._data.duplicate(true),
-		"ball_last_call": mod.multiplayer_balls._ui._last_call.duplicate(true),
-		"ball_choice": mod.multiplayer_balls._ui._selected_ball,
-		"ball_names": mod.multiplayer_balls._ui._names.duplicate(),
 		"presence": mod.presence._remotes.duplicate(true),
 		"names": mod.presence._names.duplicate(),
 		"panel_visible": panel.visible,
@@ -468,12 +483,10 @@ func _save(mod: Node) -> Dictionary:
 		saved[field] = value.duplicate(true) if value is Dictionary else value
 	mod.set_process(false)
 	mod.set_process_input(false)
-	mod.multiplayer_balls.set_process(false)
 	panel.set_block_signals(true)
 	var offline = OfflineTransport.new()
 	offline.people = _lobby([0, 0, 0, 0], 1).players
 	mod.transport = offline
-	mod.multiplayer_balls._ui._names_at = 0
 	return saved
 
 
@@ -492,12 +505,6 @@ func _restore(mod: Node, saved: Dictionary) -> void:
 	mod.presence._remotes = saved.presence
 	mod.presence._names = saved.names
 	mod.presence._overlay.queue_redraw()
-	mod.multiplayer_balls._ui._names_at = 0
-	mod.multiplayer_balls._ui.refresh(saved.ball_ui)
-	mod.multiplayer_balls._ui._selected_ball = saved.ball_choice
-	mod.multiplayer_balls._ui._last_call = saved.ball_last_call
-	mod.multiplayer_balls._ui._names = saved.ball_names
-	mod.multiplayer_balls.set_process(saved.ball_process)
 	mod._update_hud()
 	mod.set_process_input(saved.input)
 	mod.set_process(saved.process)

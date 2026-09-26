@@ -2,7 +2,7 @@
 
 Syntax checks do not verify engine types or gameplay. Follow [AGENTS.md](../AGENTS.md) before running any probe, including `--headless`.
 
-For authorized visual tests, run `Capture-Screens.cmd` from the repository root. The [screenshot harness](../docs/screenshots.md) builds repeatable fixtures, checks native textures and shop actions, and saves an HTML gallery with logs and check results. It uses one windowed game process and separate test saves.
+For authorized visual tests, run `Capture-Screens.cmd` on Windows or `bash Capture-Screens.command` on macOS from the repository root. The [screenshot harness](../docs/screenshots.md) builds repeatable fixtures, checks native textures and shop actions, and saves an HTML gallery with logs and check results. It uses one muted game process and separate test saves; macOS uses a background-only app with an unfocusable, mouse-passthrough rendering surface.
 
 For authorized same-PC host+guest play over LAN loopback (not Steam), see [LOCAL_SESSION.md](LOCAL_SESSION.md) and run `Test-LocalSession.cmd` from the repository root. It starts two isolated windowed processes and leaves them open for manual testing.
 
@@ -16,7 +16,23 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\installation.ps1
 
 Every installer call in that suite supplies an isolated `UserDataRoot` under `.local/installer-tests`; real user profiles are not accessed. It checks one-time progression import, exact backups of existing mod saves, update preservation, untouched run files, missing/invalid source saves, dry runs, profile junction rejection, and uninstall behavior.
 
+The macOS installer suite also uses fake app bundles and isolated profiles under `.local/installer-tests`:
+
+```sh
+python3 -m unittest discover -s tests -p installation_macos.py -v
+```
+
+It covers native app layout/version checks, Steam library discovery, configuration placement, executable permissions, one-time imports, save backups, update/uninstall preservation, unsafe paths, symbolic links, tampered manifests, and recovery after a signing failure. Installation fixtures substitute signing calls; a separate macOS-only check signs and verifies an inert copy of a system binary without executing it. These checks do not prove that macOS will launch the installed game or that Steam works across platforms.
+
 Use `gdtoolkit` for GDScript syntax checks.
+
+The macOS capture runner also has isolated lifecycle tests with a mocked child process:
+
+```sh
+python3 -m unittest discover -s tests -p capture_macos.py -v
+```
+
+These cover private app/profile isolation, exclusion of concurrent captures, watchdog/error cleanup, and original-file preservation without launching the game.
 
 ## Standalone model and controller probes
 
@@ -24,17 +40,16 @@ These scripts extend `SceneTree` and require a Godot 4.6 executable with `--scri
 
 | Probe | Coverage | Success marker |
 | --- | --- | --- |
-| `multiplayer_balls_probe.gd` | Eight ball abilities, accepted-shot identity, replay protection, competitive seat-count fairness, round resets, mixed abilities, utility caps, and malformed display snapshots. | `PASS: ... multiplayer ball rules checks` |
-| `bounty_probe.gd` | Completed-shot comparisons, tied rewards, disconnected tables, and idempotent standings. | `BOUNTY_PROBE PASS` |
 | `team_vote_probe.gd` | Concurrent approvals, context generations, stale-vote rejection, membership changes, and deep-copied vote context. | `TEAM_VOTE_PROBE PASS` |
-| `lobby_probe.gd` | Eight-player capacity, self-selected seats, readiness invalidation, host-only settings, unequal table groups, equal shots per table, start/reset, reserved disconnected seats, and leader selection. | `LOBBY_PROBE PASS` |
+| `lobby_probe.gd` | Capacity/seats, run-choice allowlists, per-player votes, ties/abstention, frozen selections, stale readiness rejection, concurrent ready votes, host-only table settings, start/reset, and disconnects. | `LOBBY_PROBE PASS` |
+| `transport_budget_probe.gd` | Fake Steam queues exercise bounded dispatch, reliable retention/order, channel fairness across frames, and byte/time limits without network connections. | `TRANSPORT_BUDGET_PROBE PASS` |
 | `router_probe.gd` | Authenticated actor identity, requests to the correct table leader, table-isolated broadcasts and replies, reliable actions, disconnected members, and malformed routes. | `ROUTER_PROBE PASS` |
 | `controller_probe.gd` | Main controller lifecycle using off-tree service substitutes: identity teardown, room/match generations, terminal leader disconnects and reconnects, a run closing during a shot, and targeted shop synchronization preserving the broadcast cache. | `CONTROLLER_PROBE PASS` |
 | `shop_layout_probe.gd` | Guest remote-slot coverage for host-authoritative shop layouts, including stale pre-inventory replicas and extra local unlock slots. | `SHOP_LAYOUT_PROBE PASS` |
 
 Each script exits 0 on success. The controller probe creates no native game scenes or network connections. It also covers Race versus Score PvP caps, authenticated race results, finish ordering, return-vote generations, startup failure handling, and spectator routing. The screenshot harness runs all model probes in this table inside its existing game process.
 
-The harness also records and replays native host/client round transitions, including delayed shop acknowledgements, packet reordering, payout, victory, defeat, and teardown. The [game-loop coverage matrix](GAME_LOOP.md) separates runtime assertions, model checks, and remaining multi-PC coverage.
+The harness also records and replays native host/client round transitions, including delayed shop acknowledgements, packet reordering, payout, victory, defeat, and teardown. It includes regression assertions for stationary replica sleep, spin reconciliation, shop map identity during wallet/health updates, and rarity indicators on unchanged offers. The [game-loop coverage matrix](GAME_LOOP.md) separates runtime assertions, model checks, and remaining multi-PC coverage. Added assertions are authored coverage until an authorized run passes them.
 
 ## Native game probes
 
@@ -102,4 +117,4 @@ The session probe uses the actual lobby scene signals and controller in two phas
 
 The probe drives UI signals rather than clicking rendered controls and takes no screenshots. It covers two local processes, not eight real players, Internet latency, Steam invitations, or a complete campaign.
 
-Multi-PC testing should cover lobby layout, Steam invitations, uneven groups, equal shot budgets, independent tables and shops, ball movement under latency, cursors and inspection, concurrent shop actions, disconnects, and rematches. For the new balls, check artwork on every peer, called-pocket controls, marks and charges, shop rotation, mixed abilities, health and money updates, Encore respawns, and final Bounty awards.
+Multi-PC testing should cover lobby layout, Steam invitations, uneven groups, equal shot budgets, independent tables and shops, ball movement under latency, cursors and inspection, concurrent shop actions, disconnects, and rematches.

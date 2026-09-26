@@ -167,6 +167,7 @@ if ($runningGames.Count -gt 0) {
 $progressImport = Get-ProgressImport
 
 $manifestPath = Join-Path $installRoot $manifestName
+Assert-PlainPath $manifestPath
 $previousFiles = @()
 if (Test-Path -LiteralPath $installRoot) {
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
@@ -177,7 +178,30 @@ if (Test-Path -LiteralPath $installRoot) {
         (Get-FullDirectory $previous.install_root) -ne $installRoot) {
         throw 'The existing installation marker does not match this destination.'
     }
+    if ($previous.files -isnot [array]) {
+        throw 'The installation marker contains an invalid owned-file list.'
+    }
     $previousFiles = @($previous.files)
+    $validatedPreviousFiles = @()
+    # Validate every old path before any write; retired files will be deleted.
+    foreach ($relative in $previousFiles) {
+        if ($relative -isnot [string] -or [string]::IsNullOrWhiteSpace($relative) -or
+            [System.IO.Path]::IsPathRooted($relative) -or $relative.Contains(':') -or
+            $relative -match '(^|[\\/])\.{1,2}([\\/]|$)' -or
+            $relative -match '[. ]([\\/]|$)' -or $relative -eq $manifestName) {
+            throw 'The installation marker contains an invalid owned file path.'
+        }
+        $target = [System.IO.Path]::GetFullPath((Join-Path $installRoot $relative))
+        if (-not $target.StartsWith($installRoot + '\', $comparison)) {
+            throw "The installation marker contains a path outside the mod directory: $relative"
+        }
+        Assert-PlainPath $target
+        if (Test-Path -LiteralPath $target -PathType Container) {
+            throw "An expected installed file is now a directory; leaving it unchanged: $target"
+        }
+        $validatedPreviousFiles += $target.Substring($installRoot.Length + 1)
+    }
+    $previousFiles = @($validatedPreviousFiles | Select-Object -Unique)
 }
 
 $modFiles = @(Get-ChildItem -LiteralPath $sourceMod -File -Recurse)
@@ -241,6 +265,20 @@ UltrapoolTogether="*$autoloadPath"
 [System.IO.File]::WriteAllText((Join-Path $installRoot 'override.cfg'), $override, [System.Text.UTF8Encoding]::new($false))
 [System.IO.File]::WriteAllText((Join-Path $installRoot 'steam_appid.txt'), "4195110`n", [System.Text.Encoding]::ASCII)
 Import-Progress $progressImport
+# Retain the union in the in-progress manifest until cleanup succeeds, so a
+# partial update can be retried or uninstalled without forgetting owned files.
+foreach ($relative in $previousFiles) {
+    if ($relative -in $ownedFiles) { continue }
+    $target = Join-Path $installRoot $relative
+    Assert-PlainPath $target
+    if (Test-Path -LiteralPath $target -PathType Container) {
+        throw "An expected installed file is now a directory; leaving it unchanged: $target"
+    }
+    if (Test-Path -LiteralPath $target -PathType Leaf) {
+        Remove-Item -LiteralPath $target -Force
+    }
+}
+$manifest.files = @($ownedFiles | Select-Object -Unique)
 $manifest.state = 'installed'
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 

@@ -96,7 +96,7 @@ func _run() -> void:
 	check(host_node.host_id() == host_node.local_id(), "host identity is separate from guest slots")
 	check(guests[0].host_id() == host_node.local_id(), "guest knows coordinator identity")
 	check(
-		guests[0].join_steam("UP7-123") == ERR_ALREADY_IN_USE, "invite preserves active connection"
+		guests[0].join_steam("UP8-123") == ERR_ALREADY_IN_USE, "invite preserves active connection"
 	)
 	for guest in guests:
 		guest.send({"kind": "input", "claimed_actor": first_id, "actual": guest.local_id()})
@@ -138,7 +138,7 @@ func _run() -> void:
 		var_to_bytes(
 			{
 				"kind": "hello",
-				"protocol": 5,
+				"protocol": host_node.PROTOCOL,
 				"game_version": "0.15.7",
 				"token": host_node.room_code,
 				"nonce": replaced_nonce
@@ -226,7 +226,7 @@ func _run() -> void:
 	host_node._receive_wire(guests[1].local_id(), var_to_bytes("malformed"))
 	check(host_node.connected_peers().size() == 5, "malformed packet isolates one peer")
 	check(host_disconnect_events == 0, "peer faults never end coordinator session")
-	for code in ["invalid", "UP1-123-token", "UP2-123", "UP3-123", "UP4-123", "UP7-0"]:
+	for code in ["invalid", "UP1-123-token", "UP2-123", "UP3-123", "UP4-123", "UP7-123", "UP8-0"]:
 		check(
 			rejected.join_steam(code) == ERR_INVALID_PARAMETER, "reject old or malformed room code"
 		)
@@ -245,11 +245,14 @@ func _steam_room_check() -> void:
 		if host_node.invite_ready() or not host_node.is_host:
 			break
 		await pause(0.2)
-	check(host_node.invite_ready() and host_node.room_code.begins_with("UP7-"), "Steam room ready")
+	check(host_node.invite_ready() and host_node.room_code.begins_with("UP8-"), "Steam room ready")
 	if host_node._lobby_id != 0:
 		check(
-			host_node._steam.call("getLobbyData", host_node._lobby_id, "protocol") == "4",
-			"lobby publishes protocol four"
+			(
+				host_node._steam.call("getLobbyData", host_node._lobby_id, "protocol")
+				== str(host_node.PROTOCOL)
+			),
+			"lobby publishes the current protocol"
 		)
 	host_node.close()
 	check(

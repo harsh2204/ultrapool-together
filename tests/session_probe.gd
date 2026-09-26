@@ -91,7 +91,7 @@ func _host():
 		_check(false, "return to lobby ends the first run")
 		return
 	mod.panel.table_count_requested.emit(2)
-	mod.panel.match_mode_requested.emit("score")
+	mod.panel.run_vote_requested.emit("match_mode", "score", _room().run_vote.catalog_revision)
 	mod.panel.shot_budget_requested.emit(1)
 	if not await _wait(
 		func():

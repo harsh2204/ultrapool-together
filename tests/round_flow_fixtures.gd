@@ -26,7 +26,7 @@ class Wire:
 	extends Node
 	var is_host = true
 	var id = 1
-	var room_code = "UP7-ROUND-FLOW"
+	var room_code = "UP8-ROUND-FLOW"
 	var packets: Array = []
 
 	func local_id() -> int:
@@ -289,7 +289,6 @@ func replay_guest(mod: Node, capture: Callable) -> Array[Dictionary]:
 	)
 	mod.shop_sync.begin_session(mod)
 	mod.adapter.begin_session(mod)
-	mod.multiplayer_balls.begin_session()
 	_replay(phases.playing, ["shop_state"])
 	_check(mod.active, "round flow: closed shop update before first replica is accepted")
 	_replay(phases.playing, ["state", "snapshot"])
@@ -511,7 +510,6 @@ func replay_guest(mod: Node, capture: Callable) -> Array[Dictionary]:
 	await _delay(0.2)
 	_check(ui.settings_menu.is_open, "round flow: teardown starts with native settings open")
 	mod.shop_sync.end_session()
-	mod.multiplayer_balls.end_session()
 	mod.adapter.end_session()
 	mod.table_sync.end_guest()
 	await _delay(0.1)
@@ -545,7 +543,6 @@ func _cold_loss(capture: Callable):
 	)
 	_mod.shop_sync.begin_session(_mod)
 	_mod.adapter.begin_session(_mod)
-	_mod.multiplayer_balls.begin_session()
 	_replay(phases.loss)
 	await _delay(0.6)
 	var game = global_node.gameManager
@@ -581,7 +578,6 @@ func _cold_loss(capture: Callable):
 		"70-guest-cold-loss", "Guest · first-round defeat before any shop has opened"
 	)
 	_mod.shop_sync.end_session()
-	_mod.multiplayer_balls.end_session()
 	_mod.adapter.end_session()
 	_mod.table_sync.end_guest()
 	_check(
@@ -600,7 +596,6 @@ func _record_endings(capture: Callable):
 	_mod.run_controls.end_session()
 	_mod.shop_sync.end_session()
 	_mod.adapter.end_session()
-	_mod.multiplayer_balls.end_session()
 	_mod.run_setup.return_menu()
 	if not _check(
 		await _wait(_mod.run_setup.at_main_menu), "round flow: finished host returns to menu"
@@ -613,12 +608,11 @@ func _record_endings(capture: Callable):
 	}
 	_mod.finished = false
 	_mod.finish_reason = ""
-	_mod.multiplayer_balls.begin_session()
 	_mod.adapter.begin_session(_mod)
 	_mod.shop_sync.begin_session(_mod)
 	_mod.run_controls.begin_session()
 	if not _check(
-		_mod.run_setup.start(config, _mod.multiplayer_balls.catalog) == OK,
+		_mod.run_setup.start(config) == OK,
 		"round flow: host starts a fresh native run for defeat coverage"
 	):
 		return
@@ -722,7 +716,6 @@ func _guest_removed_drag():
 	_mod.table_sync.begin_guest(run_config)
 	_mod.shop_sync.begin_session(_mod)
 	_mod.adapter.begin_session(_mod)
-	_mod.multiplayer_balls.begin_session()
 	_replay(phases.shop)
 	await _delay(0.6)
 	var sync = _mod.shop_sync
@@ -753,7 +746,6 @@ func _guest_removed_drag():
 	)
 	_input_fixture().finish()
 	_mod.shop_sync.end_session()
-	_mod.multiplayer_balls.end_session()
 	_mod.adapter.end_session()
 	_mod.table_sync.end_guest()
 
@@ -820,16 +812,48 @@ func _abort_input():
 
 func _move_held_item(body: Node2D, position: Vector2, role: String):
 	var original_position = body.global_position
+	var started_at = Time.get_ticks_msec()
+	var start_process_frame = Engine.get_process_frames()
+	var start_drawn_frame = Engine.get_frames_drawn()
+	var start_canvas = body.get_viewport().get_canvas_transform()
 	_mouse_motion(position, true)
 	await _delay(0.4)
 	_check(
 		body.global_position.distance_to(original_position) > 30,
 		role + " drag: the native item itself moves with the pointer"
 	)
-	_check(
-		body.global_position.distance_to(body.get_global_mouse_position()) < 4,
-		role + " drag: native movement reaches the pointer"
-	)
+	var pointer_distance = body.global_position.distance_to(body.get_global_mouse_position())
+	if pointer_distance >= 4:
+		var shop = _mod.shop_sync.native_shop()
+		print(
+			"NATIVE_DRAG_MOTION ",
+			{
+				"role": role,
+				"elapsed_ms": Time.get_ticks_msec() - started_at,
+				"process_frames": Engine.get_process_frames() - start_process_frame,
+				"drawn_frames": Engine.get_frames_drawn() - start_drawn_frame,
+				"last_process_delta": body.get_process_delta_time(),
+				"body_type": "ShopPassive" if body is ShopPassive else body.get_class(),
+				"script": body.get_script().resource_path,
+				"body_processing": body.is_processing() and body.can_process(),
+				"start_world": original_position,
+				"end_world": body.global_position,
+				"target_screen": position,
+				"pointer_screen": body.get_viewport().get_mouse_position(),
+				"pointer_world": body.get_global_mouse_position(),
+				"native_target_world": body.tpos,
+				"slot_world": body.slot.global_position,
+				"pointer_distance": pointer_distance,
+				"grabbed": shop.is_grabbed(body),
+				"shop_moving": shop.moving(),
+				"shop_camera_position": shop.camera.position,
+				"shop_camera_target_x": shop.target_camera_x,
+				"start_canvas": start_canvas,
+				"end_canvas": body.get_viewport().get_canvas_transform(),
+				"root_canvas": _mod.get_viewport().get_canvas_transform()
+			}
+		)
+	_check(pointer_distance < 4, role + " drag: native movement reaches the pointer")
 	_check(body.z_index == 200, role + " drag: native item renders above its shop slot")
 	if body is ShopBall:
 		_check(
@@ -1005,7 +1029,6 @@ func _replay(packets: Array, kinds: Array = []):
 
 
 func _shop_ready() -> bool:
-	_mod.multiplayer_balls.prepare_shop()
 	var state = _mod.shop_sync.capture()
 	return state.get("open", false) and not state.get("busy", true)
 

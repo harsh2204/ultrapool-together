@@ -8,7 +8,7 @@ signal slot_requested(table: int, slot: int)
 signal ready_requested(ready: bool)
 signal table_count_requested(count: int)
 signal shot_budget_requested(shots: int)
-signal match_mode_requested(mode: String)
+signal run_vote_requested(field: String, choice: String, catalog_revision: int)
 signal start_requested
 signal return_requested
 signal return_vote_requested(approve: bool)
@@ -58,11 +58,9 @@ func _ready():
 	%Invite.get_popup().id_pressed.connect(_invite)
 	%TableCount.value_changed.connect(func(value): table_count_requested.emit(int(value)))
 	%ShotBudget.value_changed.connect(func(value): shot_budget_requested.emit(int(value)))
-	%MatchMode.add_item("Race", 0)
-	%MatchMode.add_item("Score PvP", 1)
-	%MatchMode.item_selected.connect(
-		func(index): match_mode_requested.emit("race" if index == 0 else "score")
-	)
+	%MatchMode.item_selected.connect(func(index): _vote_selected("match_mode", %MatchMode, index))
+	%StartingSet.item_selected.connect(func(index): _vote_selected("deck", %StartingSet, index))
+	%Difficulty.item_selected.connect(func(index): _vote_selected("difficulty", %Difficulty, index))
 	%Ready.pressed.connect(_toggle_ready)
 	%Start.pressed.connect(func(): start_requested.emit())
 	%Return.pressed.connect(func(): return_requested.emit())
@@ -78,7 +76,7 @@ func _ready():
 
 
 func render(state: Dictionary, local_id: int, is_host: bool):
-	var roster_changed = state != _state or local_id != _local_id
+	var roster_changed = _roster_view(state) != _roster_view(_state) or local_id != _local_id
 	_state = state.duplicate(true)
 	_local_id = local_id
 	_is_host = is_host
@@ -98,8 +96,7 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	%ShotBudget.editable = is_host and not started
 	var multiple_tables: bool = state.get("table_count", 1) > 1
 	var racing = multiple_tables and state.get("match_mode", "race") == "race"
-	%MatchMode.select(0 if state.get("match_mode", "race") == "race" else 1)
-	%MatchMode.disabled = not is_host or started
+	_render_run_votes(state, local_id, started)
 	%MatchMode.get_parent().visible = multiple_tables
 	%ShotBudget.get_parent().visible = multiple_tables and not racing
 	var summaries: Array = state.get("table_summaries", [])
@@ -115,8 +112,6 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 		%Rules.text = "Race to finish the run first. Each table has its own board and shared shop."
 	elif multiple_tables:
 		%Rules.text = "Highest score wins. Each table shares the same total shot allowance."
-	if not is_host and not started:
-		%Rules.text += " The host chooses the match settings."
 	var local_player = _player(local_id)
 	var seated: bool = local_player.get("table", -1) >= 0
 	var ready: bool = local_player.get("ready", false)
@@ -153,6 +148,70 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 		_build_tables()
 		_build_bench()
 	_resize_tables()
+
+
+func _roster_view(state: Dictionary) -> Dictionary:
+	var players: Array = state.get("players", []).duplicate(true)
+	for player in players:
+		player.erase("run_votes")
+	return {
+		"players": players,
+		"tables": state.get("table_count", 1),
+		"mode": state.get("match_mode", "race"),
+		"summaries": state.get("table_summaries", []),
+		"watched": state.get("watched_table", -1),
+		"started": state.get("started", false),
+		"host": state.get("host_id", 0)
+	}
+
+
+func _vote_selected(field: String, control: OptionButton, index: int) -> void:
+	run_vote_requested.emit(
+		field,
+		str(control.get_item_metadata(index)),
+		int(_state.get("run_vote", {}).get("catalog_revision", -1))
+	)
+
+
+func _render_run_votes(state: Dictionary, local_id: int, started: bool) -> void:
+	var vote: Dictionary = state.get("run_vote", {})
+	var options: Dictionary = vote.get("options", {})
+	var counts: Dictionary = vote.get("counts", {})
+	var selected: Dictionary = vote.get("selected", {})
+	var local_player = _player(local_id)
+	var votes: Dictionary = local_player.get("run_votes", {})
+	var disabled: bool = started or not local_player.get("connected", false)
+	var winners: Array[String] = []
+	var controls = {"deck": %StartingSet, "difficulty": %Difficulty, "match_mode": %MatchMode}
+	for field in controls:
+		var control: OptionButton = controls[field]
+		var entries: Array = options.get(field, [])
+		if control.get_meta("run_options", []) != entries or control.item_count == 0:
+			control.clear()
+			control.add_item("No preference")
+			control.set_item_metadata(0, "")
+			for entry in entries:
+				control.add_item(entry.label)
+				control.set_item_metadata(control.item_count - 1, entry.id)
+			control.set_meta("run_options", entries.duplicate(true))
+		var selected_index = 0
+		for index in entries.size():
+			var entry: Dictionary = entries[index]
+			var count: int = counts.get(field, {}).get(entry.id, 0)
+			control.set_item_text(index + 1, "%s · %d" % [entry.label, count])
+			if votes.get(field, "") == entry.id:
+				selected_index = index + 1
+			if selected.get(field, "") == entry.id:
+				if field != "match_mode" or state.get("table_count", 1) > 1:
+					winners.append(entry.label)
+		control.select(selected_index)
+		control.disabled = disabled or entries.is_empty()
+	%VoteHelp.visible = not started
+	%RunSelection.text = (
+		("Playing: " if started else "Current result: ") + " · ".join(winners)
+		if not winners.is_empty()
+		else "Waiting for the host's available starting sets and difficulties."
+	)
 
 
 func set_status(text: String):
@@ -224,6 +283,8 @@ func _player(id: int) -> Dictionary:
 func _readiness_text(players: Array, local_player: Dictionary, started: bool) -> String:
 	if started:
 		return "The match has started. Close this screen to return to play."
+	if _state.get("run_vote", {}).get("options", {}).is_empty():
+		return "Waiting for the host's available starting sets and difficulties."
 	if local_player.get("table", -1) < 0:
 		return "Choose an open seat at a table, then ready up."
 	var seated = 0
@@ -302,12 +363,14 @@ func _build_tables():
 		var seat = 0
 		while seat in occupied:
 			seat += 1
+		# The player badge already identifies the local seat; only render an actionable join.
+		if _player(_local_id).get("table", -1) == table_id:
+			continue
 		var join = Button.new()
-		join.custom_minimum_size.y = 40
+		join.custom_minimum_size.y = 48
 		join.add_theme_font_size_override("font_size", 16)
-		var here: bool = _player(_local_id).get("table", -1) == table_id
-		join.text = "You are seated here" if here else "+  Join this table"
-		join.disabled = here or seat >= _state.get("capacity", 8)
+		join.text = "+  Join this table"
+		join.disabled = seat >= _state.get("capacity", 8)
 		join.pressed.connect(func(): slot_requested.emit(table_id, seat))
 		content.add_child(join)
 
@@ -340,15 +403,6 @@ func _add_progress(content: VBoxContainer, summary: Dictionary):
 	progress.add_theme_font_size_override("font_size", 14)
 	progress.add_theme_color_override("font_color", MUTED)
 	content.add_child(progress)
-	if not multiple_tables or racing or summary.get("bounty_shot", 0) <= 0:
-		return
-	var bounty = Label.new()
-	bounty.text = "Bounty · Shot %d" % summary.bounty_shot
-	if summary.get("bounty_bonus", 0) > 0:
-		bounty.text += " · +25 points"
-	bounty.add_theme_font_size_override("font_size", 14)
-	bounty.add_theme_color_override("font_color", GOLD)
-	content.add_child(bounty)
 
 
 func _add_watch_button(content: VBoxContainer, table: int, summary: Dictionary):
@@ -458,6 +512,12 @@ func _clear(parent: Node):
 func _resize_tables():
 	if not is_node_ready():
 		return
+	# Keep the desktop header on one row; wrap the room-code group at narrow widths.
+	var header = $Margin/Layout/Header
+	var room_parent = header if size.x >= 1000 else $Margin/Layout
+	if %RoomBar.get_parent() != room_parent:
+		%RoomBar.reparent(room_parent)
+		room_parent.move_child(%RoomBar, 1)
 	var margin = 16 if size.x < 700 else 32
 	$Margin.add_theme_constant_override("margin_left", margin)
 	$Margin.add_theme_constant_override("margin_right", margin)

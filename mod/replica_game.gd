@@ -13,6 +13,9 @@ var pocket_replicas: Dictionary = {}
 var corrections: Dictionary = {}
 var remote_round_reward = 0.0
 var _inventory_state: Dictionary = {}
+var _hud_state: Dictionary = {}
+var _pocket_states: Array = []
+var _ball_bases: Dictionary = {}
 
 
 func prepare_scene() -> void:
@@ -87,7 +90,7 @@ func _process(_delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	for id in replicas:
 		var body = replicas[id]
-		if body.freeze:
+		if body.freeze or (body.sleeping and not corrections.has(id)):
 			continue
 		if corrections.has(id):
 			var correction: Vector2 = corrections[id] * (1.0 - exp(-12.0 * delta))
@@ -95,13 +98,24 @@ func _physics_process(delta: float) -> void:
 			corrections[id] -= correction
 			if corrections[id].length_squared() < 0.25:
 				corrections.erase(id)
-		if body.linear_velocity.length() > 2500.0:
+		var speed_squared: float = body.linear_velocity.length_squared()
+		if speed_squared > 2500.0 * 2500.0:
 			body.linear_velocity = body.linear_velocity.limit_length(2500.0)
-		elif body.linear_velocity.length() < 10.0 and body.constant_force == Vector2.ZERO:
-			body.linear_velocity = Vector2.ZERO
-			body.angular_velocity = 0.0
-		body._anti_tunnel_walls(delta)
-	if is_instance_valid(player_ball) and not player_ball.freeze:
+		elif speed_squared < 100.0 and body.constant_force == Vector2.ZERO:
+			if body.linear_velocity != Vector2.ZERO:
+				body.linear_velocity = Vector2.ZERO
+			if body.angular_velocity != 0.0:
+				body.angular_velocity = 0.0
+		# Native ball physics only needs supplemental raycasts above this speed;
+		# ordinary rigid-body contacts handle slow movement.
+		if speed_squared > Ball.BALL_SUBSTEP_VELOCITY_THRESHOLD_SQ:
+			body._anti_tunnel_walls(delta)
+	if (
+		is_instance_valid(player_ball)
+		and not player_ball.freeze
+		and not player_ball.sleeping
+		and player_ball.linear_velocity.length_squared() > Ball.BALL_SUBSTEP_VELOCITY_THRESHOLD_SQ
+	):
 		player_ball._anti_tunnel_balls(delta)
 
 
@@ -141,24 +155,25 @@ func apply_table(data: Dictionary) -> void:
 	balls_pocketed = result.balls_pocketed
 	money_earned = result.money_earned
 	game_time = result.game_time
-	get_node("UI/FloatingUI").show_time(game_time)
 	score = data.score
-	player_info.money = data.money
-	player_info.hp = data.hp
+	if player_info.money != data.money:
+		player_info.money = data.money
+	if player_info.hp != data.hp:
+		player_info.hp = data.hp
 	if _inventory_state != data.inventory:
 		PlayerInventory.apply(player_info, data.inventory, BallDatabase)
 		_inventory_state = data.inventory.duplicate(true)
-	table.global_position = data.table_position
+	if table.global_position != data.table_position:
+		table.global_position = data.table_position
+		_pocket_states.clear()
+	var camera_target: Vector2 = data.table_position
 	if is_instance_valid(shop) and shop.has_method("apply_state") and shop.is_open:
-		Global.camera.move(shop.get_camera_target())
-	else:
-		Global.camera.move(data.table_position)
-	table.update_score_display(score, maxf(remote_required_score, 1.0))
-	table.update_money(data.money)
-	table.update_round_text(tr("UI_ROUND") + " " + str(data.round + 1))
-	table.get_hp_info().display_hp(data.hp, data.max_hp, true)
-	_update_shots(data.shots)
-	_update_pockets(data.pockets)
+		camera_target = shop.get_camera_target()
+	if Global.camera.move_position != camera_target:
+		Global.camera.move(camera_target)
+	var locale_changed: bool = _hud_state.get("locale") != TranslationServer.get_locale()
+	_update_hud(data, locale_changed)
+	_update_pockets(data.pockets, locale_changed)
 	var present: Dictionary = {}
 	active_balls.clear()
 	active_balls_include_untargetable.clear()
@@ -168,7 +183,8 @@ func apply_table(data: Dictionary) -> void:
 		if not replicas.has(id):
 			_create_ball(state)
 		var body = replicas[id]
-		if body.get_meta("remote_item") != state.item:
+		var item_changed: bool = body.get_meta("remote_item") != state.item
+		if item_changed:
 			_set_item(body, state.item)
 		var simulate: bool = (
 			state.alive
@@ -179,35 +195,68 @@ func apply_table(data: Dictionary) -> void:
 			and not data.in_shop
 		)
 		var error: Vector2 = state.position - body.global_position
+		var spin_changed = false
 		if data.ready or not simulate or error.length() > body.get_radius() * 8.0:
-			body.global_position = state.position
-			body.rotation = state.rotation
-			body.transform3d.rotation = state.spin
+			if body.global_position != state.position:
+				body.global_position = state.position
+			if body.rotation != state.rotation:
+				body.rotation = state.rotation
+			if body.transform3d.rotation != state.spin:
+				body.transform3d.rotation = state.spin
+				spin_changed = true
 			corrections.erase(id)
-		else:
+		elif error != Vector2.ZERO:
 			corrections[id] = error
-		body.freeze = not simulate
-		body.collision_shape.disabled = not simulate
-		body.sleeping = false
-		body.linear_velocity = state.velocity
-		body.angular_velocity = state.angular_velocity
-		body.linear_damp = state.linear_damp
-		body.angular_damp = state.angular_damp
-		body.constant_force = state.force if simulate else Vector2.ZERO
-		body.visible = state.visible
+		else:
+			corrections.erase(id)
+		# Compare live values: moving replicas predict between snapshots and must still
+		# reconcile even when two authoritative samples contain identical values.
+		if body.freeze != (not simulate):
+			body.freeze = not simulate
+		if body.collision_shape.disabled != (not simulate):
+			body.collision_shape.disabled = not simulate
+		if body.linear_velocity != state.velocity:
+			body.linear_velocity = state.velocity
+		if body.angular_velocity != state.angular_velocity:
+			body.angular_velocity = state.angular_velocity
+		if body.linear_damp != state.linear_damp:
+			body.linear_damp = state.linear_damp
+		if body.angular_damp != state.angular_damp:
+			body.angular_damp = state.angular_damp
+		var force: Vector2 = state.force if simulate else Vector2.ZERO
+		if body.constant_force != force:
+			body.constant_force = force
+		if (
+			simulate
+			and body.sleeping
+			and (
+				state.velocity != Vector2.ZERO
+				or state.angular_velocity != 0.0
+				or force != Vector2.ZERO
+			)
+		):
+			body.sleeping = false
+		if body.visible != state.visible:
+			body.visible = state.visible
 		body.alive = state.alive
 		body.spawned = state.spawned
 		body.falling = state.falling
 		body.gone = state.gone
 		body.is_passive = state.passive
-		body.mass = state.mass
-		body.scale_modifier = state.radius_scale
-		body.visuals.scale = state.visual_scale
-		body.modulate = state.color
+		if body.mass != state.mass:
+			body.mass = state.mass
+		if body.scale_modifier != state.radius_scale:
+			body.scale_modifier = state.radius_scale
+		if body.visuals.scale != state.visual_scale:
+			body.visuals.scale = state.visual_scale
+		if body.modulate != state.color:
+			body.modulate = state.color
 		var basis: Basis = body.transform3d.global_transform.basis
-		body.ball.material.set_shader_parameter("rotation_x", basis.x)
-		body.ball.material.set_shader_parameter("rotation_y", basis.y)
-		body.ball.material.set_shader_parameter("rotation_z", basis.z)
+		if item_changed or spin_changed or _ball_bases.get(id) != basis:
+			body.ball.material.set_shader_parameter("rotation_x", basis.x)
+			body.ball.material.set_shader_parameter("rotation_y", basis.y)
+			body.ball.material.set_shader_parameter("rotation_z", basis.z)
+			_ball_bases[id] = basis
 		if state.alive and state.visible and not state.player and not state.passive:
 			if body.is_targetable():
 				active_balls.append(body)
@@ -223,15 +272,44 @@ func apply_table(data: Dictionary) -> void:
 			body.queue_free()
 			replicas.erase(id)
 			corrections.erase(id)
+			_ball_bases.erase(id)
 
 
-func _update_pockets(states: Array) -> void:
+func _update_hud(data: Dictionary, locale_changed: bool) -> void:
+	# Keep only display inputs, not an entire snapshot. A replacement replica starts
+	# with an empty cache, so even zero-valued initial state hydrates the native UI.
+	var time_seconds = floori(game_time)
+	if locale_changed or _hud_state.get("time_seconds") != time_seconds:
+		get_node("UI/FloatingUI").show_time(game_time)
+	if (
+		locale_changed
+		or _hud_state.get("score") != score
+		or _hud_state.get("required_score") != remote_required_score
+	):
+		table.update_score_display(score, maxf(remote_required_score, 1.0))
+	if locale_changed or _hud_state.get("money") != data.money:
+		table.update_money(data.money)
+	if locale_changed or _hud_state.get("round") != data.round:
+		table.update_round_text(tr("UI_ROUND") + " " + str(data.round + 1))
+	if _hud_state.get("hp") != data.hp or _hud_state.get("max_hp") != data.max_hp:
+		table.get_hp_info().display_hp(data.hp, data.max_hp, true)
+	_update_shots(data.shots)
+	for field in ["score", "required_score", "money", "round", "hp", "max_hp"]:
+		_hud_state[field] = data[field]
+	_hud_state.time_seconds = time_seconds
+	_hud_state.locale = TranslationServer.get_locale()
+
+
+func _update_pockets(states: Array, locale_changed: bool = false) -> void:
+	if not locale_changed and _pocket_states == states:
+		return
 	var present: Dictionary = {}
 	pockets.clear()
 	for state in states:
 		var id: int = state.id
 		present[id] = true
-		if not pocket_replicas.has(id):
+		var created: bool = not pocket_replicas.has(id)
+		if created:
 			if state.base_index >= 0:
 				pocket_replicas[id] = base_pockets[state.base_index]
 			else:
@@ -244,20 +322,28 @@ func _update_pockets(states: Array) -> void:
 			pocket_replicas[id].set_meta("remote_base_index", state.base_index)
 		var pocket = pocket_replicas[id]
 		pockets.append(pocket)
-		pocket.global_position = state.position
-		pocket.rotation = state.rotation
-		pocket.scale = state.scale
+		if pocket.global_position != state.position:
+			pocket.global_position = state.position
+		if pocket.rotation != state.rotation:
+			pocket.rotation = state.rotation
+		if pocket.scale != state.scale:
+			pocket.scale = state.scale
 		var score_changed: bool = pocket.extra_score != state.score
+		var multiplier_changed: bool = (
+			pocket.base_multiplier != state.multiplier or pocket.extra_multiplier != 0.0
+		)
 		pocket.base_multiplier = state.multiplier
 		pocket.extra_multiplier = 0.0
 		pocket.extra_score = state.score
 		if pocket.closed != state.closed:
 			pocket.get_node("%AnimationPlayer").play("close" if state.closed else "open")
 			pocket.closed = state.closed
-		pocket.set_shield(state.shielded)
+		if created or pocket.shielded != state.shielded:
+			pocket.set_shield(state.shielded)
 		pocket.get_node("SkullIndicator").visible = state.has_held_balls
-		pocket.update_label()
-		if score_changed:
+		if multiplier_changed or locale_changed or created:
+			pocket.update_label()
+		if score_changed or locale_changed or created:
 			pocket.update_extra_score_label()
 	for id in pocket_replicas.keys():
 		if not present.has(id):
@@ -265,6 +351,7 @@ func _update_pockets(states: Array) -> void:
 			if pocket.get_meta("remote_hole", false):
 				pocket.queue_free()
 			pocket_replicas.erase(id)
+	_pocket_states = states.duplicate(true)
 
 
 func _create_ball(state: Dictionary) -> void:

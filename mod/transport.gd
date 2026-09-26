@@ -8,7 +8,7 @@ signal received(sender: int, message: Dictionary)
 signal status_changed(text: String)
 signal room_ready
 
-const PROTOCOL := 7
+const PROTOCOL := 8
 const MAX_PLAYERS := 8
 const GAME_VERSION := "0.15.7"
 const MOD_ID := "ultrapool-together"
@@ -21,12 +21,27 @@ const LOBBY_MEMBER_GONE := 2 | 4 | 8 | 16
 const HANDSHAKE_TIMEOUT_MS := 15000
 const PEER_TIMEOUT_MS := 20000
 const HEARTBEAT_MS := 2000
+# Budgets cover decoding and synchronous received handlers, not just socket reads.
+# Whole messages cannot be preempted: one packet/handler can exceed these limits.
+const RECEIVE_BUDGET_USEC := 2000
+const RECEIVE_BUDGET_PACKETS := 32
+const RECEIVE_BUDGET_BYTES := 262144
+const STEAM_RELIABLE_BURST := 3
 
 var is_host := false
 var connected_peer: bool:
 	get:
 		return _peers.values().any(func(peer): return peer.ready)
 var room_code := ""
+var receive_stats: Dictionary:
+	get:
+		return {
+			"packets": _receive_packets,
+			"bytes": _receive_bytes,
+			"elapsed_usec": _receive_usec,
+			"max_handler_usec": _receive_max_handler_usec,
+			"budget_reached": _receive_budget_reached,
+		}
 
 var _mode := ""
 var _token := ""
@@ -43,6 +58,12 @@ var _create_pending := false
 var _join_pending_id := 0
 var _lobby_deadline := 0
 var _command_line_checked := false
+var _steam_reliable_received := 0
+var _receive_packets := 0
+var _receive_bytes := 0
+var _receive_usec := 0
+var _receive_max_handler_usec := 0
+var _receive_budget_reached := false
 
 
 func _ready() -> void:
@@ -122,7 +143,7 @@ func host_steam() -> Error:
 
 func join_steam(code: String) -> Error:
 	var parts := code.strip_edges().split("-")
-	if parts.size() != 2 or parts[0] != "UP7" or not parts[1].is_valid_int():
+	if parts.size() != 2 or parts[0] != "UP8" or not parts[1].is_valid_int():
 		return ERR_INVALID_PARAMETER
 	return _join_lobby(int(parts[1]))
 
@@ -299,6 +320,7 @@ func close() -> void:
 	_mode = ""
 	_token = ""
 	_host_id = 0
+	_steam_reliable_received = 0
 	_joinable = true
 	is_host = false
 	room_code = ""
@@ -380,6 +402,11 @@ func _prepare_steam() -> bool:
 
 
 func _process(_delta: float) -> void:
+	_receive_packets = 0
+	_receive_bytes = 0
+	_receive_usec = 0
+	_receive_max_handler_usec = 0
+	_receive_budget_reached = false
 	if _steam != null:
 		_steam.call("run_callbacks")
 	if _lobby_deadline != 0 and Time.get_ticks_msec() >= _lobby_deadline:
@@ -395,13 +422,7 @@ func _process(_delta: float) -> void:
 			and _enet.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 		):
 			_send_hello()
-		var packet_count := 0
-		while _enet != null and _enet.get_available_packet_count() > 0 and packet_count < 128:
-			var sender := _enet.get_packet_peer()
-			var transient := _enet.get_packet_channel() == 1
-			var packet := _enet.get_packet()
-			_receive_wire(sender, packet, transient)
-			packet_count += 1
+		_drain_received_packets()
 		if (
 			_enet != null
 			and not is_host
@@ -409,18 +430,7 @@ func _process(_delta: float) -> void:
 		):
 			_drop_peer(_host_id, "Host disconnected. You can join again.")
 	elif _mode == "steam":
-		for channel in [STEAM_CHANNEL, STEAM_TRANSIENT_CHANNEL]:
-			if _mode != "steam":
-				break
-			var packets: Array = _steam.call("receiveMessagesOnChannel", channel, 128)
-			for packet in packets:
-				if _mode != "steam":
-					break
-				_receive_wire(
-					int(packet.get("identity", 0)),
-					packet.get("payload", PackedByteArray()),
-					channel == STEAM_TRANSIENT_CHANNEL
-				)
+		_drain_received_packets()
 	var now := Time.get_ticks_msec()
 	for id in _peers.keys():
 		if not _peers.has(id):
@@ -434,6 +444,69 @@ func _process(_delta: float) -> void:
 		elif now - peer.last_heartbeat >= HEARTBEAT_MS:
 			peer.last_heartbeat = now
 			_send_wire(id, {"kind": "ping"})
+
+
+func _receive_budget_available(started_usec: int) -> bool:
+	# Always allow the first message, including a full-size reliable snapshot.
+	return (
+		_receive_packets == 0
+		or (
+			_receive_packets < RECEIVE_BUDGET_PACKETS
+			and _receive_bytes < RECEIVE_BUDGET_BYTES
+			and Time.get_ticks_usec() - started_usec < RECEIVE_BUDGET_USEC
+		)
+	)
+
+
+func _drain_received_packets() -> void:
+	var started_usec := Time.get_ticks_usec()
+	var receiving_mode := _mode
+	while _mode == receiving_mode and _receive_budget_available(started_usec):
+		var sender: int
+		var transient: bool
+		var packet: PackedByteArray
+		if receiving_mode == "lan":
+			if _enet == null or _enet.get_available_packet_count() == 0:
+				break
+			# ENet exposes a shared incoming FIFO; preserve its delivery order.
+			sender = _enet.get_packet_peer()
+			transient = _enet.get_packet_channel() == 1
+			packet = _enet.get_packet()
+		elif receiving_mode == "steam":
+			var channel := (
+				STEAM_TRANSIENT_CHANNEL
+				if _steam_reliable_received >= STEAM_RELIABLE_BURST
+				else STEAM_CHANNEL
+			)
+			# Fetch only what we can dispatch. A bulk receive followed by an early
+			# budget exit would lose reliable messages already removed from Steam.
+			var packets: Array = _steam.call("receiveMessagesOnChannel", channel, 1)
+			if packets.is_empty():
+				channel = (
+					STEAM_CHANNEL if channel == STEAM_TRANSIENT_CHANNEL else STEAM_TRANSIENT_CHANNEL
+				)
+				packets = _steam.call("receiveMessagesOnChannel", channel, 1)
+			if packets.is_empty():
+				break
+			transient = channel == STEAM_TRANSIENT_CHANNEL
+			# Persist the turn across frames so a costly reliable handler cannot
+			# continually postpone the transient channel. Empty channels never idle.
+			_steam_reliable_received = (
+				0 if transient else mini(_steam_reliable_received + 1, STEAM_RELIABLE_BURST)
+			)
+			sender = int(packets[0].get("identity", 0))
+			packet = packets[0].get("payload", PackedByteArray())
+		else:
+			break
+		_receive_packets += 1
+		_receive_bytes += packet.size()
+		var handler_started_usec := Time.get_ticks_usec()
+		_receive_wire(sender, packet, transient)
+		_receive_max_handler_usec = maxi(
+			_receive_max_handler_usec, Time.get_ticks_usec() - handler_started_usec
+		)
+	_receive_usec = Time.get_ticks_usec() - started_usec
+	_receive_budget_reached = not _receive_budget_available(started_usec)
 
 
 func _new_token() -> String:
@@ -502,7 +575,7 @@ func _on_lobby_created(result: int, lobby_id: int) -> void:
 		if not bool(_steam.call("setLobbyData", _lobby_id, key, metadata[key])):
 			_fail_room("Steam could not prepare the room. Try again.")
 			return
-	room_code = "UP7-%d" % _lobby_id
+	room_code = "UP8-%d" % _lobby_id
 	_update_joinable()
 	status_changed.emit("Invite friends or share your room code.")
 	room_ready.emit()
@@ -536,7 +609,7 @@ func _on_lobby_joined(lobby_id: int, _permissions: int, _locked: bool, response:
 		return
 	_host_id = owner
 	_add_peer(owner)
-	room_code = "UP7-%d" % _lobby_id
+	room_code = "UP8-%d" % _lobby_id
 	status_changed.emit("Connecting to the host...")
 	_send_hello()
 

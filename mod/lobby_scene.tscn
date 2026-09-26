@@ -66,34 +66,34 @@ theme_override_colors/font_color = Color(0.91, 0.72, 0.38, 1)
 theme_override_font_sizes/font_size = 15
 text = "T O G E T H E R"
 
-[node name="Close" type="Button" parent="Margin/Layout/Header"]
+[node name="RoomBar" type="HBoxContainer" parent="Margin/Layout/Header"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 4
-text = "Close · F8"
+theme_override_constants/separation = 12
 
-[node name="RoomBar" type="HFlowContainer" parent="Margin/Layout"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_constants/h_separation = 12
-theme_override_constants/v_separation = 8
-
-[node name="Code" type="Label" parent="Margin/Layout/RoomBar"]
+[node name="Code" type="Label" parent="Margin/Layout/Header/RoomBar"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 4
 text = "CREATING STEAM ROOM…"
 
-[node name="Copy" type="Button" parent="Margin/Layout/RoomBar"]
+[node name="Copy" type="Button" parent="Margin/Layout/Header/RoomBar"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Copy code"
 
-[node name="Invite" type="MenuButton" parent="Margin/Layout/RoomBar"]
+[node name="Invite" type="MenuButton" parent="Margin/Layout/Header/RoomBar"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Invite friend"
 flat = false
+
+[node name="Close" type="Button" parent="Margin/Layout/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 4
+text = "Close · F8"
 
 [node name="Divider" type="ColorRect" parent="Margin/Layout"]
 custom_minimum_size = Vector2(0, 1)
@@ -189,7 +189,7 @@ layout_mode = 2
 theme_override_constants/h_separation = 24
 theme_override_constants/v_separation = 10
 
-[node name="TableSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+[node name="TableSetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
@@ -199,40 +199,64 @@ text = "Tables"
 
 [node name="TableCount" type="SpinBox" parent="Margin/Layout/Body/Content/Room/Settings/TableSetting"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(82, 0)
+custom_minimum_size = Vector2(98, 48)
 layout_mode = 2
 min_value = 1.0
 max_value = 8.0
 value = 1.0
 
-[node name="ModeSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+[node name="ModeSetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
 [node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/ModeSetting"]
 layout_mode = 2
-text = "Mode"
+text = "Match vote"
 
 [node name="MatchMode" type="OptionButton" parent="Margin/Layout/Body/Content/Room/Settings/ModeSetting"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(150, 0)
+custom_minimum_size = Vector2(170, 48)
 layout_mode = 2
 
-[node name="ShotSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+[node name="ShotSetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
 [node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/ShotSetting"]
 layout_mode = 2
-text = "Shots per table"
+text = "Shot budget"
 
 [node name="ShotBudget" type="SpinBox" parent="Margin/Layout/Body/Content/Room/Settings/ShotSetting"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(82, 0)
+custom_minimum_size = Vector2(98, 48)
 layout_mode = 2
 min_value = 1.0
 max_value = 20.0
 value = 6.0
+
+[node name="SetSetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/SetSetting"]
+layout_mode = 2
+text = "Starting set vote"
+
+[node name="StartingSet" type="OptionButton" parent="Margin/Layout/Body/Content/Room/Settings/SetSetting"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 48)
+layout_mode = 2
+
+[node name="DifficultySetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/DifficultySetting"]
+layout_mode = 2
+text = "Difficulty vote"
+
+[node name="Difficulty" type="OptionButton" parent="Margin/Layout/Body/Content/Room/Settings/DifficultySetting"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 48)
+layout_mode = 2
 
 [node name="Rules" type="Label" parent="Margin/Layout/Body/Content/Room"]
 unique_name_in_owner = true
@@ -240,6 +264,22 @@ layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
 theme_override_font_sizes/font_size = 16
 text = "Everyone at a table plays together."
+autowrap_mode = 3
+
+[node name="RunSelection" type="Label" parent="Margin/Layout/Body/Content/Room"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.91, 0.72, 0.38, 1)
+autowrap_mode = 3
+
+[node name="VoteHelp" type="Label" parent="Margin/Layout/Body/Content/Room"]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_filter = 1
+theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
+theme_override_font_sizes/font_size = 14
+text = "One vote each · changing a vote clears Ready."
+tooltip_text = "Host's unlocked choices. Most votes wins; ties use menu order. No votes keeps the initial choice. All tables share the result and seed. Standard runs only; daily runs are unavailable."
 autowrap_mode = 3
 
 [node name="Tables" type="GridContainer" parent="Margin/Layout/Body/Content/Room"]
@@ -256,9 +296,9 @@ layout_mode = 2
 [node name="BenchMargin" type="MarginContainer" parent="Margin/Layout/Body/Content/Room/Bench"]
 layout_mode = 2
 theme_override_constants/margin_left = 16
-theme_override_constants/margin_top = 12
+theme_override_constants/margin_top = 0
 theme_override_constants/margin_right = 16
-theme_override_constants/margin_bottom = 12
+theme_override_constants/margin_bottom = 0
 
 [node name="BenchContent" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Bench/BenchMargin"]
 layout_mode = 2

@@ -6,8 +6,9 @@ class TransportStub:
 	var is_host = false
 	var id = 20
 	var coordinator = 10
-	var room_code = "UP7-test"
+	var room_code = "UP8-test"
 	var sent: Array = []
+	var on_send: Callable
 
 	func local_id() -> int:
 		return id
@@ -35,6 +36,10 @@ class TransportStub:
 		sent.append(
 			{"recipient": recipient, "message": message.duplicate(true), "unreliable": unreliable}
 		)
+		if on_send.is_valid():
+			var callback = on_send
+			on_send = Callable()
+			callback.call()
 
 	func close():
 		id = 0
@@ -44,6 +49,7 @@ class AdapterStub:
 	extends Node
 	var ended = 0
 	var ready_to_shoot = false
+	var accepted_shots = 0
 	var state = {
 		"available": false,
 		"table_active": false,
@@ -64,8 +70,11 @@ class AdapterStub:
 	func can_shoot() -> bool:
 		return ready_to_shoot
 
-	func shoot(_vector: Vector2, accepted: Callable = Callable()) -> bool:
-		return ready_to_shoot and (not accepted.is_valid() or accepted.call())
+	func shoot(_vector: Vector2) -> bool:
+		if not ready_to_shoot:
+			return false
+		accepted_shots += 1
+		return true
 
 	func score() -> float:
 		return state.score
@@ -124,9 +133,11 @@ class SpectatorStub:
 class ShopStub:
 	extends Node
 	var ended = 0
+	var captures = 0
 	var state = {"open": false, "revision": 1}
 
 	func capture() -> Dictionary:
+		captures += 1
 		return state.duplicate(true)
 
 	func is_open() -> bool:
@@ -152,45 +163,6 @@ class PresenceStub:
 
 	func tick(_delta: float, _active: bool, _can_aim: bool):
 		pass
-
-
-class MultiplayerBallsStub:
-	extends Node
-	var ended = 0
-	var begin_calls = 0
-	var rules: RefCounted
-
-	func blocks_shot_input() -> bool:
-		return false
-
-	func end_session():
-		ended += 1
-
-	func prepare_shop():
-		pass
-
-	func begin_shot(index: int, actor: int) -> bool:
-		begin_calls += 1
-		return rules.begin_shot(index, actor, true, 2)
-
-	func finish_shot():
-		rules.finish_shot([])
-
-	func capture() -> Dictionary:
-		return {
-			"last_shooter": rules.last_shooter,
-			"pending": rules.pending,
-			"bounty_shot": rules.bounty_shot,
-			"call": rules.call_state.duplicate(),
-			"balls": [],
-			"pockets": []
-		}
-
-	func bounty_shot() -> int:
-		return rules.bounty_shot
-
-	func valid_state(data) -> bool:
-		return rules.valid_state(data)
 
 
 class RunStub:
@@ -240,11 +212,14 @@ func _initialize() -> void:
 	_base = get_script().resource_path.get_base_dir().get_base_dir().path_join("mod")
 	_closed_transport_teardown()
 	_abandoned_leader_rejoin()
+	_run_vote_match_generation()
 	_run_closes_during_shot()
 	_targeted_shop_sync()
-	_rejected_shots_preserve_ability_state()
+	_shop_capture_reuse_after_send()
+	_rejected_shots_preserve_turn_state()
 	_first_shot_phase_order()
 	_race_and_score_limits()
+	_native_score_standings()
 	_race_finishes()
 	_return_vote_lifecycle()
 	_host_leave_requires_consent()
@@ -264,10 +239,6 @@ func _controller():
 	controller.table_sync = TableStub.new()
 	controller.shop_sync = ShopStub.new()
 	controller.presence = PresenceStub.new()
-	controller.multiplayer_balls = MultiplayerBallsStub.new()
-	controller.multiplayer_balls.rules = load(_base.path_join("multiplayer_ball_rules.gd")).new()
-	controller.multiplayer_balls.rules.reset_round("fixture")
-	controller.bounty_race = load(_base.path_join("bounty_race.gd"))
 	controller.run_setup = RunStub.new()
 	controller.panel = PanelStub.new()
 	controller.panel.hide()
@@ -280,7 +251,6 @@ func _controller():
 		controller.table_sync,
 		controller.shop_sync,
 		controller.presence,
-		controller.multiplayer_balls,
 		controller.run_setup,
 		controller.panel,
 		controller.pass_button,
@@ -326,7 +296,6 @@ func _closed_transport_teardown():
 			controller.adapter.ended == 1
 			and controller.shop_sync.ended == 1
 			and controller.table_sync.ended == 1
-			and controller.multiplayer_balls.ended == 1
 		),
 		"disconnect tears down all table services"
 	)
@@ -341,12 +310,71 @@ func _closed_transport_teardown():
 	controller.free()
 
 
+func _run_vote_match_generation():
+	var host = _controller()
+	host.active = false
+	host.transport.is_host = true
+	host.transport.id = 10
+	host._local_id = 10
+	host.lobby_model.setup(10, "Room host")
+	host.lobby_model.add_player(20, "Guest")
+	host.lobby_model.choose_slot(20, 0, 1)
+	host.lobby_model.configure_run_options(
+		10,
+		{
+			"deck": [{"id": "1_CLASSIC", "label": "Classic"}],
+			"difficulty": [{"id": "diff_1", "label": "Chill Pool Night"}]
+		}
+	)
+	host._broadcast_lobby()
+	var request = {
+		"kind": "lobby_request",
+		"action": "run_vote",
+		"match": host.match_id,
+		"catalog_revision": host.lobby.run_vote.catalog_revision,
+		"field": "deck",
+		"choice": "1_CLASSIC"
+	}
+	host._received(20, request)
+	_check(
+		host.lobby.run_vote.counts.deck == {"1_CLASSIC": 1},
+		"controller accepts a current-match guest ballot"
+	)
+	for id in [10, 20]:
+		host.lobby_model.set_ready(id, true)
+	_check(host.lobby_model.start(10), "vote generation fixture starts a match")
+	host.lobby_model.reset_lobby(10, true)
+	host.match_id += 1
+	host._broadcast_lobby()
+	var reopened = host.lobby_model.snapshot()
+	request.choice = ""
+	host._received(20, request)
+	_check(
+		host.lobby_model.snapshot() == reopened,
+		"previous-match ballot cannot mutate a reopened lobby with the same catalog"
+	)
+	request.match = host.match_id
+	host._received(20, request)
+	_check(
+		host.lobby.run_vote.counts.deck.is_empty(),
+		"current-match abstention still removes the guest ballot after rematch"
+	)
+	host.free()
+
+
 func _abandoned_leader_rejoin():
 	var host = _controller()
 	host.transport.is_host = true
 	host.transport.id = 10
 	host._local_id = 10
 	host.lobby_model.setup(10, "Room host")
+	host.lobby_model.configure_run_options(
+		10,
+		{
+			"deck": [{"id": "1_CLASSIC", "label": "Classic"}],
+			"difficulty": [{"id": "diff_1", "label": "Chill Pool Night"}]
+		}
+	)
 	for id in [20, 30]:
 		host.lobby_model.add_player(id, "Player %d" % id)
 	host.lobby_model.set_table_count(10, 2)
@@ -360,9 +388,6 @@ func _abandoned_leader_rejoin():
 			"table": 0,
 			"leader_id": 10,
 			"score": 0.0,
-			"base_score": 0.0,
-			"bounty_shot": 0,
-			"bounty_bonus": 0.0,
 			"shots_used": 0,
 			"shot_budget": 6,
 			"finished": false,
@@ -372,9 +397,6 @@ func _abandoned_leader_rejoin():
 			"table": 1,
 			"leader_id": 20,
 			"score": 18.0,
-			"base_score": 18.0,
-			"bounty_shot": 0,
-			"bounty_bonus": 0.0,
 			"shots_used": 2,
 			"shot_budget": 6,
 			"finished": false,
@@ -520,49 +542,94 @@ func _targeted_shop_sync():
 	controller.free()
 
 
-func _rejected_shots_preserve_ability_state():
+func _shop_capture_reuse_after_send():
+	# PERF-033: a reliable send can synchronously disconnect a peer. Preserve
+	# capture reuse in the normal path, but never publish stale shop consent.
 	var controller = _controller()
 	controller.active = true
-	var rules = controller.multiplayer_balls.rules
+	controller.lobby.revision = 7
+	var captured = {
+		"open": true,
+		"revision": 2,
+		"ready_vote": {"eligible": [20, 30], "ready": [20], "revision": 4}
+	}
+	controller.shop_sync.state = captured.duplicate(true)
+	controller._publish_state(0, captured, 7)
+	_check(controller.shop_sync.captures == 0, "unchanged membership reuses the final capture")
+	_check(controller.last_shop_state == captured, "reused capture reaches the broadcast cache")
+	controller.transport.sent.clear()
+	controller.transport.on_send = func():
+		controller.lobby.revision += 1
+		controller.lobby.players[2].connected = false
+		controller.shop_sync.state = {
+			"open": true,
+			"revision": 3,
+			"ready_vote": {"eligible": [20], "ready": [], "revision": 5}
+		}
+	controller._publish_state(0, captured, 7)
+	_check(controller.shop_sync.captures == 1, "membership change during send forces a recapture")
+	var updates: Array = controller.transport.sent.filter(
+		func(frame): return frame.message.get("payload", {}).get("kind") == "shop_state"
+	)
+	_check(
+		updates.size() == 1 and updates[0].message.payload.shop.ready_vote.eligible == [20],
+		"disconnect callback cannot broadcast the old teammate eligibility"
+	)
+	_check(
+		controller.last_shop_state.revision == 3,
+		"disconnect recapture advances the broadcast cache to current consent"
+	)
+	controller.transport.sent.clear()
+	controller.transport.on_send = func(): controller.active = false
+	controller._publish_state(0, controller.shop_sync.state, 8)
+	_check(controller.shop_sync.captures == 1, "session ended during send avoids another capture")
+	_check(
+		controller.transport.sent.size() == 1,
+		"session ended during state send publishes no shop or phase update"
+	)
+	controller.free()
+
+
+func _rejected_shots_preserve_turn_state():
+	var controller = _controller()
+	controller.active = true
 	_check(
 		not controller._take_shot(20, Vector2(100, 0), 0),
 		"native adapter can reject an otherwise valid shot"
 	)
 	_check(
-		rules.shot_index == 0 and controller.multiplayer_balls.begin_calls == 0,
-		"native rejection cannot consume an accepted-shot index"
+		controller.used_shots == 0 and not controller.shot_pending,
+		"native rejection cannot spend a shot or block the next input"
 	)
 	controller.adapter.ready_to_shoot = true
 	_check(not controller._take_shot(30, Vector2(100, 0), 0), "nonowner shot is rejected")
 	_check(not controller._take_shot(20, Vector2(100, 0), 1), "future turn is rejected")
 	_check(not controller._take_shot(20, Vector2(20, 0), 0), "weak shot is rejected")
 	_check(
-		rules.shot_index == 0 and controller.multiplayer_balls.begin_calls == 0,
-		"invalid requests cannot arm abilities"
+		controller.adapter.accepted_shots == 0 and controller.transport.sent.is_empty(),
+		"invalid requests cannot execute native physics or publish a shot"
 	)
 	_check(controller._pass(20, 0), "current player may pass before an accepted shot")
 	_check(
-		controller.shot_number == 1 and rules.shot_index == 0 and not rules.pending,
-		"passing advances the turn without advancing ball abilities"
+		controller.shot_number == 1 and controller.used_shots == 0 and not controller.shot_pending,
+		"passing advances the turn without spending a native shot"
 	)
 	_check(controller._take_shot(30, Vector2(100, 0), 1), "new owner takes first accepted shot")
 	_check(
-		rules.shot_index == 1 and rules.shooter == 30 and rules.pending,
-		"shot abilities record the actual accepted shooter"
+		controller.adapter.accepted_shots == 1 and controller.shot_pending,
+		"one accepted request starts one native shot"
 	)
 	_check(not controller._take_shot(30, Vector2(100, 0), 1), "duplicate active shot is rejected")
-	_check(
-		controller.multiplayer_balls.begin_calls == 1, "duplicate request cannot rearm abilities"
-	)
+	_check(controller.adapter.accepted_shots == 1, "duplicate request cannot execute physics twice")
 	controller._finish_shot()
 	_check(
-		controller.used_shots == 1 and rules.last_shooter == 30 and not rules.pending,
-		"settlement completes the same accepted shot in controller and rules"
+		controller.used_shots == 1 and controller.turn_owner == 20 and not controller.shot_pending,
+		"settlement counts one completed native shot and passes control"
 	)
 	_check(
 		controller._take_shot(20, Vector2(100, 0), 2), "next accepted shot follows completed one"
 	)
-	_check(rules.shot_index == 2, "passing does not create a gap in accepted-shot indices")
+	_check(controller.adapter.accepted_shots == 2, "next turn executes exactly one native shot")
 	controller.free()
 
 
@@ -634,6 +701,13 @@ func _host_controller(mode: String):
 	host.table_leader_id = 10
 	host.turn_owner = 10
 	host.lobby_model.setup(10, "Room host")
+	host.lobby_model.configure_run_options(
+		10,
+		{
+			"deck": [{"id": "1_CLASSIC", "label": "Classic"}],
+			"difficulty": [{"id": "diff_1", "label": "Chill Pool Night"}]
+		}
+	)
 	for id in [20, 30]:
 		host.lobby_model.add_player(id, "Player %d" % id)
 	host.lobby_model.set_table_count(10, 2)
@@ -654,9 +728,6 @@ func _summary(table: int, leader: int) -> Dictionary:
 		"table": table,
 		"leader_id": leader,
 		"score": 0.0,
-		"base_score": 0.0,
-		"bounty_shot": 0,
-		"bounty_bonus": 0.0,
 		"shots_used": 0,
 		"shot_budget": 6,
 		"finished": false,
@@ -682,8 +753,6 @@ func _state(controller, table: int, overrides: Dictionary = {}) -> Dictionary:
 			"round": 1,
 			"total_score": 12.0,
 			"used_shots": 1,
-			"bounty_shot": 0,
-			"multiplayer_balls": controller.multiplayer_balls.capture(),
 			"finished": false,
 			"finish_reason": ""
 		},
@@ -724,6 +793,30 @@ func _race_and_score_limits():
 	coop._finish_shot()
 	_check(not coop.finished, "one-table co-op ignores saved competitive mode and shot budget")
 	coop.free()
+
+
+func _native_score_standings():
+	var host = _host_controller("score")
+	_send_table(host, 20, 1, _state(host, 1, {"total_score": 40.0}))
+	_check(host.table_summaries[1].score == 40.0, "standings use the table's native shot points")
+	_send_table(
+		host,
+		20,
+		1,
+		_state(host, 1, {"total_score": 65.0, "finished": true, "finish_reason": "Finished"})
+	)
+	_send_table(
+		host,
+		10,
+		0,
+		_state(host, 0, {"total_score": 70.0, "finished": true, "finish_reason": "Finished"})
+	)
+	_check(
+		host.table_summaries[0].score == 70.0 and host.table_summaries[1].score == 65.0,
+		"completing every table preserves their native points without a match bonus"
+	)
+	_check(host._result_text() == "Your table won", "native points alone determine Score standings")
+	host.free()
 
 
 func _race_finishes():

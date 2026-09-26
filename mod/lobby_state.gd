@@ -3,17 +3,24 @@ extends RefCounted
 const CAPACITY = 8
 const DEFAULT_SHOT_BUDGET = 6
 const TeamVote = preload("team_vote.gd")
+const RUN_FIELDS = ["deck", "difficulty", "match_mode"]
+const MATCH_MODES = [{"id": "race", "label": "Race"}, {"id": "score", "label": "Score PvP"}]
 
 var host_id = 0
 var table_count = 1
 var shot_budget = DEFAULT_SHOT_BUDGET
 var match_mode = "race"
 var revision = 0
+var ready_generation = 0
 var started = false
 var last_error = ""
 var _players: Dictionary = {}
 var _return_vote = TeamVote.new()
 var _return_proposer = 0
+var _run_options: Dictionary = {}
+var _run_defaults: Dictionary = {}
+var _run_catalog_revision = 0
+var _frozen_selection: Dictionary = {}
 
 
 func setup(id: int, player_name: String) -> bool:
@@ -34,9 +41,14 @@ func clear() -> void:
 	shot_budget = DEFAULT_SHOT_BUDGET
 	match_mode = "race"
 	revision = 0
+	ready_generation = 0
 	started = false
 	last_error = ""
 	_players.clear()
+	_run_options.clear()
+	_run_defaults.clear()
+	_run_catalog_revision = 0
+	_frozen_selection.clear()
 	_clear_return_vote()
 
 
@@ -145,15 +157,132 @@ func set_match_mode(sender: int, mode: String) -> bool:
 		last_error = ""
 		return true
 	match_mode = mode
+	_run_defaults.match_mode = mode
+	for player in _players.values():
+		player.run_votes.erase("match_mode")
 	_changed(true)
 	return true
 
 
-func set_ready(sender: int, ready: bool) -> bool:
+func configure_run_options(sender: int, options: Dictionary, defaults: Dictionary = {}) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can publish the available run choices.")
+	if started:
+		return _reject("Run choices are locked during a match.")
+	var checked: Dictionary = {}
+	var selected: Dictionary = {}
+	for field in ["deck", "difficulty"]:
+		var entries = options.get(field)
+		if not entries is Array or entries.is_empty() or entries.size() > 64:
+			return _reject("The host has no supported starting sets or difficulties available.")
+		var ids: Array = []
+		checked[field] = []
+		for entry in entries:
+			if (
+				not entry is Dictionary
+				or not entry.get("id") is String
+				or entry.id.is_empty()
+				or entry.id.length() > 128
+				or not entry.get("label") is String
+				or entry.label.is_empty()
+				or entry.label.length() > 160
+				or entry.id in ids
+			):
+				return _reject("The run choices contain an invalid or duplicate entry.")
+			ids.append(entry.id)
+			checked[field].append({"id": entry.id, "label": entry.label})
+		selected[field] = defaults.get(field, ids[0])
+		if selected[field] not in ids:
+			selected[field] = ids[0]
+	checked.match_mode = MATCH_MODES.duplicate(true)
+	selected.match_mode = match_mode
+	if _run_options == checked and _run_defaults == selected:
+		last_error = ""
+		return true
+	_run_options = checked
+	_run_defaults = selected
+	_run_catalog_revision += 1
+	for player in _players.values():
+		player.run_votes.clear()
+	_changed(true)
+	return true
+
+
+func set_run_vote(sender: int, field: String, choice: String, catalog_revision: int = -1) -> bool:
+	if not _players.has(sender) or not _players[sender].connected:
+		return _reject("Join the lobby before voting on the run.")
+	if started:
+		return _reject("Run votes are locked during a match.")
+	if catalog_revision >= 0 and catalog_revision != _run_catalog_revision:
+		return _reject("The available run choices changed. Vote again.")
+	if field not in RUN_FIELDS or not _run_options.has(field):
+		return _reject("Choose a starting set, difficulty, or match mode.")
+	if (
+		not choice.is_empty()
+		and not _run_options[field].any(func(entry): return entry.id == choice)
+	):
+		return _reject("That run choice is not available in this lobby.")
+	var votes: Dictionary = _players[sender].run_votes
+	if votes.get(field, "") == choice:
+		last_error = ""
+		return true
+	if choice.is_empty():
+		votes.erase(field)
+	else:
+		votes[field] = choice
+	_changed(true)
+	return true
+
+
+func resolved_run_selection() -> Dictionary:
+	if started:
+		return _frozen_selection.duplicate(true)
+	var result: Dictionary = {}
+	for field in RUN_FIELDS:
+		if not _run_options.has(field):
+			continue
+		var counts = _run_vote_counts(field)
+		var winner: String = _run_defaults.get(field, "")
+		var highest = 0
+		# Strictly greater preserves the published native-menu order for ties.
+		for entry in _run_options[field]:
+			var count: int = counts.get(entry.id, 0)
+			if count > highest:
+				highest = count
+				winner = entry.id
+		result[field] = winner
+	return result
+
+
+func _run_vote_counts(field: String) -> Dictionary:
+	var counts: Dictionary = {}
+	for player in _players.values():
+		if player.connected:
+			var choice: String = player.run_votes.get(field, "")
+			if not choice.is_empty():
+				counts[choice] = counts.get(choice, 0) + 1
+	return counts
+
+
+func _run_vote_snapshot() -> Dictionary:
+	var counts: Dictionary = {}
+	for field in RUN_FIELDS:
+		counts[field] = _run_vote_counts(field)
+	return {
+		"catalog_revision": _run_catalog_revision,
+		"options": _run_options.duplicate(true),
+		"counts": counts,
+		"selected": resolved_run_selection()
+	}
+
+
+func set_ready(sender: int, ready: bool, expected_generation: int = -1) -> bool:
 	if not _players.has(sender) or not _players[sender].connected:
 		return _reject("Join the lobby before readying up.")
 	if started:
 		return _reject("The match has already started.")
+	if expected_generation >= 0 and expected_generation != ready_generation:
+		return _reject("The lobby settings changed. Review the choices and ready up again.")
 	var player: Dictionary = _players[sender]
 	if ready and player.table < 0:
 		return _reject("Choose a seat before readying up.")
@@ -166,7 +295,7 @@ func set_ready(sender: int, ready: bool) -> bool:
 
 
 func can_start() -> bool:
-	if started or _players.size() < 2 or not _is_host(host_id):
+	if started or _players.size() < 2 or not _is_host(host_id) or _run_options.is_empty():
 		return false
 	var occupied: Dictionary = {}
 	for player in _players.values():
@@ -181,6 +310,7 @@ func start(sender: int) -> bool:
 		return _reject("Only the host can start the match.")
 	if not can_start():
 		return _reject("Every player must choose a seat and ready up, with someone at each table.")
+	_frozen_selection = resolved_run_selection()
 	started = true
 	_changed()
 	return true
@@ -221,6 +351,7 @@ func reset_lobby(sender: int, match_complete: bool = false) -> bool:
 	if started and not match_complete and not can_return():
 		return _reject("Everyone still connected must approve ending the match.")
 	started = false
+	_frozen_selection.clear()
 	_clear_return_vote()
 	for id in _players.keys():
 		if not _players[id].connected:
@@ -239,11 +370,13 @@ func snapshot() -> Dictionary:
 	return_vote["proposer"] = _return_proposer
 	return {
 		"revision": revision,
+		"ready_generation": ready_generation,
 		"host_id": host_id,
 		"table_count": table_count,
 		"shot_budget": shot_budget,
 		"match_mode": match_mode,
 		"return_vote": return_vote,
+		"run_vote": _run_vote_snapshot(),
 		"capacity": CAPACITY,
 		"started": started,
 		"can_start": can_start(),
@@ -257,7 +390,7 @@ func members_for_table(table: int) -> Array:
 		return members
 	for player in _players.values():
 		if player.table == table:
-			members.append(player.duplicate())
+			members.append(player.duplicate(true))
 	members.sort_custom(func(a, b): return a.slot < b.slot)
 	return members
 
@@ -274,7 +407,8 @@ func _player(id: int, player_name: String) -> Dictionary:
 		"table": -1,
 		"slot": -1,
 		"ready": false,
-		"connected": true
+		"connected": true,
+		"run_votes": {}
 	}
 
 
@@ -315,7 +449,10 @@ func _clear_return_vote() -> void:
 
 
 func _changed(clear_ready: bool = false) -> void:
+	if not _run_options.is_empty():
+		match_mode = resolved_run_selection().get("match_mode", "race")
 	if clear_ready:
+		ready_generation += 1
 		for player in _players.values():
 			player.ready = false
 	revision += 1

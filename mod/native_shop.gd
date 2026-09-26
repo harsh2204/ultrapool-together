@@ -76,13 +76,24 @@ func apply_state(data: Dictionary) -> void:
 	var slots_changed: bool = not _displayed.has("slots") or data.slots != _displayed.slots
 	if slots_changed:
 		_sync_items(data.slots)
-	if _changed(data, ["round", "deck", "difficulty", "money", "hp"]):
+	# Native update_info also rebuilds the entire round map. Wallet/health changes
+	# during shopping must use the narrow setters instead of recreating every pip.
+	if _changed(data, ["round", "deck", "difficulty"]):
 		inventory.update_info(
 			data.round, Global.chosen_deck, Global.chosen_difficulty, data.money, data.hp
 		)
-	if _changed(data, ["money", "slots"]):
+	else:
+		if _changed(data, ["money"]):
+			inventory.update_money(data.money)
+		if _changed(data, ["hp"]):
+			inventory.update_hp(data.hp)
+	if _changed(data, ["money"]):
 		for slot in shop_slots:
 			slot.update_price()
+	elif slots_changed:
+		for entry in data.slots:
+			if entry.group == "offer" and entry != _previous_slot(entry.key):
+				remote_slots[entry.key].update_price()
 	if _changed(data, ["sets", "deck", "difficulty"]):
 		sets_offered = data.sets.duplicate()
 		display_sets_offered()
@@ -112,6 +123,13 @@ func _changed(data: Dictionary, fields: Array) -> bool:
 	return false
 
 
+func _previous_slot(key: String) -> Dictionary:
+	for entry in _displayed.get("slots", []):
+		if entry.key == key:
+			return entry
+	return {}
+
+
 func _sync_items(entries: Array):
 	var previous: Dictionary = {}
 	for stored in remote_items.values():
@@ -122,7 +140,6 @@ func _sync_items(entries: Array):
 			slot.item = null
 		else:
 			slot.ball = null
-			slot.has_rarity_star = false
 	remote_items.clear()
 	for entry in entries:
 		if entry.id == 0:
@@ -133,6 +150,7 @@ func _sync_items(entries: Array):
 		var body = old.get("node")
 		var item_changed = old.is_empty()
 		var created = not is_instance_valid(body)
+		item_changed = item_changed or created
 		if not old.is_empty():
 			for field in ["data", "mixed", "level", "score"]:
 				if old.state[field] != entry[field]:
@@ -174,13 +192,21 @@ func _sync_items(entries: Array):
 		else:
 			slot.ball = body
 			slot.price = entry.price
-			body.update_level_spark()
-			body.score_ui.show()
-			body.get_node("%ScoreLabel").text = Global.format_number(
-				body.get_item().get_base_score(), 4, 0
-			)
+			if item_changed:
+				body.update_level_spark()
+				body.score_ui.show()
+				body.get_node("%ScoreLabel").text = Global.format_number(
+					body.get_item().get_base_score(), 4, 0
+				)
 		remote_items[entry.key] = {"node": body, "state": entry.duplicate(true)}
 		previous.erase(entry.id)
+	# Unchanged offers keep their native rarity animation; only emptied slots
+	# lose the star. Changed offers refresh it through update_price in apply_state.
+	for key in remote_slots:
+		if key.get_slice(":", 0) not in ["snack", "passive"]:
+			var slot = remote_slots[key]
+			if slot.ball == null:
+				slot.has_rarity_star = false
 	for old in previous.values():
 		var body = old.node
 		_release_remote_item(body)

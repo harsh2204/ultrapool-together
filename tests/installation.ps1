@@ -42,6 +42,7 @@ try {
         Set-Content -LiteralPath (Join-Path $game $name) -Value "fixture for $name"
     }
     Set-Content -LiteralPath (Join-Path $package 'mod\main.gd') -Value 'extends Node'
+    Set-Content -LiteralPath (Join-Path $package 'mod\retired.gd') -Value 'retired feature fixture'
     $originalHash = (Get-FileHash -LiteralPath (Join-Path $game 'game.exe')).Hash
     Write-SaveFixture (Join-Path $steamProfile 'save.tres') 'Steam progression'
     Write-SaveFixture (Join-Path $steamProfile 'save.bak.tres') 'older Steam recovery save'
@@ -81,10 +82,55 @@ try {
     $modHash = (Get-FileHash -LiteralPath (Join-Path $modProfile 'save.tres')).Hash
 
     Set-Content -LiteralPath (Join-Path $installed 'my-notes.txt') -Value 'preserve this'
+    Set-Content -LiteralPath (Join-Path $installed 'mod\personal.txt') -Value 'preserve nested file'
     Set-Content -LiteralPath (Join-Path $package 'mod\main.gd') -Value 'extends Node # updated'
+    Remove-Item -LiteralPath (Join-Path $package 'mod\retired.gd')
+    $retiredPath = Join-Path $installed 'mod\retired.gd'
+    $beforeUpgradeMarker = Get-Content -LiteralPath $markerPath -Raw
+    $beforeUpgradeHash = (Get-FileHash -LiteralPath (Join-Path $installed 'mod\main.gd')).Hash
+    foreach ($unsafeRelative in @('..\game.exe', 'mod\main.gd:alternate', 'mod\main.gd.', 'ultrapool-together-install.json')) {
+        $unsafeUpgrade = $beforeUpgradeMarker | ConvertFrom-Json
+        $unsafeUpgrade.files += $unsafeRelative
+        $unsafeUpgrade | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $markerPath
+        Expect-Failure { & (Join-Path $package 'Install.ps1') -GamePath $game -UserDataRoot $userDataRoot } 'Upgrade accepted an unsafe previously owned path.'
+        Assert (Test-Path -LiteralPath $retiredPath) 'Unsafe upgrade partially removed an old file.'
+        Assert-Hash (Join-Path $installed 'mod\main.gd') $beforeUpgradeHash 'Unsafe upgrade partially copied new code.'
+        Assert-Hash (Join-Path $game 'game.exe') $originalHash 'Unsafe upgrade changed original game files.'
+    }
+    Set-Content -LiteralPath $markerPath -Value $beforeUpgradeMarker
+    Remove-Item -LiteralPath $retiredPath
+    New-Item -ItemType Directory -Path $retiredPath | Out-Null
+    Set-Content -LiteralPath (Join-Path $retiredPath 'personal.txt') -Value 'directory must survive'
+    Expect-Failure { & (Join-Path $package 'Install.ps1') -GamePath $game -UserDataRoot $userDataRoot } 'Upgrade accepted a previously owned file replaced by a directory.'
+    Assert ((Get-Content -LiteralPath (Join-Path $retiredPath 'personal.txt') -Raw).Trim() -eq 'directory must survive') 'Upgrade removed an unowned directory tree.'
+    Assert-Hash (Join-Path $installed 'mod\main.gd') $beforeUpgradeHash 'Directory rejection partially copied new code.'
+    Remove-Item -LiteralPath (Join-Path $retiredPath 'personal.txt')
+    Remove-Item -LiteralPath $retiredPath
+    Set-Content -LiteralPath $retiredPath -Value 'retired feature fixture'
+    # Normalize equivalent separators before deciding which paths are stale.
+    $upgradeMarker = $beforeUpgradeMarker | ConvertFrom-Json
+    $upgradeMarker.files = @($upgradeMarker.files | ForEach-Object { $_.Replace('\', '/') })
+    $upgradeMarker | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $markerPath
+    $dryUpgradeHash = (Get-FileHash -LiteralPath $markerPath).Hash
+    & (Join-Path $package 'Install.ps1') -GamePath $game -UserDataRoot $userDataRoot -WhatIf
+    Assert (Test-Path -LiteralPath $retiredPath) 'Upgrade -WhatIf removed a retired file.'
+    Assert-Hash $markerPath $dryUpgradeHash 'Upgrade -WhatIf changed the manifest.'
+    $lockedRetired = [System.IO.File]::Open($retiredPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+    try {
+        Expect-Failure { & (Join-Path $package 'Install.ps1') -GamePath $game -UserDataRoot $userDataRoot } 'Upgrade reported success while a retired file could not be removed.'
+        $partialMarker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+        Assert ($partialMarker.state -eq 'installing') 'Failed cleanup did not mark the update as incomplete.'
+        Assert ('mod\retired.gd' -in $partialMarker.files) 'Failed cleanup lost ownership needed for retry or uninstall.'
+    } finally {
+        $lockedRetired.Dispose()
+    }
     & (Join-Path $package 'Install.ps1') -GamePath $game -UserDataRoot $userDataRoot
     Assert ((Get-Content -LiteralPath (Join-Path $installed 'mod\main.gd') -Raw).Contains('updated')) 'Updating did not copy the new mod.'
+    Assert (-not (Test-Path -LiteralPath $retiredPath)) 'Updating retained an obsolete owned file.'
+    $updatedMarker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+    Assert ('mod\retired.gd' -notin $updatedMarker.files) 'Successful upgrade retained obsolete manifest ownership.'
     Assert (Test-Path -LiteralPath (Join-Path $installed 'my-notes.txt')) 'Updating deleted an unowned file.'
+    Assert ((Get-Content -LiteralPath (Join-Path $installed 'mod\personal.txt') -Raw).Trim() -eq 'preserve nested file') 'Updating deleted an unowned nested file.'
     Assert-Hash (Join-Path $modProfile 'save.tres') $modHash 'Updating replaced subsequent mod progression.'
     Assert-Hash (Join-Path $modProfile 'save.bak.tres') $steamHash 'Updating replaced the mod recovery save.'
     Assert-Hash $importMarkerPath $importMarkerHash 'Updating rewrote the one-time import record.'

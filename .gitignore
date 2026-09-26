@@ -2,3 +2,4 @@
 .godot/
 dist/
 *.log
+__pycache__/
