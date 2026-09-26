@@ -30,10 +30,10 @@ Use `--destination "/path/to/UltrapoolTogether"` for a different mod folder, or 
 1. Keep Steam running and open the mod on every computer before accepting invitations.
 2. At the main menu, press **F8**, then **Create lobby**.
 3. Invite friends from the in-game list or share the room code. The Steam overlay is optional.
-4. The host chooses the number of tables. Vote for a **Starting set** using the shop's set cards and choose **Difficulty** from the buttons beside them. Player initials show live votes; hover for full names. Your selected option has a filled circle, and a gold diamond marks the current result. With multiple tables, everyone can also vote for **Race** or **Score PvP**.
+4. The host chooses the number of tables. Vote for a **Starting set** using the shop's set cards and choose **Difficulty** from the buttons beside them. Player initials show live votes; hover for full names. A chalk check marks your vote, and a gold gem marks the current result. With multiple tables, everyone can also vote for **Race** or **Score PvP**.
 5. Join a table and select **Ready up**. The host selects **Start match** once everyone is ready and every table has a player.
 
-Everyone must use v0.8 and a **UP8** room code. Changing seats, settings, or a vote clears readiness. Each connected player has one vote per choice; **No preference** abstains. The most votes wins, with ties resolved in the displayed option order. Without votes, the host's initial native selection applies. Choices use the host's unlocked standard sets and difficulties; every table receives the same frozen result and seed.
+Everyone must use v0.8 or v0.9 and a **UP8** room code. Changing seats, settings, or a vote clears readiness. Each connected player has one vote per choice; **No preference** abstains. The most votes wins, with ties resolved in the displayed option order. Without votes, the host's initial native selection applies. Choices use the host's unlocked standard sets and difficulties; every table receives the same frozen result and seed.
 
 ## Match rules
 

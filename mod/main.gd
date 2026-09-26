@@ -293,7 +293,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.8 and a new UP8 room code.")
+		_status("Could not join. Everyone needs v0.8 or v0.9 and a new UP8 room code.")
 	_render_lobby()
 
 
