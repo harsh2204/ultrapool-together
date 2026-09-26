@@ -66,4 +66,6 @@ Run `Build-Package.ps1` on Windows or `python3 Build-Package.py` on macOS to cre
 
 The [performance tracker](docs/PERFORMANCE.md) records identified networking, client rendering, and shop bottlenecks, implementation status, and the evidence still needed to verify improvements.
 
+The [consumer distribution plan](docs/DISTRIBUTION.md) proposes graphical installation, Steam shortcuts, and on-demand updates, with a migration path and implementation tracker. These features are not yet available in released installers.
+
 Run `Capture-Screens.cmd` on Windows or `bash Capture-Screens.command` on macOS to generate a gallery of the mod's screens without playing through a match. See the [screenshot harness](docs/screenshots.md) for fixtures and output files.
