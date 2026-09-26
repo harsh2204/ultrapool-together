@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.8.0"
+const VERSION = "0.9.0"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50

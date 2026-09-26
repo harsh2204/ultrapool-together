@@ -55,7 +55,7 @@ Use GitHub Releases as the distribution service. Build consumer artifacts from a
 | Network failure | Keep the installed version playable. Show retryable failure and local release state. No startup requirement for GitHub access or login. |
 | Gameplay performance | Run update checks, downloads, extraction, hashing, and file replacement in the launcher, outside the game input/render/network receive paths. No update work during a match. |
 
-The release feed currently has an older public release than the source branch. On 2026-09-26, the published release is [v0.4.0](https://github.com/harsh2204/ultrapool-together/releases/tag/v0.4.0), while the source declares v0.8.0/protocol 8. Enabling a naive “download latest” button now could downgrade a source installation. Ship the version contract and a compatible consumer release before activating the update channel.
+On 2026-09-26, the latest published release is [v0.9.0](https://github.com/harsh2204/ultrapool-together/releases/tag/v0.9.0), matching the source version and protocol 8. Between v0.4.0 and v0.9.0 the source advanced without releases, so a naive “download latest” button could have downgraded a source installation. Ship the version contract and a compatible consumer release before activating the update channel.
 
 ## Existing installation migration
 
