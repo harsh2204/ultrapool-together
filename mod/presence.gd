@@ -1,7 +1,10 @@
 extends Node
 
-const SEND_INTERVAL = 0.05
+const SEND_INTERVAL = 0.07
 const STALE_SECONDS = 1.5
+# Quantization steps for the dirty check; sub-pixel / sub-degree jitter is not sent.
+const _POS_STEP = 4.0
+const _AIM_STEP = 0.02
 
 
 class CursorOverlay:
@@ -21,6 +24,7 @@ var _name_time = 0.0
 var _sequence = 0
 var _remotes: Dictionary = {}
 var _names: Dictionary = {}
+var _last_sent: Dictionary = {}
 
 
 func setup(controller: Node, transport: Node, shop: Node) -> void:
@@ -56,17 +60,22 @@ func tick(delta: float, active: bool, can_aim: bool) -> void:
 				_remotes.erase(id)
 	if _send_time >= SEND_INTERVAL and _controller.table_id >= 0:
 		_send_time = 0.0
-		_sequence += 1
-		var message = _capture(can_aim)
-		message.kind = "presence"
-		message.seq = _sequence
-		message.actor = _transport.local_id()
-		message.table = _controller.table_id
-		message.match = _controller.match_id
-		if _transport.is_host:
-			_relay(message)
-		else:
-			_transport.send_unreliable(message)
+		var captured = _capture(can_aim)
+		# Only send when the cursor meaningfully changed; idle or sub-pixel movement
+		# would otherwise broadcast every interval.
+		if _changed(captured):
+			_last_sent = captured
+			_sequence += 1
+			var message = captured.duplicate()
+			message.kind = "presence"
+			message.seq = _sequence
+			message.actor = _transport.local_id()
+			message.table = _controller.table_id
+			message.match = _controller.match_id
+			if _transport.is_host:
+				_relay(message)
+			else:
+				_transport.send_unreliable(message)
 	var weight = minf(delta * 24.0, 1.0)
 	for remote in _remotes.values():
 		remote.age += delta
@@ -172,6 +181,29 @@ func _capture(can_aim: bool) -> Dictionary:
 		if get_node("/root/InputManager").is_controller():
 			state.position = state.origin + state.vector
 	return state
+
+
+func _changed(state: Dictionary) -> bool:
+	if _last_sent.is_empty():
+		return true
+	if (
+		state.space != _last_sent.space
+		or state.target != _last_sent.target
+		or state.aiming != _last_sent.aiming
+	):
+		return true
+	return (
+		_moved(state.position, _last_sent.position, _POS_STEP)
+		or _moved(state.origin, _last_sent.origin, _POS_STEP)
+		or _moved(state.vector, _last_sent.vector, _AIM_STEP)
+	)
+
+
+static func _moved(a: Vector2, b: Vector2, step: float) -> bool:
+	return (
+		absf(a.x - b.x) > step
+		or absf(a.y - b.y) > step
+	)
 
 
 func draw_overlay(canvas: Control) -> void:

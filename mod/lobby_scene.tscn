@@ -230,6 +230,24 @@ min_value = 1.0
 max_value = 20.0
 value = 6.0
 
+[node name="CloneSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="CloneRounds" type="CheckBox" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings/CloneSetting"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Clone-table rounds"
+
+[node name="BallsSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="MultiplayerBalls" type="CheckBox" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings/BallsSetting"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Multiplayer balls"
+
 [node name="Count" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading"]
 unique_name_in_owner = true
 layout_mode = 2

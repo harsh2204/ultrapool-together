@@ -35,6 +35,8 @@ var _view_slots: Dictionary = {}
 var _ready_vote: RefCounted
 var _continuing = false
 var _actions_blocked = false
+var _vote_hold = false
+var _exclusive_shopper = 0
 
 
 func _ready():
@@ -60,6 +62,8 @@ func begin_session(controller: Node):
 	_ready_vote.configure([])
 	_continuing = false
 	_actions_blocked = false
+	_vote_hold = false
+	_exclusive_shopper = 0
 	_was_finished = _controller.finished
 	if _controller.is_table_host():
 		var tutorial = get_node("/root/TutorialManager")
@@ -87,7 +91,30 @@ func end_session():
 	_pending_message.clear()
 	_ready_vote.configure([])
 	_continuing = false
+	_vote_hold = false
+	_exclusive_shopper = 0
+	_actions_blocked = false
 	_panel.hide()
+
+
+func set_vote_hold(value: bool) -> void:
+	_vote_hold = value
+
+
+func vote_hold() -> bool:
+	return _vote_hold
+
+
+func set_exclusive_shopper(player_id: int) -> void:
+	_exclusive_shopper = maxi(0, player_id)
+
+
+func clear_exclusive_shopper() -> void:
+	_exclusive_shopper = 0
+
+
+func exclusive_shopper() -> int:
+	return _exclusive_shopper
 
 
 func is_open() -> bool:
@@ -177,7 +204,12 @@ func capture() -> Dictionary:
 	if shop != null:
 		var bar = shop.cocktail_bar
 		var info = shop.player_info
-		var busy: bool = get_tree().paused or shop.introt > 0 or bar.mix_animation.is_processing()
+		var busy: bool = (
+			_vote_hold
+			or get_tree().paused
+			or shop.introt > 0
+			or bar.mix_animation.is_processing()
+		)
 		data.merge(
 			{
 				"scene": shop.get_instance_id(),
@@ -194,6 +226,7 @@ func capture() -> Dictionary:
 				"can_mix":
 				(
 					not busy
+					and not _vote_hold
 					and bar.slot_center.is_empty()
 					and bar.can_mix()
 					and info.cocktail_tickets > 0
@@ -201,6 +234,7 @@ func capture() -> Dictionary:
 				"can_continue":
 				(
 					not busy
+					and not _vote_hold
 					and bar.slot_left.is_empty()
 					and bar.slot_right.is_empty()
 					and bar.slot_center.is_empty()
@@ -227,11 +261,19 @@ func capture() -> Dictionary:
 		var members: Array = _controller._members(_controller.table_id).map(
 			func(player): return player.id
 		)
+		if _exclusive_shopper != 0:
+			members = members.filter(func(id): return int(id) == _exclusive_shopper)
+			if members.is_empty():
+				members = [_exclusive_shopper]
 		_ready_vote.configure(members, consent_context)
 		data["ready_vote"] = _ready_vote.snapshot()
+		data["exclusive_shopper"] = _exclusive_shopper
+		data["winner_shop"] = _exclusive_shopper != 0
 	else:
 		_ready_vote.configure([])
 		_continuing = false
+		data["exclusive_shopper"] = _exclusive_shopper
+		data["winner_shop"] = false
 	if data != _last_capture:
 		_revision += 1
 		_last_capture = data.duplicate(true)
@@ -268,6 +310,8 @@ func handle_request(message: Dictionary, actor: int = 0) -> bool:
 		return false
 	if _controller.finished:
 		return _reject("This table has finished. Return to the lobby to play again.")
+	if _vote_hold:
+		return _reject("Finish the set vote before shopping.")
 	if actor == 0:
 		actor = _controller.transport.local_id()
 	if not message.get("revision") is int or not message.get("action") is String:
@@ -288,6 +332,8 @@ func handle_request(message: Dictionary, actor: int = 0) -> bool:
 		return _reject("The shop changed. Please choose again.")
 	if not _state.ready_vote.eligible.has(actor):
 		return _reject("Only connected teammates can use this shop.")
+	if _exclusive_shopper != 0 and actor != _exclusive_shopper:
+		return _reject("Only the round winner can shop right now.")
 	if _continuing:
 		return _reject("The next round is starting.")
 	if _state.busy:
@@ -447,6 +493,8 @@ func apply_result(accepted: bool, reason = "", request_id: int = 0, shop: Dictio
 func apply_state(data: Dictionary) -> bool:
 	if not _valid_state(data):
 		return false
+	if data.get("exclusive_shopper") is int:
+		_exclusive_shopper = maxi(0, int(data.exclusive_shopper))
 	if data.get("revision", -1) < _authoritative_state.get("revision", -1):
 		return true
 	_authoritative_state = data.duplicate(true)
@@ -642,6 +690,14 @@ func _cancel_native_drag():
 	_view.hovered_slot = null
 
 
+func _exclusive_shop_blocked(actor: int = 0) -> bool:
+	if _exclusive_shopper == 0 or _controller == null:
+		return false
+	if actor == 0:
+		actor = _controller.transport.local_id()
+	return actor != _exclusive_shopper
+
+
 func _interaction_blocked() -> bool:
 	return (
 		not is_open()
@@ -653,6 +709,7 @@ func _interaction_blocked() -> bool:
 		or _view.moving()
 		or _controller.is_spectating()
 		or get_node("/root/UIManager").is_popup_open()
+		or _exclusive_shop_blocked()
 	)
 
 
@@ -947,6 +1004,13 @@ func _update_actions():
 	var blocked = _interaction_blocked()
 	if _controller.finished:
 		_notice.text = "This table has finished. Scores and purchases are locked."
+		_notice.show()
+	elif int(_state.get("exclusive_shopper", _exclusive_shopper)) != 0:
+		var owner = int(_state.get("exclusive_shopper", _exclusive_shopper))
+		if _controller.transport.local_id() == owner:
+			_notice.text = "Winner shops alone - your choices apply to the shared table."
+		else:
+			_notice.text = "Winner shops alone - only the round winner can buy, sell, or ready."
 		_notice.show()
 	# A pending acknowledgement can span many frames. Cancel the native drag once
 	# when interaction becomes blocked, preserving local camera/hover frame time.
