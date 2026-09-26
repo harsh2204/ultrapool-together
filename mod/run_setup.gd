@@ -1,6 +1,9 @@
 extends Node
 
+const DifficultyCatalog = preload("difficulty_catalog.gd")
+
 var _starting = false
+var _original_deck: Resource
 
 
 func _ready() -> void:
@@ -24,6 +27,8 @@ func at_main_menu() -> bool:
 # for any published option; local progression never removes the shared selection.
 func available_choices() -> Dictionary:
 	var database = get_node("/root/BallDatabase")
+	var ui = get_node_or_null("/root/UIManager")
+	DifficultyCatalog.register(database, ui.decks_menu if ui != null else null)
 	var result = {"deck": [], "difficulty": []}
 	for resource in database.id_to_deck.values():
 		if str(resource.id) != "DAILY" and _available_to_host(resource):
@@ -94,15 +99,20 @@ func validate_config(config: Dictionary) -> bool:
 	)
 
 
-func start(config: Dictionary) -> Error:
+func start(config: Dictionary, catalog: Node = null) -> Error:
 	if not validate_config(config):
 		return ERR_INVALID_DATA
 	if not at_main_menu():
 		return ERR_BUSY
 	var global_node = get_node("/root/Global")
 	var database = get_node("/root/BallDatabase")
+	DifficultyCatalog.register(database)
 	global_node.chosen_run_state = null
 	global_node.chosen_deck = database.id_to_deck[config.deck]
+	_original_deck = null
+	if catalog != null:
+		_original_deck = global_node.chosen_deck
+		global_node.chosen_deck = catalog.prepare_deck(_original_deck)
 	global_node.chosen_difficulty = database.id_to_difficulty[config.difficulty]
 	global_node.run_mode = global_node.RunMode.NORMAL
 	global_node.seed_text = str(config.seed)
@@ -138,6 +148,9 @@ func _process(_delta: float) -> void:
 func cancel() -> void:
 	_starting = false
 	set_process(false)
+	if _original_deck != null:
+		get_node("/root/Global").chosen_deck = _original_deck
+		_original_deck = null
 
 
 func return_menu() -> Error:

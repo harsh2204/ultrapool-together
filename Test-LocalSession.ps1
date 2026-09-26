@@ -2,7 +2,8 @@
 param(
     [string]$GamePath,
     [ValidateRange(1, 30)]
-    [int]$GuestDelaySeconds = 3
+    [int]$GuestDelaySeconds = 3,
+    [switch]$Muted
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,6 +96,9 @@ initialization/initialize_on_startup=false
 UltrapoolTogether="*$sourceRoot/mod/main.gd"
 LocalSessionProbe="*$sourceRoot/tests/local_session_probe.gd"
 "@
+        if ($Muted) {
+            $override += "`n[audio]`nbuses/master/muted=true`n"
+        }
         [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'override.cfg'), $override, [System.Text.UTF8Encoding]::new($false))
         '4195110' | Set-Content -LiteralPath (Join-Path $runtimeRoot 'steam_appid.txt') -Encoding ASCII
     }

@@ -13,6 +13,17 @@ const ITEM_FLAGS = ["flaming", "fleeting", "star_power", "shielded", "shield_bro
 const TABLE_FLAGS = ["ready", "in_menu", "in_shop", "round_ended", "game_over", "daily", "rotated"]
 const BALL_FLAGS = ["player", "visible", "alive", "spawned", "falling", "gone", "passive"]
 
+## Guest potted-rail hover: pocketed object balls stay in the synced snapshot with
+## full BallItem fields (id, scores, flags). The replica maps those onto bodies and
+## drives native inspection; no extra network fields are required.
+static func ball_on_potted_rail(state: Dictionary) -> bool:
+	return (
+		state.get("visible") == true
+		and state.get("player") == false
+		and state.get("alive") == false
+	)
+
+
 var _guest = false
 var _replica = null
 var _scene_key = ""
@@ -226,6 +237,10 @@ func end_guest() -> void:
 	_guest = false
 
 
+func valid_capture(data: Dictionary) -> bool:
+	return _valid_snapshot(data)
+
+
 func apply_snapshot(data: Dictionary) -> bool:
 	if not _guest or not _valid_snapshot(data):
 		return false
@@ -233,22 +248,11 @@ func apply_snapshot(data: Dictionary) -> bool:
 		_clear_replica()
 		return true
 	var key = "%s:%s" % [data.scene_id, data.rotated]
-	if key == _scene_key:
-		for body in data.balls:
-			if (
-				_replica.replicas.has(body.id)
-				and _replica.replicas[body.id].is_player != body.player
-			):
-				return false
-		for pocket in data.pockets:
-			if (
-				_replica.pocket_replicas.has(pocket.id)
-				and (
-					_replica.pocket_replicas[pocket.id].get_meta("remote_base_index")
-					!= pocket.base_index
-				)
-			):
-				return false
+	if key == _scene_key and is_instance_valid(_replica):
+		# Slot and similar native effects can rematerialize pockets/balls under the
+		# same remote id with a new base_index or cue/object role. Rebuild those
+		# replicas in place instead of rejecting the whole snapshot.
+		_rebuild_incompatible_identities(data)
 	if key != _scene_key:
 		_clear_replica()
 		var global_node = get_node("/root/Global")
@@ -279,6 +283,38 @@ func apply_snapshot(data: Dictionary) -> bool:
 	_replica.apply_table(data)
 	_results.apply(data)
 	return true
+
+
+func _rebuild_incompatible_identities(data: Dictionary) -> void:
+	for body in data.balls:
+		if not _replica.replicas.has(body.id):
+			continue
+		var existing = _replica.replicas[body.id]
+		if not is_instance_valid(existing) or existing.is_player == body.player:
+			continue
+		if existing == _replica.player_ball:
+			_replica.player_ball = null
+		if _replica.get("selected_ball") == existing and _replica.has_method("unselect_ball"):
+			_replica.unselect_ball(existing, existing.ball_item)
+		var physics = get_node_or_null("/root/GlobalPhysics")
+		if physics != null and physics.has_method("unregister_ball"):
+			physics.unregister_ball(existing)
+		existing.queue_free()
+		_replica.replicas.erase(body.id)
+		if _replica.corrections.has(body.id):
+			_replica.corrections.erase(body.id)
+	for pocket in data.pockets:
+		if not _replica.pocket_replicas.has(pocket.id):
+			continue
+		var existing_pocket = _replica.pocket_replicas[pocket.id]
+		if (
+			not is_instance_valid(existing_pocket)
+			or existing_pocket.get_meta("remote_base_index") == pocket.base_index
+		):
+			continue
+		if existing_pocket.get_meta("remote_hole", false):
+			existing_pocket.queue_free()
+		_replica.pocket_replicas.erase(pocket.id)
 
 
 func begin_shot(vector: Vector2) -> bool:

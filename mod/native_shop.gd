@@ -3,6 +3,7 @@ extends "res://ui/shop.gd"
 var remote_items: Dictionary = {}
 var remote_slots: Dictionary = {}
 var _displayed: Dictionary = {}
+var _last_layout_build_size := -1
 
 
 func _ready() -> void:
@@ -58,6 +59,15 @@ func ensure_remote_layout(entries: Array) -> bool:
 	# once player_info matches the shared run. Avoid rebuilding under live remote items.
 	if not remote_items.is_empty():
 		return false
+	# Only rebuild when the synced inventory actually changed; rebuilding every frame
+	# while the layout lags re-runs inventory.setup() and can corrupt the live tree.
+	var build_size := -1
+	if is_instance_valid(Global.gameManager) and Global.gameManager.player_info != null:
+		var build = Global.gameManager.player_info.get("build")
+		build_size = build.size() if build is Array else -1
+	if build_size == _last_layout_build_size:
+		return false
+	_last_layout_build_size = build_size
 	inventory.setup()
 	shop_slots = %ShopSlots.get_children()
 	rebuild_remote_slots()
@@ -209,9 +219,13 @@ func _sync_items(entries: Array):
 				slot.has_rarity_star = false
 	for old in previous.values():
 		var body = old.node
+		if not is_instance_valid(body):
+			continue
 		_release_remote_item(body)
 		body.slot = null
-		body.get_parent().remove_child(body)
+		var parent = body.get_parent()
+		if parent != null:
+			parent.remove_child(body)
 		body.queue_free()
 
 

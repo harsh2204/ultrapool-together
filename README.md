@@ -46,6 +46,10 @@ Everyone must use v0.8 or v0.9 and a **UP8** room code. Changing seats, settings
 - Press **F8** for standings and **Watch** to spectate another table. Switch tables in the spectator view or return to your own table; your run remains loaded. A table in its shop shows its last board with a shopping status.
 - Ending an unfinished match requires approval from every connected player. The host proposes returning to the lobby, and any player can cancel the proposal. Once all tables finish, the host can return directly. Seats stay assigned for the next ready-up. Native restart and menu buttons open this lobby flow.
 
+## Multiplayer balls (opt-in)
+
+The host can enable **Multiplayer balls** in the lobby (off by default). Relay, Called Shot, Patience, Bounty, Bankroll, Lifeline, Encore, and Domino never enter the starting rack; when enabled they appear only rarely in the shared shop. See [ball effects and rules](docs/MULTIPLAYER_BALLS.md).
+
 ## Current limits
 
 This source build is experimental; live Steam sessions, latency, and concurrent remote shopping still need playtesting.

@@ -167,6 +167,25 @@ func _run() -> void:
 	invalid = with_hole.duplicate(true)
 	invalid.pockets[6].scale = Vector2(INF, 1)
 	_check(not sync._valid_snapshot(invalid), "nonfinite hole geometry rejected")
+	_check(sync.valid_capture(state), "valid_capture mirrors snapshot validation")
+	var incomplete_pockets = state.duplicate(true)
+	incomplete_pockets.pockets.pop_back()
+	_check(
+		not sync.valid_capture(incomplete_pockets),
+		"capture missing a base pocket is invalid for host publish"
+	)
+	var too_many_pockets = state.duplicate(true)
+	for index in 11:
+		var extra = state.pockets[0].duplicate(true)
+		extra.id = 100 + index
+		extra.base_index = -1
+		too_many_pockets.pockets.append(extra)
+	_check(
+		not sync.valid_capture(too_many_pockets),
+		"oversized pocket list is invalid for host publish"
+	)
+	_check_identity_rebuild(sync, state, cue)
+	_check_potted_rail(sync, cue)
 	var original_game = get_node("/root/Global").gameManager
 	_check(not sync.apply_snapshot(state), "snapshot outside session rejected")
 	_check(
@@ -177,6 +196,133 @@ func _run() -> void:
 	completed.emit()
 	if not embedded:
 		get_tree().quit(1 if failed else 0)
+
+
+class _ResultsStub:
+	extends Node
+
+	func apply(_data: Dictionary) -> void:
+		pass
+
+	func clear() -> void:
+		pass
+
+	func end_session() -> void:
+		pass
+
+
+class _BallStub:
+	extends Node
+	var is_player = false
+	var ball_item = null
+
+
+class _ReplicaStub:
+	extends Node
+	var replicas: Dictionary = {}
+	var pocket_replicas: Dictionary = {}
+	var corrections: Dictionary = {}
+	var player_ball = null
+	var selected_ball = null
+	var applied: Array = []
+
+	func apply_table(data: Dictionary) -> void:
+		applied.append(data.duplicate(true))
+		for body in data.balls:
+			if not replicas.has(body.id):
+				var ball = _BallStub.new()
+				ball.is_player = body.player
+				replicas[body.id] = ball
+				if body.player:
+					player_ball = ball
+		for pocket in data.pockets:
+			if not pocket_replicas.has(pocket.id):
+				var node = Node.new()
+				node.set_meta("remote_base_index", pocket.base_index)
+				if pocket.base_index < 0:
+					node.set_meta("remote_hole", true)
+				pocket_replicas[pocket.id] = node
+
+
+func _check_identity_rebuild(sync: Node, state: Dictionary, cue: Dictionary) -> void:
+	var replica = _ReplicaStub.new()
+	add_child(replica)
+	var results = _ResultsStub.new()
+	add_child(results)
+	sync._guest = true
+	sync._scene_key = "%s:%s" % [state.scene_id, state.rotated]
+	sync._replica = replica
+	sync._results = results
+	var cue_body = _BallStub.new()
+	cue_body.is_player = true
+	replica.replicas[cue.id] = cue_body
+	replica.player_ball = cue_body
+	for pocket in state.pockets:
+		var node = Node.new()
+		node.set_meta("remote_base_index", pocket.base_index)
+		replica.pocket_replicas[pocket.id] = node
+	var remapped = state.duplicate(true)
+	# Swap two base pocket identities mid-scene (Slot-style rematerialize).
+	remapped.pockets[0].base_index = 1
+	remapped.pockets[1].base_index = 0
+	_check(sync.apply_snapshot(remapped), "identity-incompatible pocket update is rebuilt")
+	_check(
+		replica.pocket_replicas[remapped.pockets[0].id].get_meta("remote_base_index") == 1,
+		"rebuilt pocket adopts the new base index"
+	)
+	var flipped = state.duplicate(true)
+	flipped.balls[0] = cue.duplicate(true)
+	flipped.balls[0].player = false
+	flipped.balls[0].item = cue.item.duplicate(true)
+	flipped.balls[0].item.data = "1"
+	# Recreate cue-as-player mapping then flip.
+	replica.replicas.clear()
+	cue_body = _BallStub.new()
+	cue_body.is_player = true
+	replica.replicas[cue.id] = cue_body
+	replica.player_ball = cue_body
+	_check(sync.apply_snapshot(flipped), "cue/object identity flip is rebuilt instead of rejected")
+	_check(
+		replica.replicas.has(cue.id) and replica.replicas[cue.id].is_player == false,
+		"rebuilt ball matches the new player flag"
+	)
+	sync._guest = false
+	sync._scene_key = ""
+	sync._replica = null
+	sync._results = null
+	replica.queue_free()
+	results.queue_free()
+
+
+func _check_potted_rail(sync: Node, cue: Dictionary) -> void:
+	var pocketed = cue.duplicate(true)
+	pocketed.id = 50
+	pocketed.player = false
+	pocketed.item = cue.item.duplicate(true)
+	pocketed.item.data = "1"
+	pocketed.alive = false
+	pocketed.visible = true
+	pocketed.gone = false
+	_check(sync.ball_on_potted_rail(pocketed), "pocketed visible object ball is on the potted rail")
+	var live = pocketed.duplicate(true)
+	live.alive = true
+	_check(not sync.ball_on_potted_rail(live), "live object ball is not on the potted rail")
+	var hidden = pocketed.duplicate(true)
+	hidden.visible = false
+	_check(not sync.ball_on_potted_rail(hidden), "invisible pocketed ball is not on the potted rail")
+	var cue_rail = pocketed.duplicate(true)
+	cue_rail.player = true
+	cue_rail.item = cue.item.duplicate(true)
+	_check(not sync.ball_on_potted_rail(cue_rail), "cue ball is never treated as a rail icon")
+	# Synced BallItem fields already carry name/description (via BallDatabase id) and value.
+	_check(
+		(
+			typeof(pocketed.item.get("data")) == TYPE_STRING
+			and typeof(pocketed.item.get("base_score")) == TYPE_INT
+			and typeof(pocketed.item.get("temp_extra_score")) == TYPE_INT
+		),
+		"rail hover reuses synced ball identity and score fields"
+	)
 
 
 func _check(condition: bool, description: String) -> void:
