@@ -22,6 +22,28 @@ const INK = Color("eaf0e7")
 const MUTED = Color("8baeb2")
 const GOLD = Color("e8b861")
 const FELT = Color("35d5ab")
+const PLAQUE_INK = Color("3b2610")
+const BUTTON_CONTENT = [15, 11, 15, 11]
+const FIELD_CONTENT = [15, 11, 15, 11]
+const DROPDOWN_CONTENT = [15, 11, 30, 11]
+const TABLE_CARD_CONTENT = [16, 14, 16, 14]
+const PLAQUE_CONTENT = [24, 3, 24, 5]
+const ROW_CONTENT = [8, 5, 8, 5]
+const ROW_SPACING = 6
+const ROSTER_MIN_HEIGHT = 48
+const TABLE_BUTTON_HEIGHT = 44
+# Felt area inside the backdrop's rail and cushion, as fractions of the backdrop image.
+# Only the header board and the bottom action row may sit outside it.
+const BACKDROP_INLAY = Rect2(0.054, 0.095, 0.892, 0.804)
+const INLAY_PADDING = 4
+const BOTTOM_MARGIN = 20
+const DECK_ROW_WIDTH = 716
+const DIFFICULTY_ROW_WIDTH = 404
+const CHALK_TRACK = Color(0, 0, 0, 0.22)
+const CHALK_GRABBER = Color(0.95, 0.93, 0.89, 0.55)
+const CHALK_GRABBER_HOVER = Color(0.95, 0.93, 0.89, 0.8)
+const HEADER_PLANK_GROW = Vector2(18, 8)
+const PLAYER_CHIP_SIZE = Vector2(20, 20)
 const TABLE_COLORS = [
 	Color("35d5ab"),
 	Color("ee9073"),
@@ -40,6 +62,9 @@ static func player_color_for(table: int, slot: int, id: int = 0) -> Color:
 	return Color.from_hsv(posmod(hash(str(id)), 360) / 360.0, 0.55, 1.0)
 
 
+# Shared UI art from the controller; null keeps the flat styles.
+var skin: RefCounted
+
 var _state: Dictionary = {}
 var _local_id = 0
 var _is_host = false
@@ -49,6 +74,7 @@ var _player_grids: Array[GridContainer] = []
 var _vote_catalogs: Dictionary = {}
 var _vote_buttons: Dictionary = {}
 var _vote_groups: Dictionary = {}
+var _header_plank: Panel
 
 
 func _ready():
@@ -198,6 +224,8 @@ func _build_vote_choices(field: String, entries: Array) -> void:
 	choices.append_array(entries)
 	for entry in choices:
 		var card = VoteOption.new()
+		if _skinned():
+			card.apply_skin(skin)
 		card.button_group = group
 		card.configure(field, entry.id, entry.label, _vote_texture(field, entry.id))
 		card.pressed.connect(_card_vote_selected.bind(field, entry.id))
@@ -321,6 +349,7 @@ func set_connection(code: String, room_open: bool, invite_ready: bool):
 	%Join.disabled = %JoinCode.text.strip_edges().is_empty()
 	if not room_open:
 		%Invite.get_popup().hide()
+	_resize_tables()
 
 
 func set_friends(friends: Array):
@@ -413,18 +442,24 @@ func _build_tables():
 		var color: Color = TABLE_COLORS[table_id % TABLE_COLORS.size()]
 		var card = PanelContainer.new()
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		card.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		card.custom_minimum_size.x = 240
-		var card_style = _box(Color("102b30"), color.darkened(0.4), 2)
-		card_style.set_content_margin_all(12)
-		card.add_theme_stylebox_override("panel", card_style)
+		card.add_theme_stylebox_override("panel", _table_card_style(color))
 		%Tables.add_child(card)
 		var content = VBoxContainer.new()
 		content.add_theme_constant_override("separation", 8)
 		card.add_child(content)
 		var title = Label.new()
 		title.text = "TABLE %d" % (table_id + 1)
-		title.add_theme_font_size_override("font_size", 18)
-		title.add_theme_color_override("font_color", color)
+		if _skinned():
+			title.add_theme_stylebox_override("normal", skin.style("plaque_brass", PLAQUE_CONTENT))
+			title.add_theme_font_size_override("font_size", 16)
+			title.add_theme_color_override("font_color", PLAQUE_INK)
+			title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			title.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		else:
+			title.add_theme_font_size_override("font_size", 18)
+			title.add_theme_color_override("font_color", color)
 		content.add_child(title)
 		var summary = _table_summary(table_id)
 		if _state.get("started", false) and not summary.is_empty():
@@ -434,10 +469,17 @@ func _build_tables():
 			if player.table == table_id:
 				table_players.append(player)
 		table_players.sort_custom(func(a, b): return a.slot < b.slot)
+		# Long rosters scroll inside their card so the lobby body itself never has to.
+		var roster = ScrollContainer.new()
+		roster.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		roster.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		roster.custom_minimum_size.y = ROSTER_MIN_HEIGHT
+		content.add_child(roster)
 		var players = GridContainer.new()
+		players.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		players.add_theme_constant_override("h_separation", 8)
-		players.add_theme_constant_override("v_separation", 8)
-		content.add_child(players)
+		players.add_theme_constant_override("v_separation", ROW_SPACING)
+		roster.add_child(players)
 		_player_grids.append(players)
 		var occupied: Array = []
 		for player in table_players:
@@ -455,7 +497,7 @@ func _build_tables():
 		if _player(_local_id).get("table", -1) == table_id:
 			continue
 		var join = Button.new()
-		join.custom_minimum_size.y = 48
+		join.custom_minimum_size.y = TABLE_BUTTON_HEIGHT
 		join.add_theme_font_size_override("font_size", 16)
 		join.text = "+  Join this table"
 		join.disabled = seat >= _state.get("capacity", 8)
@@ -504,6 +546,8 @@ func _add_watch_button(content: VBoxContainer, table: int, summary: Dictionary):
 	watch.custom_minimum_size.y = 40
 	watch.add_theme_font_size_override("font_size", 16)
 	watch.text = "Return to my table" if table == own_table else "Watch table"
+	if _skinned() and table == own_table:
+		watch.icon = skin.texture("icon_return")
 	if watched == table:
 		watch.text = "Watching"
 	watch.disabled = watched == table or summary.get("status", "") == "Table host disconnected"
@@ -519,27 +563,18 @@ func _time_text(milliseconds: int) -> String:
 func _player_row(player: Dictionary, color: Color) -> Control:
 	var panel = PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var style = _box(Color("0b1d24"), Color("25434a"), 1)
-	style.content_margin_left = 8
-	style.content_margin_right = 8
-	style.content_margin_top = 6
-	style.content_margin_bottom = 6
-	panel.add_theme_stylebox_override("panel", style)
+	panel.add_theme_stylebox_override("panel", _player_row_style())
 	var row = HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	panel.add_child(row)
-	var marker = ColorRect.new()
-	marker.custom_minimum_size = Vector2(5, 0)
-	marker.color = color
-	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(marker)
+	row.add_child(_player_marker(color))
 	var content = VBoxContainer.new()
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.add_theme_constant_override("separation", 2)
 	row.add_child(content)
 	var name_label = Label.new()
 	name_label.text = str(player.name)
-	name_label.add_theme_font_size_override("font_size", 17)
+	name_label.add_theme_font_size_override("font_size", 16)
 	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name_label.custom_minimum_size.x = 80
 	content.add_child(name_label)
@@ -565,7 +600,7 @@ func _player_row(player: Dictionary, color: Color) -> Control:
 		badges.append("NOT READY")
 	detail.text = " · ".join(badges)
 	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	detail.add_theme_font_size_override("font_size", 12)
+	detail.add_theme_font_size_override("font_size", 11)
 	detail.add_theme_color_override("font_color", FELT if player.get("ready", false) else MUTED)
 	content.add_child(detail)
 	return panel
@@ -607,20 +642,39 @@ func _resize_tables():
 		%RoomBar.reparent(room_parent)
 		room_parent.move_child(%RoomBar, 1)
 	var margin = 16 if size.x < 700 else 32
-	$Margin.add_theme_constant_override("margin_left", margin)
-	$Margin.add_theme_constant_override("margin_right", margin)
-	var width = size.x - margin * 2
-	var settings_parent = $Margin/Layout/Body/Content/Room/RoomHeading if width >= 1060 else %Room
+	var margin_left = margin
+	var margin_right = margin
+	var margin_bottom = BOTTOM_MARGIN
+	if _skinned():
+		var inlay = inlay_rect()
+		margin_left = maxi(margin, ceili(inlay.position.x) + INLAY_PADDING)
+		margin_right = maxi(margin, ceili(size.x - inlay.end.x) + INLAY_PADDING)
+		# The action row may sit on the rail; without it the body must stop at the felt.
+		if not %Actions.visible:
+			margin_bottom = maxi(BOTTOM_MARGIN, ceili(size.y - inlay.end.y) + INLAY_PADDING)
+	$Margin.add_theme_constant_override("margin_left", margin_left)
+	$Margin.add_theme_constant_override("margin_right", margin_right)
+	$Margin.add_theme_constant_override("margin_bottom", margin_bottom)
+	var width = size.x - margin_left - margin_right
+	var heading = $Margin/Layout/Body/Content/Room/RoomHeading
+	var heading_width = (
+		%RoomTitle.get_combined_minimum_size().x
+		+ %Settings.get_combined_minimum_size().x
+		+ %Count.get_combined_minimum_size().x
+		+ heading.get_theme_constant("separation") * 2
+	)
+	var settings_parent = heading if width >= heading_width else %Room
 	if %Settings.get_parent() != settings_parent:
 		%Settings.reparent(settings_parent)
 		settings_parent.move_child(%Settings, 1)
-	%DeckVotes.custom_minimum_size.x = minf(776, width)
-	%DifficultyVotes.custom_minimum_size.x = minf(404, width)
+	%DeckVotes.custom_minimum_size.x = minf(DECK_ROW_WIDTH, width)
+	%DifficultyVotes.custom_minimum_size.x = minf(DIFFICULTY_ROW_WIDTH, width)
 	var columns = clampi(int((width + 16) / 256), 1, 4)
 	%Tables.columns = mini(columns, _state.get("table_count", 1))
 	var card_width = (width - (%Tables.columns - 1) * 16) / %Tables.columns
 	for players in _player_grids:
 		players.columns = clampi(int((card_width - 16) / 240), 1, 4)
+	_place_header_plank()
 
 
 func _apply_theme():
@@ -647,12 +701,161 @@ func _apply_theme():
 	palette.set_color("font_hover_color", "PopupMenu", Color.WHITE)
 	palette.set_color("font_disabled_color", "PopupMenu", MUTED)
 	theme = palette
+	if _skinned():
+		_apply_skin(palette)
+		return
 	for button in [%Host, %Ready, %Start]:
 		button.add_theme_stylebox_override("normal", _box(FELT.darkened(0.13), FELT, 1))
 		button.add_theme_stylebox_override("hover", _box(FELT.lightened(0.12), GOLD, 1))
 		button.add_theme_color_override("font_color", Color("08241f"))
 		button.add_theme_color_override("font_hover_color", Color("08241f"))
 	%Bench.add_theme_stylebox_override("panel", _box(Color("171f25"), Color("544a33"), 1))
+
+
+func _skinned() -> bool:
+	return skin != null and skin.has_art()
+
+
+# Pool-hall chalkboard art. Content margins match the flat styles so control sizes stay put.
+func _apply_skin(palette: Theme) -> void:
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		palette.set_stylebox(state, "Button", skin.button_style("dark", state, BUTTON_CONTENT))
+		var dropdown = (
+			skin.disabled("field_dropdown", DROPDOWN_CONTENT)
+			if state == "disabled"
+			else skin.style("field_dropdown", DROPDOWN_CONTENT)
+		)
+		palette.set_stylebox(state, "OptionButton", dropdown)
+	palette.set_stylebox("focus", "OptionButton", _box(Color(0, 0, 0, 0), GOLD, 2))
+	palette.set_icon("arrow", "OptionButton", skin.blank())
+	palette.set_color("font_outline_color", "Button", Color(0, 0, 0, 0.55))
+	palette.set_constant("outline_size", "Button", 3)
+	palette.set_constant("h_separation", "Button", 8)
+	palette.set_constant("icon_max_width", "Button", 28)
+	palette.set_stylebox("normal", "LineEdit", skin.style("field_text", FIELD_CONTENT))
+	palette.set_stylebox("read_only", "LineEdit", skin.disabled("field_text", FIELD_CONTENT))
+	palette.set_stylebox("focus", "LineEdit", _box(Color(0, 0, 0, 0), GOLD, 2))
+	palette.set_stylebox("scroll", "VScrollBar", _chalk_bar(CHALK_TRACK))
+	palette.set_stylebox("grabber", "VScrollBar", _chalk_bar(CHALK_GRABBER))
+	palette.set_stylebox("grabber_highlight", "VScrollBar", _chalk_bar(CHALK_GRABBER_HOVER))
+	palette.set_stylebox("grabber_pressed", "VScrollBar", _chalk_bar(Color.WHITE))
+	palette.set_stylebox("panel", "PopupMenu", skin.style("panel_chalk", [18, 14, 18, 14]))
+	palette.set_stylebox("hover", "PopupMenu", skin.style("slot_chalk", [8, 4, 8, 4]))
+	for button in [%Host, %Ready, %Start]:
+		for state in ["normal", "hover", "pressed", "disabled"]:
+			button.add_theme_stylebox_override(
+				state, skin.button_style("green", state, BUTTON_CONTENT)
+			)
+		button.add_theme_color_override("font_color", Color.WHITE)
+		button.add_theme_color_override("font_hover_color", Color.WHITE)
+	%Bench.add_theme_stylebox_override("panel", skin.style("panel_chalk", TABLE_CARD_CONTENT))
+	var icons = {
+		%Copy: "icon_copy",
+		%Invite: "icon_invite",
+		%Close: "icon_close",
+		%Leave: "icon_leave",
+		%Return: "icon_return",
+		%ApproveReturn: "icon_approve",
+		%CancelReturn: "icon_deny"
+	}
+	for button in icons:
+		button.icon = skin.texture(icons[button])
+	%VoteHelp.text = "Chalk check: your vote · Gold gem: current result · Chips show live votes."
+	$Background.visible = false
+	$TopRail.visible = false
+	$Margin/Layout/Divider.visible = false
+	var backdrop = TextureRect.new()
+	backdrop.name = "Backdrop"
+	backdrop.texture = skin.texture("backdrop")
+	backdrop.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	backdrop.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(backdrop)
+	move_child(backdrop, 0)
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_header_plank = Panel.new()
+	_header_plank.name = "HeaderPlank"
+	_header_plank.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_header_plank.add_theme_stylebox_override("panel", skin.style("header_plank"))
+	add_child(_header_plank)
+	move_child(_header_plank, 1)
+	$Margin/Layout/Header.item_rect_changed.connect(_place_header_plank)
+	var brand = $Margin/Layout/Header/Brand
+	brand.get_node("Title").visible = false
+	brand.get_node("Together").visible = false
+	var logo = TextureRect.new()
+	logo.name = "Logo"
+	logo.texture = skin.texture("logo")
+	logo.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	logo.custom_minimum_size = Vector2(0, 52)
+	logo.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	logo.tooltip_text = "Ultrapool Together"
+	brand.add_child(logo)
+
+
+# The backdrop's felt area in local coordinates, following its keep-aspect-covered scaling.
+func inlay_rect() -> Rect2:
+	if not _skinned():
+		return Rect2(Vector2.ZERO, size)
+	var texture_size: Vector2 = skin.texture("backdrop").get_size()
+	var shown = texture_size * maxf(size.x / texture_size.x, size.y / texture_size.y)
+	var origin = (size - shown) / 2
+	return Rect2(origin + BACKDROP_INLAY.position * shown, BACKDROP_INLAY.size * shown)
+
+
+func _place_header_plank() -> void:
+	if _header_plank == null:
+		return
+	var header: Control = $Margin/Layout/Header
+	_header_plank.position = header.global_position - global_position - HEADER_PLANK_GROW
+	_header_plank.size = header.size + HEADER_PLANK_GROW * 2
+
+
+func _chalk_bar(color: Color) -> StyleBoxFlat:
+	var bar = StyleBoxFlat.new()
+	bar.bg_color = color
+	bar.set_corner_radius_all(3)
+	bar.content_margin_left = 3
+	bar.content_margin_right = 3
+	return bar
+
+
+func _table_card_style(color: Color) -> StyleBox:
+	if _skinned():
+		return skin.style("panel_chalk", TABLE_CARD_CONTENT)
+	var card_style = _box(Color("102b30"), color.darkened(0.4), 2)
+	card_style.set_content_margin_all(12)
+	return card_style
+
+
+func _player_row_style() -> StyleBox:
+	if _skinned():
+		return skin.style("slot_chalk", ROW_CONTENT)
+	var style = _box(Color("0b1d24"), Color("25434a"), 1)
+	style.content_margin_left = ROW_CONTENT[0]
+	style.content_margin_top = ROW_CONTENT[1]
+	style.content_margin_right = ROW_CONTENT[2]
+	style.content_margin_bottom = ROW_CONTENT[3]
+	return style
+
+
+func _player_marker(color: Color) -> Control:
+	if _skinned():
+		var chip = TextureRect.new()
+		chip.texture = skin.texture("chip_voter")
+		chip.custom_minimum_size = PLAYER_CHIP_SIZE
+		chip.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		chip.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		chip.modulate = color
+		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		return chip
+	var marker = ColorRect.new()
+	marker.custom_minimum_size = Vector2(5, 0)
+	marker.color = color
+	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return marker
 
 
 func _box(background: Color, border: Color, width: int) -> StyleBoxFlat:

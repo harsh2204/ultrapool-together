@@ -7,6 +7,7 @@ class Controller:
 	var table_id = 0
 	var lobby = {"table_count": 3}
 	var ui_root: Control
+	var skin: RefCounted
 	var abandoned: Array[int] = []
 
 	func _table_abandoned(table: int) -> bool:
@@ -24,12 +25,21 @@ func capture(mod: Node, snapshot: Dictionary, screenshot: Callable) -> Array:
 	var original_shapes = physics.shapes.duplicate()
 	var controller = Controller.new()
 	controller.ui_root = mod.ui_root
+	controller.skin = mod.skin
 	mod.add_child(controller)
 	var spectator = (
 		load(get_script().resource_path.get_base_dir().path_join("../mod/table_spectator.gd")).new()
 	)
 	controller.add_child(spectator)
 	spectator.setup(controller)
+	if mod.skin != null and mod.skin.has_art():
+		_check(
+			(
+				spectator._title.get_theme_stylebox("normal") is StyleBoxTexture
+				and spectator._status.get_theme_stylebox("normal") is StyleBoxTexture
+			),
+			"watcher title and status use the shared HUD tag art"
+		)
 	var original_spectator = mod.spectator
 	mod.spectator = spectator
 	spectator.watch_changed.connect(func(_table: int): _refresh_home_ui(mod))

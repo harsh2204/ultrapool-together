@@ -215,6 +215,29 @@ func _check_vote_cards(mod: Node, field: String, choice: String) -> void:
 	)
 
 
+# PERF-026: a roster rebuild recreates table cards but must reuse the skin's loaded art.
+func _check_shared_skin(panel: Control, previous_style: StyleBox) -> void:
+	if panel.skin == null or not panel.skin.has_art():
+		return
+	var backdrop: TextureRect = panel.get_node_or_null("Backdrop")
+	_record(backdrop != null and backdrop.texture != null, "lobby shows the pool-hall backdrop art")
+	_record(
+		previous_style is StyleBoxTexture and _first_table_card_style(panel) == previous_style,
+		"rebuilt table cards share one loaded chalkboard style"
+	)
+	var felt: Rect2 = panel.inlay_rect()
+	felt.position += panel.global_position
+	_record(
+		felt.encloses(panel.get_node("%Body").get_global_rect()),
+		"lobby body stays inside the backdrop's felt area"
+	)
+
+
+func _first_table_card_style(panel: Control) -> StyleBox:
+	var cards = panel.get_node("%Tables").get_children()
+	return null if cards.is_empty() else cards[0].get_theme_stylebox("panel")
+
+
 func _vote_request(mod: Node, field: String, choice: String) -> Dictionary:
 	return {
 		"action": "run_vote",
@@ -253,9 +276,11 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 	panel.set_connection("UP8-RENDER-FIXTURE", true, true)
 	panel.render(coop, 1, true)
 	await capture.call("lobby-choosing-seats", "Four-player co-op with one player choosing a seat.")
+	var card_style = _first_table_card_style(panel)
 	coop = _lobby([0, 0, 0, 0], 1)
 	panel.render(coop, 1, true)
 	_record(panel.get_node("%Leave").visible, "host can leave a pre-match lobby")
+	_check_shared_skin(panel, card_style)
 	await capture.call("lobby-coop-ready", "Four players ready at a shared table.")
 
 	var choices = coop.duplicate(true)
@@ -431,6 +456,10 @@ func _capture_full_catalog(mod: Node, capture: Callable) -> void:
 			"full native " + field + " catalog shows every player's live vote once"
 		)
 	_record(clipped_players(mod).is_empty(), "full native catalog leaves all eight players visible")
+	_record(
+		not mod.panel.get_node("%Body").get_v_scroll_bar().visible,
+		"full native catalog fits without scrolling the whole lobby body"
+	)
 	await capture.call(
 		"lobby-full-native-catalog",
 		"Every native starting-set card and difficulty with eight players across four tables."
@@ -466,16 +495,29 @@ func clipped_players(mod: Node) -> Array[String]:
 	var clipped: Array[String] = []
 	var labels = mod.panel.get_node("%Tables").find_children("*", "Label", true, false)
 	labels.append_array(mod.panel.get_node("%Unassigned").find_children("*", "Label", true, false))
-	var area: Rect2 = mod.panel.get_node("%Body").get_global_rect()
+	var body: Control = mod.panel.get_node("%Body")
+	var area: Rect2 = body.get_global_rect()
 	for player in mod.panel._state.get("players", []):
 		var visible_name = false
 		for label in labels:
 			if label.text == player.name and label.is_visible_in_tree():
-				visible_name = area.encloses(label.get_global_rect())
+				# A row may scroll inside its own card; that card must not be clipped by the body.
+				var roster = _card_roster(label, body)
+				var shown: Control = label if roster == null else roster
+				visible_name = area.encloses(shown.get_global_rect())
 				break
 		if not visible_name:
 			clipped.append(player.name)
 	return clipped
+
+
+func _card_roster(label: Control, body: Control) -> ScrollContainer:
+	var node = label.get_parent()
+	while node != null and node != body:
+		if node is ScrollContainer:
+			return node
+		node = node.get_parent()
+	return null
 
 
 func capture_table_states(mod: Node, capture: Callable) -> void:

@@ -4,6 +4,14 @@ const VERSION = "0.8.0"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
+const HUD_CONTENT = [16, 8, 18, 11]
+const HUD_OUTLINE = Color(0, 0, 0, 0.6)
+const HUD_TINTS = {
+	"normal": Color.WHITE,
+	"hover": Color(1.12, 1.12, 1.12),
+	"pressed": Color(0.85, 0.85, 0.85),
+	"disabled": Color(0.6, 0.6, 0.6, 0.8)
+}
 
 var transport: Node
 var adapter: Node
@@ -16,6 +24,7 @@ var run_controls: Node
 var lobby_model: RefCounted
 var router: RefCounted
 var ui_root: Control
+var skin: RefCounted
 var panel: Control
 var turn_label: Label
 var score_label: Label
@@ -106,6 +115,8 @@ func _ready():
 
 
 func _build_ui():
+	var base = get_script().resource_path.get_base_dir()
+	skin = load(base.path_join("ui_skin.gd")).new(base.path_join("assets/ui"))
 	var hud = CanvasLayer.new()
 	hud.layer = 120
 	add_child(hud)
@@ -114,6 +125,8 @@ func _build_ui():
 	ui_root.theme = Theme.new()
 	ui_root.theme.default_font = get_node("/root/UIManager").FONT_LATIN
 	ui_root.theme.default_font_size = 18
+	if skin.has_art():
+		_apply_hud_skin(ui_root.theme)
 	hud.add_child(ui_root)
 	ui_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var dock = VBoxContainer.new()
@@ -129,16 +142,18 @@ func _build_ui():
 	pass_button = _button("Pass", _request_pass)
 	pass_button.hide()
 	row.add_child(pass_button)
-	row.add_child(_button("Lobby · F8", _toggle_panel))
+	var lobby_button = _button("Lobby · F8", _toggle_panel)
+	if skin.has_art():
+		_tint_hud_button(lobby_button, "hud_tag_purple")
+	row.add_child(lobby_button)
 	turn_label = Label.new()
 	turn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dock.add_child(turn_label)
 	score_label = Label.new()
 	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dock.add_child(score_label)
-	panel = (
-		load(get_script().resource_path.get_base_dir().path_join("lobby_scene.tscn")).instantiate()
-	)
+	panel = load(base.path_join("lobby_scene.tscn")).instantiate()
+	panel.skin = skin
 	ui_root.add_child(panel)
 	panel.host_requested.connect(_host)
 	panel.join_requested.connect(_join)
@@ -189,6 +204,29 @@ func _button(value: String, action: Callable) -> Button:
 	button.text = value
 	button.pressed.connect(action)
 	return button
+
+
+# Colored HUD tags matching the native money/score tags; shared with the spectator overlay.
+func _apply_hud_skin(hud_theme: Theme) -> void:
+	for state in HUD_TINTS:
+		var tint: Color = HUD_TINTS[state]
+		hud_theme.set_stylebox(state, "Button", skin.style("hud_tag_orange", HUD_CONTENT, tint))
+		hud_theme.set_stylebox(state, "OptionButton", skin.style("hud_tag_blue", HUD_CONTENT, tint))
+	hud_theme.set_stylebox("focus", "Button", StyleBoxEmpty.new())
+	hud_theme.set_stylebox("focus", "OptionButton", StyleBoxEmpty.new())
+	for type in ["Button", "OptionButton"]:
+		hud_theme.set_color("font_color", type, Color.WHITE)
+		hud_theme.set_color("font_hover_color", type, Color.WHITE)
+		hud_theme.set_color("font_pressed_color", type, Color.WHITE)
+		hud_theme.set_color("font_outline_color", type, HUD_OUTLINE)
+		hud_theme.set_constant("outline_size", type, 4)
+	hud_theme.set_color("font_outline_color", "Label", HUD_OUTLINE)
+	hud_theme.set_constant("outline_size", "Label", 5)
+
+
+func _tint_hud_button(button: Button, art: String) -> void:
+	for state in HUD_TINTS:
+		button.add_theme_stylebox_override(state, skin.style(art, HUD_CONTENT, HUD_TINTS[state]))
 
 
 func _input(event):

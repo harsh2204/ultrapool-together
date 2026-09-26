@@ -4,6 +4,11 @@ signal watch_changed(table: int)
 
 const BUFFER_SECONDS = 0.12
 const STALE_SECONDS = 3.0
+const EYE_ICON = "res://ui/eye.png"
+const TITLE_TAG_CONTENT = [46, 9, 20, 12]
+const TITLE_EYE_POSITION = Vector2(16, 9)
+const TITLE_EYE_SIZE = Vector2(24, 24)
+const STATUS_RIBBON_CONTENT = [44, 8, 44, 12]
 
 var watched_table: int:
 	get:
@@ -189,6 +194,9 @@ func _build_ui() -> void:
 	_status.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	_status.offset_top = -44
 	_status.offset_bottom = -16
+	var skin: RefCounted = _controller.get("skin")
+	if skin != null and skin.has_art():
+		_apply_skin(skin, header, back)
 	_empty = Label.new()
 	_empty.z_index = 1000
 	_empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -197,6 +205,36 @@ func _build_ui() -> void:
 	_empty.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_empty.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.hide()
+
+
+# D2 overlay: tags sized to their text instead of spanning the header; built once with the UI.
+func _apply_skin(skin: RefCounted, header: HBoxContainer, back: Button) -> void:
+	_title.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_title.add_theme_stylebox_override("normal", skin.style("hud_tag_orange", TITLE_TAG_CONTENT))
+	_title.add_theme_color_override("font_color", Color.WHITE)
+	var eye = TextureRect.new()
+	eye.texture = skin.native_texture(EYE_ICON)
+	eye.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	eye.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	eye.position = TITLE_EYE_POSITION
+	eye.size = TITLE_EYE_SIZE
+	eye.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_title.add_child(eye)
+	var spacer = Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_child(spacer)
+	header.move_child(spacer, _title.get_index() + 1)
+	back.icon = skin.texture("icon_return")
+	var ribbon = skin.style("ribbon_strip_orange", STATUS_RIBBON_CONTENT)
+	_status.add_theme_stylebox_override("normal", ribbon)
+	_status.add_theme_color_override("font_color", Color.WHITE)
+	_status.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_status.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_status.offset_left = 0
+	_status.offset_right = 0
+	_status.offset_top = -58
+	_status.offset_bottom = -10
 
 
 func _refresh_picker() -> void:

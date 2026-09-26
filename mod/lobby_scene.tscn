@@ -110,6 +110,7 @@ horizontal_scroll_mode = 0
 [node name="Content" type="VBoxContainer" parent="Margin/Layout/Body"]
 layout_mode = 2
 size_flags_horizontal = 3
+size_flags_vertical = 3
 theme_override_constants/separation = 18
 
 [node name="Home" type="VBoxContainer" parent="Margin/Layout/Body/Content"]
@@ -166,6 +167,7 @@ autowrap_mode = 3
 [node name="Room" type="VBoxContainer" parent="Margin/Layout/Body/Content"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_vertical = 3
 theme_override_constants/separation = 10
 
 [node name="RoomHeading" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room"]
@@ -236,7 +238,7 @@ text = "1 / 8 PLAYERS"
 [node name="VoteChoices" type="HFlowContainer" parent="Margin/Layout/Body/Content/Room"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_constants/h_separation = 16
+theme_override_constants/h_separation = 12
 theme_override_constants/v_separation = 12
 
 [node name="DeckVotes" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/VoteChoices"]
@@ -254,7 +256,7 @@ text = "STARTING SET"
 [node name="StartingSet" type="HFlowContainer" parent="Margin/Layout/Body/Content/Room/VoteChoices/DeckVotes"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_constants/h_separation = 6
+theme_override_constants/h_separation = 4
 theme_override_constants/v_separation = 6
 
 [node name="DifficultyVotes" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/VoteChoices"]
@@ -302,6 +304,7 @@ autowrap_mode = 3
 [node name="Tables" type="GridContainer" parent="Margin/Layout/Body/Content/Room"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_vertical = 3
 theme_override_constants/h_separation = 16
 theme_override_constants/v_separation = 16
 columns = 2

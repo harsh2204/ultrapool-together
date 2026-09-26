@@ -6,9 +6,12 @@ const INK = Color("eaf0e7")
 const MUTED = Color("8baeb2")
 const GOLD = Color("e8b861")
 const FELT = Color("35d5ab")
-const DECK_SIZE = Vector2(80, 112)
+const DECK_SIZE = Vector2(76, 112)
 const COMPACT_SIZE = Vector2(130, 62)
 const MAX_VOTERS = 8
+const CHALK_IDLE = Color(1, 1, 1, 0.72)
+const CHALK_VOTED = Color("f2cf7d")
+const CHALK_LOCKED = Color(1, 1, 1, 0.35)
 
 var choice_id: String = ""
 var voter_ids: Array[int] = []
@@ -22,6 +25,7 @@ var _voters: Array[Dictionary] = []
 var _selected = false
 var _winning = false
 var _locked = false
+var _skin: RefCounted
 
 
 func _init() -> void:
@@ -55,6 +59,17 @@ func _init() -> void:
 func _ready() -> void:
 	_font = get_theme_font("font")
 	_layout_label()
+	queue_redraw()
+
+
+# Chalk-slot frames and markers from the shared skin; the native poster art is unchanged.
+func apply_skin(skin: RefCounted) -> void:
+	_skin = skin
+	add_theme_stylebox_override("normal", skin.style("slot_chalk", [], CHALK_IDLE))
+	add_theme_stylebox_override("hover", skin.style("slot_chalk"))
+	add_theme_stylebox_override("pressed", skin.style("slot_chalk", [], CHALK_VOTED))
+	add_theme_stylebox_override("hover_pressed", skin.style("slot_chalk", [], CHALK_VOTED))
+	add_theme_stylebox_override("disabled", skin.style("slot_chalk", [], CHALK_LOCKED))
 	queue_redraw()
 
 
@@ -112,6 +127,29 @@ func _layout_label() -> void:
 func _draw() -> void:
 	if _font == null:
 		return
+	if _skin != null:
+		_draw_skin_marks()
+	else:
+		_draw_flat_marks()
+	if _texture != null:
+		var image_size = Vector2(49, 56) if _field == "deck" else Vector2(24, 24)
+		var image_position = (
+			Vector2((size.x - image_size.x) / 2, 19) if _field == "deck" else Vector2(8, 15)
+		)
+		draw_texture_rect(_texture, Rect2(image_position, image_size), false)
+	_draw_voters()
+
+
+func _draw_skin_marks() -> void:
+	if button_pressed:
+		var check: Texture2D = _skin.texture("chalk_check_small")
+		draw_texture(check, Vector2(3, 2), CHALK_VOTED)
+	if _winning:
+		var gem: Texture2D = _skin.texture("marker_result_small")
+		draw_texture(gem, Vector2(size.x - gem.get_width() - 4, 3))
+
+
+func _draw_flat_marks() -> void:
 	var radio_position = Vector2(10, 10)
 	draw_arc(radio_position, 4, 0, TAU, 16, FELT if button_pressed else MUTED, 1, true)
 	if button_pressed:
@@ -132,13 +170,6 @@ func _draw() -> void:
 			),
 			GOLD
 		)
-	if _texture != null:
-		var image_size = Vector2(49, 56) if _field == "deck" else Vector2(24, 24)
-		var image_position = (
-			Vector2((size.x - image_size.x) / 2, 19) if _field == "deck" else Vector2(8, 15)
-		)
-		draw_texture_rect(_texture, Rect2(image_position, image_size), false)
-	_draw_voters()
 
 
 func _draw_voters() -> void:
@@ -161,7 +192,11 @@ func _draw_voters() -> void:
 		var initial = str(voter.get("name", "?")).strip_edges().left(1).to_upper()
 		if initial.is_empty():
 			initial = "?"
-		draw_circle(Vector2(x, y), 6, tint)
+		if _skin != null:
+			var chip: Texture2D = _skin.texture("chip_voter_small")
+			draw_texture(chip, (Vector2(x, y) - chip.get_size() / 2).floor(), tint)
+		else:
+			draw_circle(Vector2(x, y), 6, tint)
 		_draw_centered(initial, Vector2(x, y + 3.5), 10, Color("10282a"))
 
 
@@ -181,9 +216,9 @@ func _draw_centered(value: String, baseline: Vector2, font_size: int, color: Col
 func _update_tooltip() -> void:
 	var lines: Array[String] = [_choice_label]
 	if _selected:
-		lines.append("Your vote · selected radio button")
+		lines.append("Your vote · " + ("chalk check" if _skin != null else "selected radio button"))
 	if _winning:
-		lines.append("Current result · gold diamond")
+		lines.append("Current result · " + ("gold gem" if _skin != null else "gold diamond"))
 	if _voters.is_empty():
 		lines.append("No votes yet")
 	else:
