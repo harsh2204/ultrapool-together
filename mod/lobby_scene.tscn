@@ -178,85 +178,102 @@ size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 24
 text = "YOUR LOBBY"
 
-[node name="Count" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading"]
+[node name="Settings" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/RoomHeading"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "1 / 8 PLAYERS"
+theme_override_constants/separation = 18
 
-[node name="Settings" type="HFlowContainer" parent="Margin/Layout/Body/Content/Room"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_constants/h_separation = 24
-theme_override_constants/v_separation = 10
-
-[node name="TableSetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+[node name="TableSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/TableSetting"]
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings/TableSetting"]
 layout_mode = 2
 text = "Tables"
 
-[node name="TableCount" type="SpinBox" parent="Margin/Layout/Body/Content/Room/Settings/TableSetting"]
+[node name="TableCount" type="SpinBox" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings/TableSetting"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(98, 48)
+custom_minimum_size = Vector2(76, 40)
 layout_mode = 2
 min_value = 1.0
 max_value = 8.0
 value = 1.0
 
-[node name="ModeSetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+[node name="ModeSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/ModeSetting"]
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings/ModeSetting"]
 layout_mode = 2
-text = "Match vote"
+text = "Mode"
 
-[node name="MatchMode" type="OptionButton" parent="Margin/Layout/Body/Content/Room/Settings/ModeSetting"]
+[node name="MatchMode" type="OptionButton" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings/ModeSetting"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(170, 48)
+custom_minimum_size = Vector2(160, 40)
 layout_mode = 2
 
-[node name="ShotSetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
+[node name="ShotSetting" type="HBoxContainer" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/ShotSetting"]
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings/ShotSetting"]
 layout_mode = 2
-text = "Shot budget"
+text = "Shots"
 
-[node name="ShotBudget" type="SpinBox" parent="Margin/Layout/Body/Content/Room/Settings/ShotSetting"]
+[node name="ShotBudget" type="SpinBox" parent="Margin/Layout/Body/Content/Room/RoomHeading/Settings/ShotSetting"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(98, 48)
+custom_minimum_size = Vector2(76, 40)
 layout_mode = 2
 min_value = 1.0
 max_value = 20.0
 value = 6.0
 
-[node name="SetSetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
-layout_mode = 2
-
-[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/SetSetting"]
-layout_mode = 2
-text = "Starting set vote"
-
-[node name="StartingSet" type="OptionButton" parent="Margin/Layout/Body/Content/Room/Settings/SetSetting"]
+[node name="Count" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(240, 48)
 layout_mode = 2
+text = "1 / 8 PLAYERS"
 
-[node name="DifficultySetting" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/Settings"]
-layout_mode = 2
-
-[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/Settings/DifficultySetting"]
-layout_mode = 2
-text = "Difficulty vote"
-
-[node name="Difficulty" type="OptionButton" parent="Margin/Layout/Body/Content/Room/Settings/DifficultySetting"]
+[node name="VoteChoices" type="HFlowContainer" parent="Margin/Layout/Body/Content/Room"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(240, 48)
 layout_mode = 2
+theme_override_constants/h_separation = 16
+theme_override_constants/v_separation = 12
+
+[node name="DeckVotes" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/VoteChoices"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(776, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/VoteChoices/DeckVotes"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "STARTING SET"
+
+[node name="StartingSet" type="HFlowContainer" parent="Margin/Layout/Body/Content/Room/VoteChoices/DeckVotes"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/h_separation = 6
+theme_override_constants/v_separation = 6
+
+[node name="DifficultyVotes" type="VBoxContainer" parent="Margin/Layout/Body/Content/Room/VoteChoices"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(404, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="Title" type="Label" parent="Margin/Layout/Body/Content/Room/VoteChoices/DifficultyVotes"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "DIFFICULTY"
+
+[node name="Difficulty" type="HFlowContainer" parent="Margin/Layout/Body/Content/Room/VoteChoices/DifficultyVotes"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/h_separation = 6
+theme_override_constants/v_separation = 6
 
 [node name="Rules" type="Label" parent="Margin/Layout/Body/Content/Room"]
 unique_name_in_owner = true
@@ -278,7 +295,7 @@ layout_mode = 2
 mouse_filter = 1
 theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
 theme_override_font_sizes/font_size = 14
-text = "One vote each · changing a vote clears Ready."
+text = "Filled circle: your vote · Gold diamond: current result · Player initials show live votes."
 tooltip_text = "Host's unlocked choices. Most votes wins; ties use menu order. No votes keeps the initial choice. All tables share the result and seed. Standard runs only; daily runs are unavailable."
 autowrap_mode = 3
 

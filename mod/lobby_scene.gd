@@ -16,6 +16,8 @@ signal watch_requested(table: int)
 signal leave_requested
 signal close_requested
 
+const VoteOption = preload("lobby_vote_option.gd")
+
 const INK = Color("eaf0e7")
 const MUTED = Color("8baeb2")
 const GOLD = Color("e8b861")
@@ -44,6 +46,9 @@ var _is_host = false
 var _room_open = false
 var _code = ""
 var _player_grids: Array[GridContainer] = []
+var _vote_catalogs: Dictionary = {}
+var _vote_buttons: Dictionary = {}
+var _vote_groups: Dictionary = {}
 
 
 func _ready():
@@ -59,8 +64,6 @@ func _ready():
 	%TableCount.value_changed.connect(func(value): table_count_requested.emit(int(value)))
 	%ShotBudget.value_changed.connect(func(value): shot_budget_requested.emit(int(value)))
 	%MatchMode.item_selected.connect(func(index): _vote_selected("match_mode", %MatchMode, index))
-	%StartingSet.item_selected.connect(func(index): _vote_selected("deck", %StartingSet, index))
-	%Difficulty.item_selected.connect(func(index): _vote_selected("difficulty", %Difficulty, index))
 	%Ready.pressed.connect(_toggle_ready)
 	%Start.pressed.connect(func(): start_requested.emit())
 	%Return.pressed.connect(func(): return_requested.emit())
@@ -104,6 +107,8 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 		started and not summaries.is_empty() and summaries.all(func(table): return table.finished)
 	)
 	%Settings.visible = not started
+	%VoteChoices.visible = not started
+	%Rules.visible = started
 	%RoomTitle.text = (
 		"MATCH RESULTS" if complete else ("MATCH IN PROGRESS" if started else "YOUR LOBBY")
 	)
@@ -173,6 +178,56 @@ func _vote_selected(field: String, control: OptionButton, index: int) -> void:
 	)
 
 
+func vote_button(field: String, choice: String) -> Button:
+	return _vote_buttons.get(field, {}).get(choice)
+
+
+func _build_vote_choices(field: String, entries: Array) -> void:
+	if _vote_catalogs.get(field) == entries:
+		return
+	# PERF-026: catalog changes alone construct cards or resolve native textures.
+	# Vote updates retain the same controls, focus, styles, and resource references.
+	var container = %StartingSet if field == "deck" else %Difficulty
+	_clear(container)
+	_vote_catalogs[field] = entries.duplicate(true)
+	_vote_buttons[field] = {}
+	var group = ButtonGroup.new()
+	group.allow_unpress = false
+	_vote_groups[field] = group
+	var choices: Array = [{"id": "", "label": "No preference"}]
+	choices.append_array(entries)
+	for entry in choices:
+		var card = VoteOption.new()
+		card.button_group = group
+		card.configure(field, entry.id, entry.label, _vote_texture(field, entry.id))
+		card.pressed.connect(_card_vote_selected.bind(field, entry.id))
+		container.add_child(card)
+		_vote_buttons[field][entry.id] = card
+
+
+func _vote_texture(field: String, choice: String) -> Texture2D:
+	if choice.is_empty():
+		return null
+	var database = get_node("/root/BallDatabase")
+	if field == "deck":
+		var deck = database.id_to_deck.get(choice)
+		if deck != null:
+			# These are the same BallSet posters used by the native shop.
+			var ball_set = database.get_set_by_id(str(deck.ball_set))
+			return ball_set.poster if ball_set != null else null
+	else:
+		var difficulty = database.id_to_difficulty.get(choice)
+		if difficulty != null:
+			return difficulty.difficultyIcon
+	return null
+
+
+func _card_vote_selected(field: String, choice: String) -> void:
+	run_vote_requested.emit(
+		field, choice, int(_state.get("run_vote", {}).get("catalog_revision", -1))
+	)
+
+
 func _render_run_votes(state: Dictionary, local_id: int, started: bool) -> void:
 	var vote: Dictionary = state.get("run_vote", {})
 	var options: Dictionary = vote.get("options", {})
@@ -182,36 +237,69 @@ func _render_run_votes(state: Dictionary, local_id: int, started: bool) -> void:
 	var votes: Dictionary = local_player.get("run_votes", {})
 	var disabled: bool = started or not local_player.get("connected", false)
 	var winners: Array[String] = []
-	var controls = {"deck": %StartingSet, "difficulty": %Difficulty, "match_mode": %MatchMode}
-	for field in controls:
-		var control: OptionButton = controls[field]
+	for field in ["deck", "difficulty"]:
 		var entries: Array = options.get(field, [])
-		if control.get_meta("run_options", []) != entries or control.item_count == 0:
-			control.clear()
-			control.add_item("No preference")
-			control.set_item_metadata(0, "")
-			for entry in entries:
-				control.add_item(entry.label)
-				control.set_item_metadata(control.item_count - 1, entry.id)
-			control.set_meta("run_options", entries.duplicate(true))
-		var selected_index = 0
-		for index in entries.size():
-			var entry: Dictionary = entries[index]
-			var count: int = counts.get(field, {}).get(entry.id, 0)
-			control.set_item_text(index + 1, "%s · %d" % [entry.label, count])
-			if votes.get(field, "") == entry.id:
-				selected_index = index + 1
+		_build_vote_choices(field, entries)
+		var voter_groups: Dictionary = {}
+		for player in state.get("players", []):
+			if not player.get("connected", false):
+				continue
+			var choice: String = player.get("run_votes", {}).get(field, "")
+			if not voter_groups.has(choice):
+				voter_groups[choice] = []
+			voter_groups[choice].append(
+				{
+					"id": player.id,
+					"name": str(player.name),
+					"color":
+					player_color_for(player.get("table", -1), player.get("slot", -1), player.id)
+				}
+			)
+		for choice in _vote_buttons[field]:
+			var voters: Array[Dictionary] = []
+			voters.assign(voter_groups.get(choice, []))
+			_vote_buttons[field][choice].render_votes(
+				voters,
+				votes.get(field, "") == choice,
+				selected.get(field, "") == choice and not choice.is_empty(),
+				disabled or entries.is_empty()
+			)
+		for entry in entries:
 			if selected.get(field, "") == entry.id:
-				if field != "match_mode" or state.get("table_count", 1) > 1:
-					winners.append(entry.label)
-		control.select(selected_index)
-		control.disabled = disabled or entries.is_empty()
-	%VoteHelp.visible = not started
-	%RunSelection.text = (
+				winners.append(entry.label)
+
+	# The competition mode keeps its compact selector beside the host settings.
+	var modes: Array = options.get("match_mode", [])
+	if %MatchMode.get_meta("run_options", []) != modes or %MatchMode.item_count == 0:
+		%MatchMode.clear()
+		%MatchMode.add_item("No preference")
+		%MatchMode.set_item_metadata(0, "")
+		for entry in modes:
+			%MatchMode.add_item(entry.label)
+			%MatchMode.set_item_metadata(%MatchMode.item_count - 1, entry.id)
+		%MatchMode.set_meta("run_options", modes.duplicate(true))
+	var mode_index = 0
+	for index in modes.size():
+		var entry: Dictionary = modes[index]
+		var count: int = counts.get("match_mode", {}).get(entry.id, 0)
+		var label = "%s · %d" % [entry.label, count]
+		if %MatchMode.get_item_text(index + 1) != label:
+			%MatchMode.set_item_text(index + 1, label)
+		if votes.get("match_mode", "") == entry.id:
+			mode_index = index + 1
+		if selected.get("match_mode", "") == entry.id and state.get("table_count", 1) > 1:
+			winners.append(entry.label)
+	%MatchMode.select(mode_index)
+	%MatchMode.disabled = disabled or modes.is_empty()
+	%VoteHelp.visible = false
+	var result_text = (
 		("Playing: " if started else "Current result: ") + " · ".join(winners)
 		if not winners.is_empty()
 		else "Waiting for the host's available starting sets and difficulties."
 	)
+	if %RunSelection.text != result_text:
+		%RunSelection.text = result_text
+	%RunSelection.tooltip_text = %VoteHelp.text + "\n" + %VoteHelp.tooltip_text
 
 
 func set_status(text: String):
@@ -522,6 +610,12 @@ func _resize_tables():
 	$Margin.add_theme_constant_override("margin_left", margin)
 	$Margin.add_theme_constant_override("margin_right", margin)
 	var width = size.x - margin * 2
+	var settings_parent = $Margin/Layout/Body/Content/Room/RoomHeading if width >= 1060 else %Room
+	if %Settings.get_parent() != settings_parent:
+		%Settings.reparent(settings_parent)
+		settings_parent.move_child(%Settings, 1)
+	%DeckVotes.custom_minimum_size.x = minf(776, width)
+	%DifficultyVotes.custom_minimum_size.x = minf(404, width)
 	var columns = clampi(int((width + 16) / 256), 1, 4)
 	%Tables.columns = mini(columns, _state.get("table_count", 1))
 	var card_width = (width - (%Tables.columns - 1) * 16) / %Tables.columns

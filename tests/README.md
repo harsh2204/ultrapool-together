@@ -51,6 +51,8 @@ Each script exits 0 on success. The controller probe creates no native game scen
 
 The harness also records and replays native host/client round transitions, including delayed shop acknowledgements, packet reordering, payout, victory, defeat, and teardown. It includes regression assertions for stationary replica sleep, spin reconciliation, shop map identity during wallet/health updates, and rarity indicators on unchanged offers. The [game-loop coverage matrix](GAME_LOOP.md) separates runtime assertions, model checks, and remaining multi-PC coverage. Added assertions are authored coverage until an authorized run passes them.
 
+`render_ui_fixtures.gd` checks lobby card/button ballots through the controller, local selection, live voter identities, abstention, disconnects, frozen choices, and retained card identity and keyboard focus. Full-catalog and eight-player consensus fixtures check layout bounds and exact native shop poster references for all starting sets.
+
 ## Native game probes
 
 These probes require your own installed Ultrapool 0.15.7. Make private test directories containing local copies of `game.exe`, `steam_api64.dll`, and `libgodotsteam.windows.template_release.x86_64.dll`. Keep overrides out of the normal game directory. Replace the checkout prefix in the following examples with an absolute path using forward slashes.
