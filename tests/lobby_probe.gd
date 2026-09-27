@@ -180,6 +180,7 @@ func _initialize() -> void:
 	_check(_find(uneven, 40).connected, "membership helper cannot mutate the authoritative roster")
 	_check_return_votes(model_script)
 	_check_run_votes(model_script)
+	_check_clone_rounds_gate(model_script)
 	print("LOBBY_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
@@ -393,6 +394,46 @@ func _check_run_votes(model_script) -> void:
 		"old generation cannot vote after refresh"
 	)
 	_check(lobby.snapshot().run_vote.counts.deck.is_empty(), "new catalog requires fresh ballots")
+
+
+func _check_clone_rounds_gate(model_script) -> void:
+	var lobby = model_script.new()
+	lobby.setup(10, "Host")
+	lobby.add_player(20, "Partner")
+	lobby.choose_slot(20, 0, 1)
+	lobby.configure_run_options(
+		10,
+		{
+			"deck": [{"id": "1_CLASSIC", "label": "Classic"}],
+			"difficulty":
+			[
+				{"id": "diff_2", "label": "Wine Mixer"},
+				{"id": "diff_together_nighter", "label": "All Nighter (One Table)"}
+			]
+		},
+		{"deck": "1_CLASSIC", "difficulty": "diff_2"}
+	)
+	_check(not lobby.snapshot().single_table_difficulty, "default difficulty is not single-table")
+	_check(
+		not lobby.set_clone_rounds(10, true),
+		"clone rounds rejected away from Together All Nighter"
+	)
+	_check(not lobby.clone_rounds, "rejected enable leaves clone rounds off")
+	var catalog: int = lobby.snapshot().run_vote.catalog_revision
+	_check(
+		lobby.set_run_vote(10, "difficulty", "diff_together_nighter", catalog),
+		"host can vote Together All Nighter"
+	)
+	_check(lobby.snapshot().single_table_difficulty, "Together All Nighter forces one table")
+	_check(lobby.table_count == 1, "Together All Nighter locks table count to one")
+	_check(lobby.set_clone_rounds(10, true), "clone rounds allowed on Together All Nighter")
+	_check(lobby.clone_rounds, "host can enable clone-table rounds on Together All Nighter")
+	_check(
+		lobby.set_run_vote(10, "difficulty", "diff_2", catalog),
+		"host can leave Together All Nighter"
+	)
+	_check(not lobby.clone_rounds, "leaving Together All Nighter clears clone rounds")
+	_check(not lobby.set_clone_rounds(20, true), "guest cannot change clone rounds")
 
 
 func _find(lobby, id: int) -> Dictionary:

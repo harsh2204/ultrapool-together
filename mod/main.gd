@@ -535,7 +535,13 @@ func _start_match(sender: int):
 	run_config = run_setup.capture_config(lobby_model.resolved_run_selection())
 	run_config["multiplayer_balls"] = bool(lobby_model.multiplayer_balls)
 	run_config["expansion_sets"] = lobby_model.expansion_sets.duplicate(true)
-	run_config["clone_rounds"] = bool(lobby_model.clone_rounds)
+	# Defensive: clone rounds only travel with Together All Nighter.
+	run_config["clone_rounds"] = CloneRound.enabled(
+		{
+			"clone_rounds": bool(lobby_model.clone_rounds),
+			"difficulty": str(run_config.get("difficulty", ""))
+		}
+	)
 	if not run_setup.validate_config(run_config):
 		_status("The voted starting set or difficulty is unavailable. Recreate the lobby.")
 		return
@@ -988,7 +994,13 @@ func _clone_member_ids() -> Array:
 
 
 func _clone_enabled_for_table() -> bool:
-	return CloneRound.should_run(lobby, _clone_member_ids())
+	# Prefer live lobby selection; fall back to match config if lobby lacks it.
+	var view: Dictionary = lobby.duplicate(true)
+	if not CloneRound.allowed_for_difficulty(view) and run_config.has("difficulty"):
+		view["difficulty"] = str(run_config.get("difficulty", ""))
+	if run_config.has("clone_rounds"):
+		view["clone_rounds"] = bool(run_config.get("clone_rounds", view.get("clone_rounds", false)))
+	return CloneRound.should_run(view, _clone_member_ids())
 
 
 func _begin_clone_round() -> void:

@@ -161,6 +161,8 @@ func set_clone_rounds(sender: int, enabled: bool) -> bool:
 		return _reject("Only the host can change clone-table rounds.")
 	if started:
 		return _reject("Clone-table rounds are locked during a match.")
+	if enabled and not _clone_rounds_allowed():
+		return _reject("Clone-table rounds are only available on All Nighter (One Table).")
 	if clone_rounds == enabled:
 		last_error = ""
 		return true
@@ -513,10 +515,18 @@ func _single_table_difficulty() -> bool:
 	return DifficultyCatalog.forces_single_table(str(difficulty))
 
 
+func _clone_rounds_allowed() -> bool:
+	var difficulty = resolved_run_selection().get("difficulty", "")
+	return str(difficulty) == DifficultyCatalog.together_nighter_id()
+
+
 func _apply_difficulty_table_lock() -> void:
 	if _single_table_difficulty() and table_count != 1:
 		table_count = 1
 		_fit_tables()
+	# Clear stale vs-mode when the lobby leaves Together All Nighter.
+	if not _clone_rounds_allowed() and clone_rounds:
+		clone_rounds = false
 
 
 func _changed(clear_ready: bool = false) -> void:
