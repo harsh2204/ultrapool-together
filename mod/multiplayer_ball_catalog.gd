@@ -54,8 +54,8 @@ const BALLS = {
 		"name": "Bounty",
 		"description":
 		(
-			"#POCKET: Score PvP's earliest shot earns [k]25 match points[/k]; tied tables each earn 25. "
-			+ "Co-op/Race: pot within [k]3 shots[/k] for [k]+10 run points[/k]."
+			"#POCKET: Score PvP's earliest shot earns [k]25 match points[/k] per tied table. "
+			+ "Co-op/Race: [k]+10 run points[/k] within [k]3 match shots[/k]."
 		),
 		"color": Color("eb5876"),
 		"asset": "bounty.png",
@@ -90,7 +90,7 @@ const BALLS = {
 		"name": "Encore",
 		"description":
 		(
-			"#POCKET: return the most recently potted [friend]ordinary ball[/friend] to the table. "
+			"#POCKET: return the latest potted [friend]ordinary ball[/friend]. "
 			+ "[br][k]Once per table per round.[/k]"
 		),
 		"color": Color("518fef"),
@@ -204,12 +204,12 @@ static func concepts_for(id: String) -> Array:
 			concepts = [
 				_concept(
 					"Match points",
-					"Score PvP: the earliest Bounty pot by [k]shot number[/k] wins. Tied tables each receive 25.",
+					"Score PvP: earliest Bounty [k]shot number[/k] wins. Each tied table gets 25.",
 					"star"
 				),
 				_concept(
 					"Run points",
-					"Co-op/Race: +10 round points if potted in this table's [k]first 3 accepted shots of the match[/k].",
+					"Co-op/Race: +10 round points within this table's [k]first 3 match shots[/k].",
 					"pocket"
 				)
 			]
@@ -228,7 +228,7 @@ static func concepts_for(id: String) -> Array:
 			concepts = [
 				_concept(
 					"Ordinary ball",
-					"Most recent non-fleeting object ball [k]without multiplayer effects[/k]. Excludes cue balls and snacks.",
+					"Latest non-fleeting ball [k]without multiplayer effects[/k]. Excludes cue balls and snacks.",
 					"friend"
 				),
 				_round_limit()
@@ -247,8 +247,8 @@ static func concepts_for(id: String) -> Array:
 
 static func _round_limit() -> Dictionary:
 	return _concept(
-		"Once per table per round",
-		"One reward per round for [k]the whole table[/k], including extra copies, mixes and other shooters.",
+		"Once per round",
+		"All players, extra copies and mixes share [k]one reward per table per round[/k].",
 		"lvl"
 	)
 

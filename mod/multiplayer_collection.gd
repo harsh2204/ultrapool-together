@@ -223,6 +223,10 @@ func _build_heading(page: Node) -> void:
 	var bounds: Rect2 = poster.get_rect()
 	heading.position = poster.position + bounds.position * poster.scale
 	heading.size = bounds.size * poster.scale.abs()
+	# The native poster bleeds eight local pixels past its panel. Text stays
+	# inside the panel while retaining the poster's right edge and height.
+	heading.position.x += 8.0
+	heading.size.x -= 8.0
 	heading.text = "TOGETHER\n8 balls\nShop-only"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	heading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER

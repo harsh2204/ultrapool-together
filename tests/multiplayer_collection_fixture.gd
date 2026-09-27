@@ -472,17 +472,15 @@ func _check_collection_bounds(
 	_check_text_fit(heading, check, "Together heading")
 	var ball_bounds: Dictionary = {}
 	for id in slots:
-		for path in ["visuals/ball", "visuals/edge"]:
-			var art = slots[id].get_node(path)
-			check.call(art.is_visible_in_tree(), "collection: " + id + " renders " + path)
-			_check_enclosed(
-				section_bounds,
-				_rendered_bounds(art),
-				check,
-				id + " actual " + path + " stays within its set section"
-			)
-			if path == "visuals/ball":
-				ball_bounds[id] = _rendered_bounds(art)
+		var art = slots[id].get_node("visuals/ball")
+		check.call(art.is_visible_in_tree(), "collection: " + id + " renders its ball artwork")
+		ball_bounds[id] = _rendered_bounds(art)
+		_check_enclosed(
+			section_bounds,
+			ball_bounds[id],
+			check,
+			id + " actual ball artwork stays within its set section"
+		)
 		_check_separated(
 			heading_bounds,
 			ball_bounds[id],
@@ -497,6 +495,63 @@ func _check_collection_bounds(
 				ball_bounds[ids[second]],
 				check,
 				ids[first] + " and " + ids[second] + " artwork do not overlap"
+			)
+	_check_native_edges(section.get_parent(), page, check)
+
+
+func _check_native_edges(container: Node, added: Node, check: Callable) -> void:
+	# Native edge shaders draw a small outline inside a much larger transparent
+	# quad. Its get_rect() is not the visible outline footprint. Check retained
+	# native geometry/shader instead; captures establish visible outline fit.
+	var sources = _set_displays(container).filter(func(display): return display != added)
+	if not check.call(not sources.is_empty(), "collection: native outline reference exists"):
+		return
+	var source = sources[0]
+	for property in SLOT_PROPERTIES:
+		var slots: Array = added.get(property)
+		var native_slots: Array = source.get(property)
+		for index in slots.size():
+			var slot = slots[index]
+			if not slot.visible or slot.ball_item == null:
+				continue
+			var id = str(slot.ball_item.data.id)
+			if not Catalog.BALLS.has(id):
+				continue
+			if not check.call(
+				index < native_slots.size(), "collection: " + id + " outline reference slot exists"
+			):
+				continue
+			var edge = slot.get_node("visuals/edge")
+			var native_slot = native_slots[index]
+			var native_edge = native_slot.get_node("visuals/edge")
+			# Compare local transforms beneath each slot; far-apart scroll positions
+			# otherwise introduce avoidable global-inverse rounding differences.
+			var relative: Transform2D = edge.get_parent().get_transform() * edge.get_transform()
+			var native_relative: Transform2D = (
+				native_edge.get_parent().get_transform() * native_edge.get_transform()
+			)
+			check.call(
+				(
+					edge.is_visible_in_tree()
+					and relative.is_equal_approx(native_relative)
+					and edge.texture == native_edge.texture
+				),
+				"collection: " + id + " retains native visible outline geometry"
+			)
+			var own_material = edge.material
+			var native_material = native_edge.material
+			check.call(
+				(
+					own_material is ShaderMaterial
+					and native_material is ShaderMaterial
+					and own_material != native_material
+					and own_material.shader == native_material.shader
+					and (
+						own_material.get_shader_parameter("selout_color")
+						== lerp(slot.ball_item.data.main_color, Color.BLACK, 0.3)
+					)
+				),
+				"collection: " + id + " uses its isolated native outline shader and resource color"
 			)
 
 
@@ -527,6 +582,20 @@ func _check_inspection_bounds(info: Node, check: Callable, label: String) -> voi
 	var viewport_bounds: Rect2 = info.get_viewport().get_visible_rect()
 	var main_bounds = _rendered_bounds(info.main_panel)
 	_check_enclosed(viewport_bounds, main_bounds, check, label + " main inspector fits viewport")
+	if info.level.is_visible_in_tree():
+		var badge = info.level.get_node_or_null("Panel")
+		if check.call(badge is Control, "collection: " + label + " has the native level badge"):
+			var badge_bounds = _rendered_bounds(badge)
+			_check_enclosed(
+				viewport_bounds, badge_bounds, check, label + " level badge fits viewport"
+			)
+			_check_enclosed(
+				badge_bounds,
+				_rendered_bounds(info.level_label),
+				check,
+				label + " level text stays within its badge"
+			)
+			_check_text_fit(info.level_label, check, label + " level badge")
 	for text_label in [info.name_label, info.desc_label]:
 		_check_enclosed(
 			main_bounds,
