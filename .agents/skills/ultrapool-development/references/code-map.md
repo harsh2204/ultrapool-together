@@ -1,6 +1,6 @@
 # Code map and change routes
 
-Paths below are relative to the repository root. Locate functions with `rg -n` rather than relying on line numbers. This map describes v0.9.5; confirm the checked-out implementation before extending it.
+Paths below are relative to the repository root. Locate functions with `rg -n` rather than relying on line numbers. This map describes v0.10.0; confirm the checked-out implementation before extending it.
 
 ## Roles and native boundary
 
@@ -29,7 +29,7 @@ Paths below are relative to the repository root. Locate functions with `rg -n` r
 
 Transport path: `transport.gd::_process/_receive_wire` → synchronous `main._received` → `table_router.gd::route` → table leader/guest. Receive budgets include handler cost; they cannot interrupt a single expensive native call. Commands/results/transitions are reliable; motion/presence may be disposable. Preserve authenticated actor identity and match/table routing. Read PERF-001–014 before changing this path.
 
-`presence.gd` sends local cursor/aim presentation. `cue_catalog.gd` and `cue_prefs.gd` provide personal native cue tints on this base, not the unmerged Cue Workshop's ownership/perk system. Keep native pivot fade and charge pose owned by the native player.
+`presence.gd` sends local cursor/aim presentation. `cue_catalog.gd` and `cue_prefs.gd` provide personal finishes. `cue_models.gd`, `cue_inventory.gd`, `cue_effect_rules.gd` and `cue_effects.gd` own the fifteen-cue catalog, authoritative run equipment and bounded host perks. `cue_visuals.gd` caches cue art and changes the native sprite without taking ownership of native pivot fade or charge pose.
 
 ## Shop, snack bar and mixer
 
@@ -58,7 +58,9 @@ Slot vocabulary is a protocol contract:
 
 Ready cannot finish with occupied cocktail slots. Transaction validation includes actor eligibility, phase/busy/finished/exclusive-shopper gates, revision, source and destination identity, type and affordability. One pending guest mutation is reconciled by matching request ID, authoritative result, timeout and resync. Prediction never awards currency or gameplay effects.
 
-Shop sections are `balls`, `mix`, `snacks`; the UI-navigation place is `snack_bar`. Personal `HudPrefs.follow_shop_view_enabled()` defaults false and gates **both** shop-state navigation and controller `ui_nav`; clear queued follow immediately on opt-out. `settings_icon_button.gd` opens the slate via `main._open_mod_settings` / `lobby_scene.open_mod_options`, including during matches. The separately labeled **Shared shop access** is the existing host `sync_shop` rule. With access off, guests cannot shop the leader's run; it does **not** create independent guest wallets. Winner-only/exclusive shopping overrides access-off for that session, never the personal follow preference. Read [SYNC_SHOP.md](../../../../docs/SYNC_SHOP.md).
+Shop sections are `balls`, `mix`, `snacks`, and `cues`; snacks use UI-navigation place `snack_bar`, while cues use `shop` plus `section=cues`. Personal `HudPrefs.follow_shop_view_enabled()` defaults false and gates **both** shop-state navigation and controller `ui_nav`; clear queued follow immediately on opt-out. `settings_icon_button.gd` opens the slate via `main._open_mod_settings` / `lobby_scene.open_mod_options`, including during matches. The separately labeled **Shared shop access** is the existing host `sync_shop` rule. With access off, guests cannot shop the leader's run; it does **not** create independent guest wallets. Winner-only/exclusive shopping overrides access-off for that session, never the personal follow preference. Read [SYNC_SHOP.md](../../../../docs/SYNC_SHOP.md).
+
+`shop_sync._ensure_cue_view` attaches Rook's `cue_shop.gd` counter at the right edge. `cue_seller.gd` owns local blink/talk/nudge presentation; `cue_shop_art.gd` caches its two PNGs once. Fifteen portrait cards and the confirmed equipment case are retained. One replaceable rack tween and seller speech/idle work stop when leaving the counter. The case reads confirmed equipment, never local preview. See the completed [Rook integration record](../../../../docs/ROOK_CUE_COUNTER.md) for ownership, bounds and authored/unrun coverage.
 
 ## Adding content
 

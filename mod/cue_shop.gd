@@ -17,7 +17,6 @@ const PAPER = Color("f4e7cb")
 const WOOD = Color("844b2d")
 const GOLD = Color("edc86b")
 const PURPLE = Color(0.27450982, 0, 0.5647059, 1)
-const GREEN = Color("519655")
 const CARD_SIZE = Vector2(171, 344)
 const CARD_STEP = 182.0
 
@@ -156,7 +155,7 @@ func _build() -> void:
 	_seller.set_active(false)
 	_root = Control.new()
 	_root.name = "CounterControls"
-	_root.size = Vector2(900, 825)
+	_root.size = Vector2(1080, 825)
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.theme = _theme()
 	add_child(_root)
@@ -277,11 +276,13 @@ func _build_details() -> void:
 	note.position = Vector2(18, 179)
 	note.size = Vector2(264, 22)
 	paper.add_child(note)
-	_action = _button("Equipped", GREEN)
+	_action = _button("Equipped", Color("bb804d"))
 	_action.name = "CueAction"
 	_action.position = Vector2(18, 207)
 	_action.size = Vector2(264, 36)
 	_action.add_theme_font_size_override("font_size", 21)
+	for state in ["font_color", "font_hover_color", "font_pressed_color"]:
+		_action.add_theme_color_override(state, INK)
 	_action.tooltip_text = "Buy and equip the selected cue using shared money. Owned cues equip free."
 	_action.pressed.connect(_submit)
 	paper.add_child(_action)
@@ -332,18 +333,18 @@ func _build_finishes() -> void:
 func _build_equipped_case() -> void:
 	_equipped_case = Control.new()
 	_equipped_case.name = "ConfirmedCueCase"
-	_equipped_case.position = Vector2(650, 540)
-	_equipped_case.size = Vector2(220, 285)
+	_equipped_case.position = Vector2(850, 255)
+	_equipped_case.size = Vector2(210, 565)
 	_equipped_case.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_equipped_case.visible = false
 	_root.add_child(_equipped_case)
 	var art: Texture2D = CueShopArt.texture("cue_equipped_case")
-	var fitted = Rect2(28, 0, 164, 250)
-	var cue_center = 110.0
+	var fitted = Rect2(28, 30, 154, 500)
+	var cue_center = 105.0
 	if art != null:
-		var factor = minf(220.0 / art.get_width(), 246.0 / art.get_height())
+		var factor = minf(210.0 / art.get_width(), 500.0 / art.get_height())
 		var extent = art.get_size() * factor
-		fitted = Rect2(Vector2((220.0 - extent.x) * 0.5, 8), extent)
+		fitted = Rect2(Vector2((210.0 - extent.x) * 0.5, 30), extent)
 		# The opened lid occupies the left of the artwork; the felt channel
 		# is at 65% of the fitted silhouette, not the center of this panel.
 		cue_center = fitted.position.x + fitted.size.x * 0.65
@@ -357,13 +358,13 @@ func _build_equipped_case() -> void:
 		_equipped_case.add_child(background)
 	else:
 		var background = Panel.new()
-		background.position = Vector2(28, 0)
-		background.size = Vector2(164, 250)
+		background.position = fitted.position
+		background.size = fitted.size
 		background.add_theme_stylebox_override("panel", _card_style(false))
 		background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_equipped_case.add_child(background)
 	var heading = _label("EQUIPPED", 18, Color("fff1d2"))
-	heading.size = Vector2(220, 25)
+	heading.size = Vector2(210, 25)
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_outline(heading)
 	_equipped_case.add_child(heading)
@@ -374,8 +375,8 @@ func _build_equipped_case() -> void:
 	_equipped_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_equipped_case.add_child(_equipped_preview)
 	_equipped_label = _label("House · Native", 17, Color("fff1d2"))
-	_equipped_label.position = Vector2(-10, 252)
-	_equipped_label.size = Vector2(240, 30)
+	_equipped_label.position = Vector2(-10, 532)
+	_equipped_label.size = Vector2(230, 30)
 	_equipped_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_outline(_equipped_label)
 	_equipped_case.add_child(_equipped_label)

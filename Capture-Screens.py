@@ -32,6 +32,8 @@ FIXTURES = (
     "tests/presence_probe.gd", "tests/router_probe.gd", "tests/controller_probe.gd",
     "tests/shop_layout_probe.gd", "tests/snapshot_probe.gd", "tests/transport_budget_probe.gd",
     "tests/cue_probe.gd", "tests/ui_nav_probe.gd", "tests/multiplayer_balls_probe.gd",
+    "tests/cue_models_probe.gd", "tests/cue_inventory_probe.gd", "tests/cue_effects_probe.gd",
+    "tests/cue_shop_fixtures.gd", "tests/cue_native_fixtures.gd",
     "tests/expansion_sets_probe.gd", "tests/native_pocket_fixture.gd", "tests/native_table_effects_fixture.gd", "tests/native_visual_fx_fixture.gd", "tests/table_effects_probe.gd", "tests/shop_probe.gd",
 )
 ERROR_PATTERN = re.compile(r"SCRIPT ERROR:|Parse Error:|Compile Error:|RENDER_PROBE_FAIL")
