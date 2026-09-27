@@ -7,6 +7,9 @@ const MAX_SLOTS = 64
 const CrtStack = preload("crt_stack.gd")
 const UiNav = preload("ui_nav.gd")
 const HudPrefs = preload("hud_prefs.gd")
+const CueInventory = preload("cue_inventory.gd")
+const CuePrefs = preload("cue_prefs.gd")
+const CueShopScene = preload("cue_shop.tscn")
 
 var last_error = ""
 var _controller: Node
@@ -47,6 +50,16 @@ var _applied_nav: Dictionary = {}
 # Latched shared-shop flag (Refs #34). Exclusive shopper forces shared sync on.
 # Never flips while a shop view is open — refresh only at session start / shop close.
 var _shared_sync_latched = true
+var _cue_view: Node2D
+var _cue_native: Node
+var _cue_link: Button
+var _cue_shortcut: Button
+var _cue_active = false
+var _cue_layout_key: Array = []
+var _cue_error = ""
+var _saved_finish = ""
+var _cue_ui_key: Array = []
+var _cue_art: Dictionary = {}
 
 
 func _ready():
@@ -64,7 +77,10 @@ func _ready():
 
 func begin_session(controller: Node):
 	HudPrefs.follow_shop_view_enabled()
+	_clear_cue_view()
 	_controller = controller
+	_cue_error = ""
+	_saved_finish = CuePrefs.cue_id()
 	_revision = 0
 	_last_capture.clear()
 	_state.clear()
@@ -91,6 +107,7 @@ func begin_session(controller: Node):
 
 
 func end_session():
+	_clear_cue_view()
 	if _tutorial_saved:
 		get_node("/root/TutorialManager").ENABLED = _tutorial_enabled
 		_tutorial_saved = false
@@ -151,9 +168,7 @@ func _desired_shared_sync() -> bool:
 	var lobby: Dictionary = _controller.lobby if _controller.lobby is Dictionary else {}
 	if lobby.has("sync_shop"):
 		return bool(lobby.get("sync_shop", true))
-	var config: Dictionary = (
-		_controller.run_config if _controller.run_config is Dictionary else {}
-	)
+	var config: Dictionary = _controller.run_config if _controller.run_config is Dictionary else {}
 	return bool(config.get("sync_shop", true))
 
 
@@ -242,6 +257,8 @@ func _process(_delta):
 		):
 			_render()
 		if is_instance_valid(_view):
+			_sync_cue_navigation()
+			_update_cue_layout()
 			if not _controller.is_table_host():
 				get_node("/root/Global").camera.move(_view.get_camera_target())
 				var floor_texture = (
@@ -262,6 +279,8 @@ func _process(_delta):
 		_notice.show()
 		_update_actions()
 		request.emit({"kind": "sync_request"})
+		_cue_error = "Confirmation timed out. The rack has been refreshed; try again."
+	_update_cue_ui()
 
 
 func _shop():
@@ -281,10 +300,7 @@ func capture() -> Dictionary:
 		var bar = shop.cocktail_bar
 		var info = shop.player_info
 		var busy: bool = (
-			_vote_hold
-			or get_tree().paused
-			or shop.introt > 0
-			or bar.mix_animation.is_processing()
+			_vote_hold or get_tree().paused or shop.introt > 0 or bar.mix_animation.is_processing()
 		)
 		data.merge(
 			{
@@ -318,6 +334,8 @@ func capture() -> Dictionary:
 				"slots": []
 			}
 		)
+		if _controller.get("cue_inventory") != null:
+			data["cues"] = _controller.cue_inventory.snapshot()
 		var groups = {
 			"offer": shop.shop_slots,
 			"build": shop.get_inventory_slots(),
@@ -442,6 +460,9 @@ func handle_request(message: Dictionary, actor: int = 0) -> bool:
 	var shop = _shop()
 	_cancel_native_drag()
 	match action:
+		"cue_buy", "cue_equip", "cue_finish":
+			if not _apply_cue_action(shop, message, actor):
+				return false
 		"reroll":
 			if shop.player_info.money < shop.roll_cost:
 				return _reject("Not enough shared money to reroll.")
@@ -579,6 +600,7 @@ func apply_result(accepted: bool, reason = "", request_id: int = 0, shop: Dictio
 		return
 	_pending = false
 	_pending_message.clear()
+	_cue_error = "" if accepted else str(reason)
 	if not shop.is_empty():
 		apply_state(shop)
 	if not _authoritative_state.is_empty():
@@ -589,6 +611,7 @@ func apply_result(accepted: bool, reason = "", request_id: int = 0, shop: Dictio
 	else:
 		_notice.hide()
 	_update_actions()
+	_update_cue_ui()
 
 
 func apply_state(data: Dictionary) -> bool:
@@ -612,6 +635,9 @@ func apply_state(data: Dictionary) -> bool:
 	if data.get("revision", -1) < _authoritative_state.get("revision", -1):
 		return true
 	_authoritative_state = data.duplicate(true)
+	if data.has("cues") and _controller != null and _controller.get("cue_inventory") != null:
+		_controller.cue_inventory.apply_snapshot(data.cues)
+		_save_confirmed_finish()
 	if not data.open:
 		_pending = false
 		_pending_message.clear()
@@ -627,6 +653,7 @@ func _display_state(data: Dictionary):
 	_state = data.duplicate(true)
 	_panel.visible = data.open and not get_node("/root/UIManager").is_popup_open()
 	if not data.open:
+		_clear_cue_view()
 		_restore_items()
 		_clear_guest_view()
 		_view = null
@@ -644,6 +671,8 @@ func _display_state(data: Dictionary):
 
 
 func _valid_state(data: Dictionary) -> bool:
+	if data.has("cues") and not CueInventory.valid_snapshot(data.cues):
+		return false
 	if not data.get("open") is bool or not data.get("revision") is int or data.revision < 0:
 		return false
 	if not data.open:
@@ -831,8 +860,12 @@ func _interaction_blocked() -> bool:
 	return (
 		not is_open()
 		or not is_instance_valid(_view)
+		or not _view.is_open
 		or _pending
 		or _state.busy
+		or _vote_hold
+		or _continuing
+		or get_tree().paused
 		or _controller.finished
 		or _controller.panel.visible
 		or _view.moving()
@@ -845,6 +878,7 @@ func _interaction_blocked() -> bool:
 func _can_drag_item(item: Node) -> bool:
 	return (
 		not _interaction_blocked()
+		and not _cue_active
 		and item.is_visible_in_tree()
 		and is_instance_valid(item.slot)
 		and item.slot.is_visible_in_tree()
@@ -992,6 +1026,10 @@ func _clear_inspection():
 
 
 func current_section() -> String:
+	if is_instance_valid(_view):
+		_sync_cue_navigation()
+	if _cue_active and is_instance_valid(_cue_view):
+		return "cues"
 	var shop = _view if is_instance_valid(_view) else _shop()
 	if not is_instance_valid(shop):
 		return "balls"
@@ -1036,18 +1074,25 @@ func nav_interaction_blocked() -> bool:
 
 
 func show_section(section: String) -> bool:
-	if not is_instance_valid(_view) or section not in ["balls", "mix", "snacks"]:
+	if not is_instance_valid(_view) or section not in UiNav.SHOP_SECTIONS:
 		return false
+	if section == "cues":
+		return _open_cues()
 	if section == "mix" and not _view.cocktail_bar.visible:
 		return false
 	if section == "snacks" and not _view.tapas_bar.visible:
 		return false
 	_cancel_native_drag()
+	_cue_active = false
+	if is_instance_valid(_cue_view):
+		_cue_view.set_active(false)
 	_view.set_state(["balls", "mix", "snacks"].find(section))
 	return true
 
 
 func _local_focus_key() -> String:
+	if _cue_active:
+		return ""
 	var shop = _view if is_instance_valid(_view) else _shop()
 	if not is_instance_valid(shop):
 		return ""
@@ -1174,6 +1219,7 @@ func _ensure_view() -> bool:
 		_guest_view.apply_state(_state)
 	if not is_instance_valid(_view):
 		return false
+	_ensure_cue_view()
 	var groups = {
 		"offer": _view.shop_slots,
 		"build": _view.get_inventory_slots(),
@@ -1194,6 +1240,7 @@ func _ensure_view() -> bool:
 
 
 func _clear_guest_view():
+	_clear_cue_view()
 	if not _guest_context_saved:
 		return
 	var global_node = get_node("/root/Global")
@@ -1243,6 +1290,9 @@ func _submit(message: Dictionary):
 		return
 	message["kind"] = "shop_request"
 	message["revision"] = _state.revision
+	if str(message.action).begins_with("cue_"):
+		message["scene"] = _state.get("scene", 0)
+		_cue_error = ""
 	if message.action == "ready":
 		message["ready"] = not _state.ready_vote.ready.has(_controller.transport.local_id())
 		message["ready_generation"] = _state.ready_vote.revision
@@ -1259,6 +1309,7 @@ func _submit(message: Dictionary):
 		_notice.hide()
 		_update_actions()
 		request.emit(message)
+	_update_cue_ui()
 
 
 func _update_actions():
@@ -1281,6 +1332,8 @@ func _update_actions():
 		_cancel_native_drag()
 	_actions_blocked = blocked
 	_set_disabled(_view.reroll_button, blocked or _state.money < _state.reroll)
+	if _cue_active:
+		_set_disabled(_view.reroll_button, true)
 	_set_disabled(_view.cocktail_bar.mix_button, blocked or not _state.can_mix)
 	_set_disabled(_view.play_button, blocked or not _state.can_continue)
 	var vote: Dictionary = _state.ready_vote
@@ -1343,3 +1396,288 @@ func _empty_prediction(slot: Dictionary):
 	var identity = {"key": slot.key, "group": slot.group, "index": slot.index, "id": 0}
 	slot.clear()
 	slot.merge(identity)
+
+
+## Cue purchases share the native wallet and the existing actor/revision gate.
+## PERF-035/037: no client prices, ownership, or optimistic spending are trusted.
+func _apply_cue_action(shop, message: Dictionary, actor: int) -> bool:
+	if (
+		not message.get("scene") is int
+		or message.scene != _state.get("scene")
+		or not message.get("model") is String
+		or not message.get("finish") is String
+		or _controller.get("cue_inventory") == null
+	):
+		return _reject("The cue counter changed. Choose your cue again.")
+	var outcome: Dictionary = _controller.cue_inventory.transact(
+		actor, message.action, message.model, message.finish, float(shop.player_info.money)
+	)
+	if not outcome.accepted:
+		return _reject(outcome.error)
+	if outcome.cost > 0:
+		# Validation and this debit are synchronous; another purchase cannot interleave.
+		shop.player_info.money -= outcome.cost
+		shop.update_money()
+	_save_confirmed_finish()
+	return true
+
+
+func _save_confirmed_finish() -> void:
+	if _controller == null or _controller.get("cue_inventory") == null:
+		return
+	var local_id: int = _controller.transport.local_id()
+	if not _controller.cue_inventory.has_player(local_id):
+		return
+	var finish: String = _controller.cue_inventory.finish_for(local_id)
+	if finish != _saved_finish:
+		_saved_finish = CuePrefs.set_cue_id(finish)
+
+
+## The fourth counter shares the native ShopCamera content slider. Native's enum
+## remains Balls/Cocktail/Tapas; only target_camera_x gains a fourth stop.
+func _ensure_cue_view() -> void:
+	if is_instance_valid(_cue_view) and _cue_view.get_parent() == _view.camera:
+		return
+	_clear_cue_view()
+	_cue_native = _view
+	_cue_view = CueShopScene.instantiate()
+	_cue_view.name = "TogetherCueShop"
+	_view.camera.add_child(_cue_view)
+	_cue_view.setup(_controller.get("skin"))
+	_cue_view.action_requested.connect(_cue_action_requested)
+	_cue_view.close_requested.connect(_leave_cues)
+	_cue_view.set_active(false)
+	_cue_link = _cue_navigation_button("Cues  ›")
+	_cue_link.name = "TogetherMoveToCues"
+	_view.camera.add_child(_cue_link)
+	_cue_link.pressed.connect(_open_cues)
+	# If snacks are still locked, the same fourth counter remains reachable.
+	_cue_shortcut = _cue_navigation_button("Cues  ›")
+	_cue_shortcut.name = "TogetherCuesShortcut"
+	_view.camera.add_child(_cue_shortcut)
+	_cue_shortcut.pressed.connect(_open_cues)
+	_cue_layout_key.clear()
+	_cue_ui_key.clear()
+	_update_cue_layout()
+	_update_cue_ui()
+
+
+func _cue_navigation_button(text: String) -> Button:
+	var button = Button.new()
+	button.text = text
+	button.size = Vector2(128, 58)
+	button.add_theme_font_size_override("font_size", 24)
+	var ui = get_node("/root/UIManager")
+	button.theme = ui.game_theme
+	var skin = _controller.get("skin")
+	if skin != null:
+		for state in ["normal", "hover", "pressed", "disabled"]:
+			var style = skin.button_style("dark", state, [12, 8, 12, 8])
+			if style != null:
+				button.add_theme_stylebox_override(state, style)
+	return button
+
+
+func _update_cue_layout() -> void:
+	if not is_instance_valid(_cue_view) or not is_instance_valid(_view):
+		return
+	var separation: float = absf(_view.tapas_bar.position.x)
+	if separation <= 0.0:
+		return
+	var snacks_visible: bool = _view.tapas_bar.visible
+	var key = [separation, snacks_visible, get_viewport().get_visible_rect().size]
+	if key == _cue_layout_key:
+		return
+	_cue_layout_key = key
+	_cue_view.position = Vector2(separation * 2.0, 0)
+	_cue_link.visible = snacks_visible
+	_cue_link.position = Vector2(separation + 700, 420)
+	_cue_shortcut.position = Vector2(700, 420)
+	_cue_shortcut.visible = not snacks_visible
+	# Extend existing tiled native art at a layout boundary, never duplicate its
+	# particles/lights/scripts. Save originals so ending the session is reversible.
+	var counter_size: float = ceilf(separation * 2.5 / 180.0) * 180.0
+	for name in [
+		"ShopCounterSection", "ShopCounterSectionBack", "ShopCounterLight", "Shade", "Shopbg"
+	]:
+		var sprite = _view.get_node_or_null("%" + name)
+		if not sprite is Sprite2D:
+			continue
+		var width = counter_size
+		match name:
+			"ShopCounterSectionBack":
+				width += 1800.0
+			"Shade":
+				width += 240.0
+			"Shopbg":
+				width *= 3.0
+		# Native's resize callback writes these baseline widths. Keep the current
+		# baseline, not the first viewport's dimensions, for reversible teardown.
+		var native_position: Vector2 = sprite.position
+		native_position.x = 300.0
+		var native_region: Rect2 = sprite.region_rect
+		native_region.size.x = width
+		_cue_art[name] = {"node": sprite, "position": native_position, "region": native_region}
+		sprite.position.x = 300.0 + separation * 0.5
+		var region: Rect2 = sprite.region_rect
+		region.size.x = width + separation / maxf(sprite.scale.x, 0.01)
+		sprite.region_rect = region
+	var end = _view.get_node_or_null("%ShopCounterStart")
+	if end is Node2D:
+		var native_position: Vector2 = end.position
+		native_position.x = 300.0 + counter_size * 0.5 + 124.0
+		_cue_art.end = {"node": end, "position": native_position}
+		end.position.x = 300.0 + counter_size * 0.5 + 124.0 + separation
+	if _cue_active:
+		_view.target_camera_x = -_cue_view.position.x
+
+
+func _open_cues() -> bool:
+	if not is_open() or not is_instance_valid(_cue_view) or not is_instance_valid(_view):
+		return false
+	if _nav_drag_active() or not _cue_controls_available():
+		return false
+	if _cue_active:
+		return true
+	_cancel_native_drag()
+	_cue_active = true
+	_cue_view.set_active(true)
+	_view.target_camera_x = -_cue_view.position.x
+	_view.moving_time = 0.5
+	get_node("/root/AudioManager").play("slide")
+	_update_actions()
+	_update_cue_ui()
+	_cue_view.focus_default()
+	return true
+
+
+func _leave_cues() -> void:
+	if not _cue_controls_available():
+		return
+	var target = "snacks" if is_instance_valid(_view) and _view.tapas_bar.visible else "balls"
+	show_section(target)
+	_update_actions()
+	_update_cue_ui()
+
+
+func _cue_action_requested(action: String, model: String, finish: String) -> void:
+	if not _cue_active or _interaction_blocked():
+		return
+	_submit({"action": action, "model": model, "finish": finish})
+
+
+func _update_cue_ui() -> void:
+	if not is_instance_valid(_cue_view):
+		return
+	if _controller == null or not is_open() or not is_instance_valid(_view):
+		_cue_view.set_active(false)
+		_update_cue_link_input(_cue_link, false)
+		_update_cue_link_input(_cue_shortcut, false)
+		return
+	var local_id: int = _controller.transport.local_id()
+	var blocked = _interaction_blocked()
+	var available = _cue_controls_available()
+	var native_section: int = int(_view.state)
+	var snacks_visible: bool = _view.tapas_bar.visible
+	var input_active: bool = _cue_active and available
+	var key = [
+		local_id,
+		_state.get("cues", {}),
+		_state.get("money", 0),
+		_pending,
+		blocked,
+		_cue_error,
+		input_active,
+		available,
+		native_section,
+		snacks_visible,
+		_view.moving()
+	]
+	if key == _cue_ui_key:
+		return
+	_cue_ui_key = key.duplicate(true)
+	_cue_view.set_active(input_active)
+	_update_cue_link_input(
+		_cue_link, available and not _cue_active and native_section == 2 and snacks_visible
+	)
+	_update_cue_link_input(
+		_cue_shortcut, available and not _cue_active and native_section == 0 and not snacks_visible
+	)
+	_cue_view.render(_state, local_id, _pending, blocked, _cue_error)
+
+
+func _clear_cue_view() -> void:
+	if is_instance_valid(_cue_native):
+		# Teardown is a scene boundary: also settle a half-finished return slide
+		# before removing its destination so a reused native shop stays in bounds.
+		var target = 0.0
+		match int(_cue_native.state):
+			1:
+				target = -_cue_native.cocktail_bar.position.x
+			2:
+				target = -_cue_native.tapas_bar.position.x
+		_cue_native.target_camera_x = target
+		_cue_native.camera.position.x = target
+		_cue_native.moving_time = -1.0
+	_cue_active = false
+	_cue_ui_key.clear()
+	_cue_layout_key.clear()
+	for saved in _cue_art.values():
+		if is_instance_valid(saved.node):
+			saved.node.position = saved.position
+			if saved.has("region"):
+				saved.node.region_rect = saved.region
+	_cue_art.clear()
+	if is_instance_valid(_cue_view):
+		_cue_view.set_active(false)
+		_cue_view.get_parent().remove_child(_cue_view)
+		_cue_view.queue_free()
+	for button in [_cue_link, _cue_shortcut]:
+		if is_instance_valid(button):
+			button.get_parent().remove_child(button)
+			button.queue_free()
+	_cue_view = null
+	_cue_native = null
+	_cue_link = null
+	_cue_shortcut = null
+
+
+func _cue_controls_available() -> bool:
+	return (
+		is_open()
+		and is_instance_valid(_view)
+		and _view.is_open
+		and not _controller.panel.visible
+		and not _controller.is_spectating()
+		and not _vote_hold
+		and not _continuing
+		and not get_tree().paused
+		and not get_node("/root/UIManager").is_popup_open()
+	)
+
+
+func _update_cue_link_input(button: Button, active: bool) -> void:
+	if not is_instance_valid(button):
+		return
+	active = active and is_instance_valid(_view) and not _view.moving()
+	if button.disabled != (not active):
+		button.disabled = not active
+	var focus = Control.FOCUS_ALL if active else Control.FOCUS_NONE
+	if button.focus_mode != focus:
+		if not active and button.has_focus():
+			button.release_focus()
+		button.focus_mode = focus
+	var filter = Control.MOUSE_FILTER_STOP if active else Control.MOUSE_FILTER_IGNORE
+	if button.mouse_filter != filter:
+		button.mouse_filter = filter
+
+
+func _sync_cue_navigation() -> void:
+	if not _cue_active or not is_instance_valid(_cue_view):
+		return
+	# Native buttons and the next shop's open_shop() can change the slider target
+	# directly. Do not keep reporting cues or steal it back at the next resize.
+	if not _view.is_open or not is_equal_approx(_view.target_camera_x, -_cue_view.position.x):
+		_cue_active = false
+		_cue_view.set_active(false)
+		_cue_ui_key.clear()

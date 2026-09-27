@@ -16,6 +16,9 @@ const HUD_TINTS = {
 const CrtStack = preload("crt_stack.gd")
 const UiNav = preload("ui_nav.gd")
 const CuePrefs = preload("cue_prefs.gd")
+const CueInventory = preload("cue_inventory.gd")
+const CueModels = preload("cue_models.gd")
+const CueVisuals = preload("cue_visuals.gd")
 const HudPrefs = preload("hud_prefs.gd")
 const TurnBanner = preload("turn_banner.gd")
 const TableEffects = preload("table_effects_sync.gd")
@@ -32,6 +35,7 @@ var run_controls: Node
 var multiplayer_balls: Node
 var expansion_balls: Node
 var set_voting: Node
+var cue_effects: Node
 var bounty_race: Script
 var lobby_model: RefCounted
 var router: RefCounted
@@ -47,6 +51,7 @@ var _turn_banner_showing: bool = false
 var _hud_layer: CanvasLayer
 var _queued_ui_nav: Dictionary = {}
 var _applied_ui_nav: Dictionary = {}
+var cue_inventory = CueInventory.new()
 
 var supported = true
 var active = false
@@ -122,6 +127,8 @@ func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_native_ui = get_node("/root/UIManager")
 	var base = get_script().resource_path.get_base_dir()
+	# PERF-027: loose PNG decoding stays at startup, never on turn/snapshot paths.
+	CueVisuals.warm(base.path_join("assets/cues"))
 	lobby_model = load(base.path_join("lobby_state.gd")).new()
 	router = load(base.path_join("table_router.gd")).new()
 	transport = load(base.path_join("transport.gd")).new()
@@ -135,6 +142,7 @@ func _ready():
 	multiplayer_balls = load(base.path_join("multiplayer_balls.gd")).new()
 	expansion_balls = load(base.path_join("expansion_balls.gd")).new()
 	set_voting = load(base.path_join("set_voting.gd")).new()
+	cue_effects = load(base.path_join("cue_effects.gd")).new()
 	bounty_race = load(base.path_join("bounty_race.gd"))
 	for service in [
 		transport,
@@ -147,7 +155,8 @@ func _ready():
 		expansion_balls,
 		spectator,
 		run_controls,
-		set_voting
+		set_voting,
+		cue_effects
 	]:
 		add_child(service)
 	_build_ui()
@@ -155,6 +164,7 @@ func _ready():
 	spectator.watch_changed.connect(_watch_changed)
 	run_controls.setup(self)
 	set_voting.setup(self)
+	cue_effects.setup(self)
 	if not multiplayer_balls.setup(self):
 		supported = false
 		_status("Multiplayer ball art is missing. Reinstall the complete mod package.")
@@ -707,6 +717,9 @@ func _begin_table(config: Dictionary):
 	_clear_spawn_barrier()
 	presence.clear()
 	active = true
+	cue_inventory.reset(_members(table_id))
+	if cue_effects != null:
+		cue_effects.begin_session()
 	if bool(lobby.get("multiplayer_balls", config.get("multiplayer_balls", false))):
 		multiplayer_balls.begin_session()
 	else:
@@ -789,7 +802,10 @@ func _end_table():
 	shop_sync.end_session()
 	multiplayer_balls.end_session()
 	expansion_balls.end_session()
+	if cue_effects != null:
+		cue_effects.end_session()
 	adapter.end_session()
+	cue_inventory.reset([])
 	_queued_ui_nav.clear()
 	_applied_ui_nav.clear()
 	if turn_banner != null:
@@ -1244,6 +1260,10 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		return false
 	if multiplayer_balls != null and multiplayer_balls.blocks_shot_input():
 		return false
+	# PERF-013: validate the raw intent above, then apply host-owned handling once.
+	# Guests receive the identical effective vector for their shot-start prediction.
+	var raw_vector: Vector2 = vector
+	vector = CueModels.shot_vector(raw_vector, cue_inventory.model_for(player))
 	var starting_table = table_sync.capture()
 	# Validate before spending a shot: every guest must be able to accept its baseline.
 	if not table_sync.valid_capture(starting_table):
@@ -1259,7 +1279,16 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		func():
 			if not multiplayer_balls.begin_shot(used_shots + 1, player):
 				return false
-			return expansion_balls.begin_shot(used_shots + 1, player)
+			if not expansion_balls.begin_shot(used_shots + 1, player):
+				return false
+			if cue_effects != null and not cue_effects.begin_shot(used_shots + 1, player, raw_vector):
+				# Other rules already admitted this shot. Optional cue perks cannot
+				# strand their pending state by rejecting it afterward. Unexpected
+				# adapter failure disables perks until the next run, preventing a
+				# cleared round budget from being reused, while native play continues.
+				cue_effects.end_session()
+				push_warning("[Together] Cue perks disabled for this run: unsupported shot state.")
+			return true
 	):
 		return false
 	shot_pending = true
@@ -1280,6 +1309,8 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 
 
 func _finish_shot():
+	if cue_effects != null:
+		cue_effects.finish_shot()
 	multiplayer_balls.finish_shot()
 	expansion_balls.finish_shot()
 	total_score += maxf(0.0, adapter.shot_score() - shot_start_score)
@@ -1525,6 +1556,7 @@ func _publish_state(
 			"bounty_shot": multiplayer_balls.bounty_shot(),
 			"multiplayer_balls": multiplayer_balls.capture(),
 			"expansion_balls": expansion_balls.capture(),
+			"cues": cue_inventory.snapshot(),
 			"clone_round": CloneRound.snapshot(
 				_clone_instances, _clone_active, _clone_winner, _clone_shop_armed
 			),
@@ -1558,6 +1590,7 @@ func _publish_state(
 		finished,
 		multiplayer_balls.display_signature(balls_state),
 		expansion_balls.display_signature(expansion_state),
+		latest_state.get("cues", {}),
 		UiNav.signature(ui_nav)
 	]
 	if target != 0 or state_sig != _last_state_sig:
@@ -1916,6 +1949,8 @@ func _received_table(actor: int, message: Dictionary):
 			table_sync.begin_shot(message.vector)
 		last_started_turn = message.turn
 	elif kind == "state" and _valid_state(message, table_id):
+		if message.get("cues") is Dictionary:
+			cue_inventory.apply_snapshot(message.cues)
 		latest_state = message
 		turn_owner = message.turn_owner
 		shot_number = message.turn
@@ -2039,6 +2074,10 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 	):
 		return false
 	if message.has("ui_nav") and not UiNav.valid(message.ui_nav):
+		return false
+	if message.has("cues") and (
+		not message.cues is Dictionary or not CueInventory.valid_snapshot(message.cues)
+	):
 		return false
 	return (
 		_number(message.get("score"))

@@ -6,6 +6,8 @@ const MAX_SHOT_LENGTH = 200.0
 
 const CueCatalog = preload("cue_catalog.gd")
 const CuePrefs = preload("cue_prefs.gd")
+const CueModels = preload("cue_models.gd")
+const CueVisuals = preload("cue_visuals.gd")
 
 var _session_active = false
 var _controller: Node
@@ -16,6 +18,7 @@ var _settled_seconds = 0.0
 var _last_game_id = 0
 var _applied_cue_owner = 0
 var _applied_cue_id = ""
+var _applied_cue_model = ""
 
 
 func _ready() -> void:
@@ -42,28 +45,59 @@ func end_session() -> void:
 	_settled_seconds = 0.0
 	_applied_cue_owner = 0
 	_applied_cue_id = ""
+	_applied_cue_model = ""
 
 
 func _exit_tree() -> void:
 	_restore_player()
 
 
-## Host-side cue cosmetics (Refs #20). Guests use CueCatalog.apply via replica hooks.
+## Apply the turn owner's run model and finish, retaining native aim animation.
 func _apply_turn_cue() -> void:
 	if not _session_active or not is_instance_valid(_hooked_player) or _controller == null:
 		return
 	var owner_id: int = int(_controller.get("turn_owner"))
 	var cue_id: String = _cue_id_for(owner_id)
-	if owner_id == _applied_cue_owner and cue_id == _applied_cue_id:
+	var model_id: String = _model_id_for(owner_id)
+	if (
+		owner_id == _applied_cue_owner
+		and cue_id == _applied_cue_id
+		and model_id == _applied_cue_model
+	):
 		return
-	CueCatalog.apply(_hooked_player, cue_id)
+	CueVisuals.apply(_hooked_player, model_id, cue_id)
 	_applied_cue_owner = owner_id
 	_applied_cue_id = cue_id
+	_applied_cue_model = model_id
+
+
+func _run_inventory(player_id: int):
+	if not _session_active or not is_instance_valid(_controller):
+		return null
+	var inventory = _controller.get("cue_inventory")
+	if not is_instance_valid(inventory):
+		return null
+	if inventory.has_method("has_player"):
+		return inventory if inventory.has_player(player_id) else null
+	if not inventory.has_method("player"):
+		return null
+	var record = inventory.player(player_id)
+	return inventory if record is Dictionary and not record.is_empty() else null
+
+
+func _model_id_for(player_id: int) -> String:
+	var inventory = _run_inventory(player_id)
+	if inventory != null and inventory.has_method("model_for"):
+		return str(inventory.model_for(player_id))
+	return CueModels.DEFAULT_ID
 
 
 func _cue_id_for(player_id: int) -> String:
 	if player_id <= 0:
 		return CueCatalog.DEFAULT_ID
+	var inventory = _run_inventory(player_id)
+	if inventory != null and inventory.has_method("finish_for"):
+		return CueCatalog.normalize(str(inventory.finish_for(player_id)))
 	var lobby = _controller.get("lobby")
 	if lobby is Dictionary:
 		for player in lobby.get("players", []):
@@ -100,6 +134,7 @@ func _process(delta: float) -> void:
 		_settled_seconds = 0.0
 		_applied_cue_owner = 0
 		_applied_cue_id = ""
+		_applied_cue_model = ""
 	if _raw_settled(game):
 		_settled_seconds += delta
 	else:
@@ -272,6 +307,8 @@ func _update_player_hook() -> void:
 		return
 	player.pause_cancel_shot()
 	_original_player_script = player.get_script()
+	# Capture native alpha/geometry before the input wrapper hides an idle cue.
+	CueVisuals.remember(player)
 	_replace_script(player, _native_player_script)
 	player.set("together_controller", _controller)
 	_hooked_player = player
@@ -285,9 +322,13 @@ func _node_added(node: Node) -> void:
 func _restore_player() -> void:
 	if is_instance_valid(_hooked_player):
 		_hooked_player.pause_cancel_shot()
+		CueVisuals.restore(_hooked_player)
 		_replace_script(_hooked_player, _original_player_script)
 	_hooked_player = null
 	_original_player_script = null
+	_applied_cue_owner = 0
+	_applied_cue_id = ""
+	_applied_cue_model = ""
 
 
 func _replace_script(player: Node, script: Script) -> void:

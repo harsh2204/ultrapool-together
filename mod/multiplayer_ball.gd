@@ -2,9 +2,12 @@ extends "res://ball.gd"
 
 var together_balls: Node
 var expansion_balls: Node
+var cue_effects: Node
 
 
 func hit(other: Ball):
+	if is_instance_valid(cue_effects):
+		cue_effects.record_hit(self, other)
 	if is_instance_valid(together_balls):
 		together_balls.record_hit(self, other)
 	if is_instance_valid(expansion_balls):
@@ -14,6 +17,8 @@ func hit(other: Ball):
 
 func hit_wall(normal):
 	if not colliding_with_wall and not falling:
+		if is_instance_valid(cue_effects):
+			cue_effects.record_wall(self)
 		if is_instance_valid(together_balls):
 			together_balls.record_wall(self)
 		if is_instance_valid(expansion_balls):
@@ -23,6 +28,8 @@ func hit_wall(normal):
 
 func pocket(which_pocket, extra_multiplier = 1):
 	if not pocketed_this_frame and was_alive_one_frame_ago:
+		if is_instance_valid(cue_effects):
+			cue_effects.record_pocket(self, which_pocket, extra_multiplier)
 		if is_instance_valid(together_balls):
 			together_balls.record_pocket(self, which_pocket, extra_multiplier)
 		if is_instance_valid(expansion_balls):

@@ -474,11 +474,11 @@ func _ensure_cue_picker() -> void:
 	var divider = HSeparator.new()
 	column.add_child(divider)
 	var title = Label.new()
-	title.text = "Your cue"
+	title.text = "Your starting cue finish"
 	title.add_theme_font_size_override("font_size", 14)
 	column.add_child(title)
 	_cue_help = Label.new()
-	_cue_help.text = "Personal cosmetic. Synced to teammates. Default matches the native cue."
+	_cue_help.text = "Free cosmetic finish. Buy and equip cues at the counter to the right of snacks."
 	_cue_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_cue_help.add_theme_font_size_override("font_size", 12)
 	_cue_help.add_theme_color_override("font_color", MUTED)
@@ -730,7 +730,7 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 		cue_id = CuePrefs.cue_id()
 	_paint_cue_selection(cue_id)
 	for id in _cue_buttons:
-		(_cue_buttons[id] as Button).disabled = _local_id <= 0
+		(_cue_buttons[id] as Button).disabled = _local_id <= 0 or started
 	if _turn_banner_check != null:
 		_turn_banner_check.set_pressed_no_signal(HudPrefs.turn_banner_enabled())
 	%FollowShopView.set_pressed_no_signal(HudPrefs.follow_shop_view_enabled())

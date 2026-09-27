@@ -24,6 +24,7 @@ var native_aim = preload("native_aim_fixture.gd").new()
 var native_pocket = preload("native_pocket_fixture.gd").new()
 var native_effects = preload("native_table_effects_fixture.gd").new()
 var native_visual_fx = preload("native_visual_fx_fixture.gd").new()
+var cue_fixtures: RefCounted
 var fixture_config = {"deck": "1_CLASSIC", "difficulty": "diff_3", "seed": 24681}
 
 
@@ -69,6 +70,15 @@ func _run():
 		_finish()
 		return
 	round_flow = round_flow_script.new()
+	var cue_script = load(
+		get_script().resource_path.get_base_dir().path_join("cue_shop_fixtures.gd")
+	)
+	if not _check(
+		cue_script != null and cue_script.can_instantiate(), "compiled cue shop fixtures"
+	):
+		_finish()
+		return
+	cue_fixtures = cue_script.new()
 	var input_script = load(
 		get_script().resource_path.get_base_dir().path_join("shop_input_fixture.gd")
 	)
@@ -102,7 +112,10 @@ func _run():
 		"router_probe",
 		"controller_probe",
 		"transport_budget_probe",
-		"shop_layout_probe"
+		"shop_layout_probe",
+		"cue_models_probe",
+		"cue_inventory_probe",
+		"cue_effects_probe"
 	]:
 		_run_model_probe(probe)
 	_check_run_completion()
@@ -170,6 +183,7 @@ func _run():
 		shop_report.store_string(JSON.stringify(shop_state, "\t"))
 		shop_report.close()
 		await fixtures.capture_shop_presence(mod, _capture, shop_input)
+		await cue_fixtures.run_host(mod, _capture, _check)
 		await round_flow.check_host_shop_drag(mod, _capture)
 		var shop_probe = (
 			load(get_script().resource_path.get_base_dir().path_join("shop_probe.gd")).new()
@@ -344,6 +358,7 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 	)
 	await round_flow.check_guest_snack_drag(mod, _capture)
 	await _capture_guest_negative_cubes(shop, game)
+	await cue_fixtures.run_guest(mod, _capture, _check)
 	mod.shop_sync.end_session()
 
 
