@@ -2,6 +2,10 @@ extends RefCounted
 ## Vanilla-safe cue cosmetics: recolors / parametric tints of the native cue look.
 ## No new art pipeline. Default id restores native appearance (identity modulate).
 ## Refs #20. Host and guest both call apply(); guest replica wiring may be coordinator-owned.
+##
+## Important (#22): never rely on tinting the PlayerBall/Ball root modulate — replica
+## apply_table writes body.modulate from state every snapshot and would wipe it. Tint
+## only cue child nodes. Re-apply when child modulate diverges even if meta matches.
 
 const DEFAULT_ID = "native"
 const MAX_ID_LENGTH = 32
@@ -91,6 +95,7 @@ const CUES = [
 ]
 
 const _CHILD_NAMES = [
+	"CuePivot",
 	"Cue",
 	"cue",
 	"CueStick",
@@ -99,6 +104,7 @@ const _CHILD_NAMES = [
 	"CueVisual",
 	"CueSprite",
 	"cue_sprite",
+	"CueShadow",
 ]
 
 
@@ -159,24 +165,71 @@ static func cue_for_player(lobby: Dictionary, player_id: int, fallback: String =
 	return normalize(fallback)
 
 
-## Apply a catalog style to a cue root or player-ball subtree.
-## Idempotent via together_cue_id meta. Restores native look for DEFAULT_ID.
-## Safe when the native cue node tree is missing — no-ops beyond root modulate.
+## Apply a catalog style to cue child nodes under a player-ball (or a bare cue root).
+## Idempotent via together_cue_id meta, but re-tints when child modulate diverges (#22).
 static func apply(cue_node: Node, cue_id: String) -> void:
 	if cue_node == null or not is_instance_valid(cue_node):
 		return
 	var entry = style(cue_id)
-	if str(cue_node.get_meta("together_cue_id", "")) == entry.id:
+	var targets: Array = _cue_targets(cue_node)
+	var meta_match: bool = str(cue_node.get_meta("together_cue_id", "")) == entry.id
+	if meta_match and _targets_match(targets, entry):
 		return
 	cue_node.set_meta("together_cue_id", entry.id)
-	_tint_canvas(cue_node, entry)
+	# Ball roots keep native modulate from table state; only tint cue chrome.
+	if not _is_ball_root(cue_node) and targets.is_empty():
+		_tint_canvas(cue_node, entry)
+	for target in targets:
+		_tint_canvas(target, entry)
+
+
+static func _is_ball_root(node: Node) -> bool:
+	return (
+		node.get_node_or_null("CuePivot") != null
+		or node.get_node_or_null("visuals") != null
+		or node.get("is_player") != null
+	)
+
+
+static func _cue_targets(cue_node: Node) -> Array:
+	var found: Array = []
+	var seen: Dictionary = {}
 	for child_name in _CHILD_NAMES:
 		var child = cue_node.get_node_or_null(child_name)
-		if child != null:
-			_tint_canvas(child, entry)
+		if child != null and not seen.has(child):
+			seen[child] = true
+			found.append(child)
+			# Cue sprite lives under CuePivot on the native player ball.
+			if child_name == "CuePivot":
+				for nested_name in ["Cue", "CueShadow"]:
+					var nested = child.get_node_or_null(nested_name)
+					if nested != null and not seen.has(nested):
+						seen[nested] = true
+						found.append(nested)
 	for child in cue_node.get_children():
-		if child is CanvasItem and _looks_like_cue(child.name):
-			_tint_canvas(child, entry)
+		if child is CanvasItem and _looks_like_cue(child.name) and not seen.has(child):
+			seen[child] = true
+			found.append(child)
+	return found
+
+
+static func _targets_match(targets: Array, entry: Dictionary) -> bool:
+	if targets.is_empty():
+		return false
+	var expected: Color = entry.modulate if entry.id != DEFAULT_ID else Color.WHITE
+	for target in targets:
+		if not target is CanvasItem:
+			continue
+		var canvas := target as CanvasItem
+		if entry.id == DEFAULT_ID:
+			var base: Color = canvas.get_meta(
+				"together_cue_base_modulate", expected
+			)
+			if canvas.modulate != base:
+				return false
+		elif canvas.modulate != expected:
+			return false
+	return true
 
 
 static func _looks_like_cue(node_name: StringName) -> bool:
