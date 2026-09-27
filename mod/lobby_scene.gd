@@ -137,8 +137,11 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	_render_run_votes(state, local_id, started)
 	%MatchMode.get_parent().visible = multiple_tables
 	%ShotBudget.get_parent().visible = multiple_tables and not racing
-	%CloneRounds.set_pressed_no_signal(bool(state.get("clone_rounds", false)))
-	%CloneRounds.disabled = not is_host or started
+	# Vs / clone-table rounds are exclusive to Together All Nighter (PERF-026 path).
+	var clone_allowed: bool = single_table
+	%CloneRounds.get_parent().visible = clone_allowed
+	%CloneRounds.set_pressed_no_signal(clone_allowed and bool(state.get("clone_rounds", false)))
+	%CloneRounds.disabled = not is_host or started or not clone_allowed
 	%MultiplayerBalls.set_pressed_no_signal(bool(state.get("multiplayer_balls", false)))
 	%MultiplayerBalls.disabled = not is_host or started
 	_render_expansion_toggles(state, is_host, started)

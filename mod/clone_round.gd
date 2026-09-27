@@ -6,10 +6,26 @@ extends RefCounted
 ## instance of the shared table layout for the round. Scores are compared like
 ## Score PvP table summaries, then only the winner may use the following shared
 ## shop. Normal turn-taking and shared shopping resume after that one shop.
+## Exclusive to Together All Nighter (`diff_together_nighter`).
+
+const DifficultyCatalog = preload("difficulty_catalog.gd")
+
+
+static func difficulty_id(lobby: Dictionary) -> String:
+	var run_vote = lobby.get("run_vote", {})
+	if run_vote is Dictionary:
+		var selected = run_vote.get("selected", {})
+		if selected is Dictionary and selected.has("difficulty"):
+			return str(selected.difficulty)
+	return str(lobby.get("difficulty", ""))
+
+
+static func allowed_for_difficulty(lobby: Dictionary) -> bool:
+	return difficulty_id(lobby) == DifficultyCatalog.together_nighter_id()
 
 
 static func enabled(lobby: Dictionary) -> bool:
-	return bool(lobby.get("clone_rounds", false))
+	return bool(lobby.get("clone_rounds", false)) and allowed_for_difficulty(lobby)
 
 
 static func should_run(lobby: Dictionary, member_ids: Array) -> bool:

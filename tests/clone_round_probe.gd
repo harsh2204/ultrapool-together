@@ -7,11 +7,31 @@ var failures: Array[String] = []
 func _initialize() -> void:
 	var clone = load(get_script().resource_path.get_base_dir().path_join("../mod/clone_round.gd"))
 	_check(not clone.enabled({}), "clone rounds off by default")
-	_check(clone.enabled({"clone_rounds": true}), "lobby flag enables clone rounds")
-	_check(not clone.should_run({"clone_rounds": true}, [10]), "solo tables skip clone rounds")
 	_check(
-		clone.should_run({"clone_rounds": true}, [10, 20]),
-		"shared tables with the flag run clone rounds"
+		not clone.enabled({"clone_rounds": true}),
+		"clone flag alone is not enough without Together All Nighter"
+	)
+	_check(
+		clone.enabled({"clone_rounds": true, "difficulty": "diff_together_nighter"}),
+		"Together All Nighter with the flag enables clone rounds"
+	)
+	_check(
+		not clone.enabled({"clone_rounds": true, "difficulty": "diff_6"}),
+		"native All Nighter does not unlock clone rounds"
+	)
+	_check(
+		not clone.should_run({"clone_rounds": true, "difficulty": "diff_together_nighter"}, [10]),
+		"solo tables skip clone rounds"
+	)
+	_check(
+		clone.should_run(
+			{"clone_rounds": true, "difficulty": "diff_together_nighter"}, [10, 20]
+		),
+		"shared Together All Nighter tables with the flag run clone rounds"
+	)
+	_check(
+		not clone.should_run({"clone_rounds": true, "difficulty": "diff_2"}, [10, 20]),
+		"other difficulties cannot run clone rounds even with the flag"
 	)
 
 	var instances = clone.assign_instances([20, 10, 30])
