@@ -153,9 +153,6 @@ func _run():
 		var shop_report = FileAccess.open(output.path_join("shop-state.json"), FileAccess.WRITE)
 		shop_report.store_string(JSON.stringify(shop_state, "\t"))
 		shop_report.close()
-		await _capture(
-			"20-shared-shop", "Shared shop · native offers and the selected starting build"
-		)
 		await fixtures.capture_shop_presence(mod, _capture, shop_input)
 		await round_flow.check_host_shop_drag(mod, _capture)
 		await _check_shop_readiness()
@@ -466,6 +463,128 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 		shop.selected_ball = null
 		shop.selected_passive = null
 	await get_tree().process_frame
+
+
+## Host CubesPopup via the vanilla set_item path only — no mod tex rebinding. Compare with
+## 54-guest-negative-cubes: if host is also near-black, native NEGATIVE cubes look that way.
+func _capture_host_native_cubes(host_mod: Node, game) -> void:
+	if not is_instance_valid(game) or game.player_info == null:
+		return
+	var shop = null
+	if host_mod != null and host_mod.shop_sync != null:
+		shop = host_mod.shop_sync.native_shop()
+	if not is_instance_valid(shop):
+		shop = game.shop
+	if not is_instance_valid(shop):
+		return
+	var database = get_node("/root/BallDatabase")
+	var cube_resources: Array = _fixture_negative_cubes(database)
+	if cube_resources.size() < 2:
+		_check(false, "host fixture: BallDatabase exposes at least two textured NEGATIVE cubes")
+		return
+	var cubes: Array = []
+	for resource in cube_resources:
+		var cube = BallItem.new()
+		cube.data = resource
+		cubes.append(cube)
+	var previous_cubes = game.player_info.cubes.duplicate()
+	game.player_info.cubes.assign(cubes)
+	# Show CubesButton without refresh_inventory_hud — that also calls ensure_cubes_popup_textures.
+	var button = shop.get_node_or_null("%CubesButton")
+	if button != null:
+		button.visible = true
+	await get_tree().process_frame
+	_check(button != null and button.visible, "host CubesButton visible with NEGATIVE cubes")
+	var popup = shop.get_node_or_null("%CubesPopup")
+	if popup == null:
+		popup = shop.find_child("CubesPopup", true, false)
+	# Native open only — do not call ensure_cubes_popup_textures on the host path.
+	if shop.has_method("_on_cubes_button_pressed"):
+		shop._on_cubes_button_pressed()
+	elif button != null and button.has_signal("pressed"):
+		button.pressed.emit()
+	if popup is CanvasItem:
+		popup.visible = true
+	if popup != null and popup.has_method("popup"):
+		popup.popup()
+	await get_tree().process_frame
+	await get_tree().create_timer(0.35).timeout
+	await get_tree().process_frame
+	var sprites: Array = _collect_cube_sprites(shop, popup)
+	var native_tex = 0
+	for sprite in sprites:
+		if sprite.material == null:
+			continue
+		var tex = sprite.material.get_shader_parameter("tex")
+		if tex != null:
+			native_tex += 1
+	print(
+		"RENDER_HOST_CUBES native_sprites=%s tex_bound=%s (no mod rebind)"
+		% [sprites.size(), native_tex]
+	)
+	await _capture(
+		"54-host-native-cubes",
+		"Host shop · CubesPopup via vanilla PassiveCube set_item only (no mod fake_cube rebind). Compare with guest."
+	)
+	if popup is CanvasItem:
+		popup.visible = false
+	if popup != null and popup.has_method("hide"):
+		popup.hide()
+	# CustomPopupMenu often keeps a CanvasLayer "open" for UIManager.is_popup_open().
+	# Force-hide every popup-like node under the shop and UIManager so drag stays allowed.
+	_force_close_cubes_popups(shop)
+	if shop.has_method("unselect"):
+		shop.unselect()
+	if shop.get("selected_ball") != null:
+		shop.selected_ball = null
+	if shop.get("selected_passive") != null:
+		shop.selected_passive = null
+	if shop.get("grabbed_passive") != null:
+		shop.grabbed_passive = null
+	var shop_manager = get_node_or_null("/root/Global")
+	if shop_manager != null:
+		shop_manager = shop_manager.get("shopManager")
+	if shop_manager != null:
+		if shop_manager.has_method("drop"):
+			shop_manager.drop()
+		if shop_manager.get("hovered_slot") != null:
+			shop_manager.hovered_slot = null
+	game.player_info.cubes.assign(previous_cubes)
+	if button != null:
+		button.visible = false
+	get_node("/root/UIManager").info_display.hide_info()
+	await get_tree().process_frame
+	if host_mod != null and host_mod.shop_sync != null and host_mod.shop_sync.has_method("show_section"):
+		host_mod.shop_sync.show_section("balls")
+	# Wait until UIManager reports no popup, otherwise host drag stays blocked.
+	var ui = get_node("/root/UIManager")
+	for _attempt in 45:
+		_force_close_cubes_popups(shop)
+		if ui.has_method("is_popup_open") and not ui.is_popup_open():
+			break
+		await get_tree().process_frame
+	await get_tree().create_timer(0.2).timeout
+
+
+func _force_close_cubes_popups(shop: Node) -> void:
+	var roots: Array = []
+	if shop != null:
+		roots.append(shop)
+	var ui = get_node_or_null("/root/UIManager")
+	if ui != null:
+		roots.append(ui)
+	for root in roots:
+		for name in ["CubesPopup", "Cubes", "CustomPopupMenu"]:
+			for node in root.find_children(name, "", true, false):
+				if node is CanvasItem:
+					(node as CanvasItem).visible = false
+				if node.has_method("hide"):
+					node.hide()
+		for node in root.find_children("*", "CanvasLayer", true, false):
+			# CubesPopup implementations often flip an inner CanvasLayer while the
+			# Control root stays hidden — that still counts as an open UI popup.
+			if str(node.name).to_lower().contains("cube") or str(node.get_parent().name).to_lower().contains("cube"):
+				node.visible = false
 
 
 func _fixture_negative_cubes(database: Node) -> Array:

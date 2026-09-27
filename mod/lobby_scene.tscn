@@ -411,16 +411,18 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/margin_left = 14
+theme_override_constants/margin_left = 18
 theme_override_constants/margin_top = 10
-theme_override_constants/margin_right = 14
+theme_override_constants/margin_right = 18
 theme_override_constants/margin_bottom = 10
 
 [node name="ModOptionsScroll" type="ScrollContainer" parent="ModOptions/ModOptionsBody"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
+vertical_scroll_mode = 1
 
 [node name="ModOptionsColumn" type="VBoxContainer" parent="ModOptions/ModOptionsBody/ModOptionsScroll"]
 unique_name_in_owner = true
@@ -429,24 +431,49 @@ size_flags_horizontal = 3
 theme_override_constants/separation = 10
 
 [node name="ModOptionsTitle" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 16
 text = "Ultrapool Together"
+autowrap_mode = 3
 
 [node name="ModOptionsHelp" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 13
 text = "Opt-in extras. Off by default. Host changes sync to the lobby."
 autowrap_mode = 3
 
 [node name="MultiplayerBalls" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
 unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+clip_text = true
 text = "Multiplayer balls"
 
 [node name="CloneRounds" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
 unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+clip_text = true
 text = "Clone-table rounds"
+
+[node name="CloneRoundsHint" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 12
+text = "All Nighter only."
+autowrap_mode = 3
 
 [node name="ExpansionSetsEnabled" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
 unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+clip_text = true
 text = "Expansion sets"
 
 [node name="ExpansionSets" type="HFlowContainer" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]

@@ -179,7 +179,8 @@ func _player_has_cubes() -> bool:
 ## Native CubesPopup builds PassiveCube grid entries from player_info.cubes. Guests receive
 ## BallItems rebuilt from BallDatabase ids; native set_item can leave `fake_cube.tres`
 ## with a null `tex`, which raymarches as a pure black silhouette. Re-bind each Cube
-## sprite's material from BallResource.texture / main_color.
+## sprite's material from BallResource.texture / main_color while preserving every other
+## fake_cube uniform (noise_tex, rotation_*, fov) from the packed template.
 func ensure_cubes_popup_textures() -> void:
 	if player_info == null or not player_info.get("cubes") is Array:
 		return
@@ -266,7 +267,8 @@ func _bind_cube_sprite(sprite: Sprite2D, item) -> void:
 	var texture = data.texture if data != null else null
 	if texture == null:
 		return
-	# Always start from the packed fake_cube material so null/cleared `tex` cannot stick.
+	# Start from the packed fake_cube material so null/cleared `tex` cannot stick, and so
+	# noise_tex / rotation_* / fov stay exactly as native PassiveCube ships them.
 	var template = load("res://materials/fake_cube.tres")
 	var material: ShaderMaterial = null
 	if template is ShaderMaterial:
@@ -276,15 +278,25 @@ func _bind_cube_sprite(sprite: Sprite2D, item) -> void:
 	if material == null:
 		return
 	material.resource_local_to_scene = true
+	# Copy every known fake_cube uniform from the template before overriding inventory fields.
+	# Missing noise_tex / zeroed fov / broken rotation leaves a near-black silhouette even
+	# when `tex` is bound (raymarch miss → hint_color outline only).
+	if template is ShaderMaterial:
+		for param in ["noise_tex", "rotation_x", "rotation_y", "rotation_z", "fov"]:
+			var value = template.get_shader_parameter(param)
+			if value != null:
+				material.set_shader_parameter(param, value)
 	material.set_shader_parameter("tex", texture)
 	if data.get("main_color") != null:
 		material.set_shader_parameter("hint_color", data.main_color)
 	sprite.material = material
-	# blank128.png is the raymarch canvas; keep it so the shader has a surface to draw.
-	if sprite.texture == null:
-		var blank = load("res://blank128.png")
-		if blank != null:
-			sprite.texture = blank
+	# blank128.png is the raymarch canvas; COLOR multiplies the shader result, so keep the
+	# native white blank (never leave a null or dark texture on the Sprite2D).
+	var blank = load("res://blank128.png")
+	if blank != null:
+		sprite.texture = blank
+	sprite.modulate = Color.WHITE
+	sprite.self_modulate = Color.WHITE
 
 
 func _counter_available(

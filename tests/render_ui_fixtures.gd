@@ -664,12 +664,15 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	panel.get_node("%ModOptions").popup()
 	panel._mod_options_open = true
 	await mod.get_tree().process_frame
+	panel._reset_mod_options_scroll()
+	await mod.get_tree().process_frame
 	_record(panel.get_node("%CloneRounds").visible, "clone-table rounds shown on Together All Nighter")
 	_record(
 		panel.get_node("%CloneRounds").button_pressed and not panel.get_node("%CloneRounds").disabled,
 		"clone-table rounds enabled and checked on Together All Nighter"
 	)
 	_record(panel.get_node("%CloneRounds").text == "Clone-table rounds", "clone-table rounds label is ungated on Nighter")
+	_record(not panel.get_node("%CloneRoundsHint").visible, "clone-table rounds All Nighter hint hidden when allowed")
 	_record(panel.get_node("%MultiplayerBalls").visible, "multiplayer balls toggle is in Together options")
 	_record(
 		panel.get_node("%ExpansionSetsEnabled").button_pressed
@@ -695,6 +698,7 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 		panel._turn_banner_check != null and panel._turn_banner_check.is_visible_in_tree(),
 		"Show turn banner toggle is visible in Together options"
 	)
+	_assert_mod_options_no_horizontal_overflow(panel, "nighter")
 	await capture.call(
 		"lobby-together-options-nighter",
 		"Together options · scrolled panel below header · Multiplayer balls, Clone-table rounds, expansions, sync shop, turn banner, cue picker."
@@ -712,22 +716,79 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	panel.get_node("%ModOptions").popup()
 	panel._mod_options_open = true
 	await mod.get_tree().process_frame
+	panel._reset_mod_options_scroll()
+	await mod.get_tree().process_frame
 	var clone_gate = panel.get_node("%CloneRounds")
 	_record(clone_gate.visible, "clone-table rounds stays visible off Together All Nighter")
 	_record(clone_gate.disabled, "clone-table rounds disabled off Together All Nighter")
 	_record(not clone_gate.button_pressed, "clone-table rounds unchecked off Together All Nighter")
 	_record(
-		clone_gate.text.contains("All Nighter only"),
-		"clone-table rounds shows All Nighter only hint when gated"
+		clone_gate.text == "Clone-table rounds",
+		"clone-table rounds keeps short label when gated"
 	)
+	var clone_hint = panel.get_node("%CloneRoundsHint")
+	_record(clone_hint.visible, "clone-table rounds shows All Nighter only hint when gated")
+	_record(
+		clone_hint.text.contains("All Nighter only"),
+		"clone-table rounds hint text says All Nighter only when gated"
+	)
+	_assert_mod_options_no_horizontal_overflow(panel, "gated")
 	await capture.call(
 		"lobby-together-options-gated",
-		"Together options on Chill Pool Night · Clone-table rounds visible, disabled, unchecked, All Nighter only."
+		"Together options on Chill Pool Night · Clone-table rounds visible, disabled, unchecked, All Nighter only hint."
+	)
+
+	# Eight-player lobby with the same gated options open — column must still fit.
+	var eight = _lobby([0, 0, 1, 1, 2, 2, 3, 3], 4)
+	eight.single_table_difficulty = false
+	eight.clone_rounds = false
+	eight.multiplayer_balls = gated.multiplayer_balls
+	eight.sync_shop = gated.sync_shop
+	eight.expansion_sets_enabled = gated.expansion_sets_enabled
+	eight.expansion_sets = gated.expansion_sets.duplicate(true)
+	eight.run_vote = gated.run_vote.duplicate(true)
+	for player in eight.players:
+		player["cue"] = "emerald"
+		player.run_votes.difficulty = "diff_1"
+	panel.render(eight, 1, true)
+	panel._place_mod_options()
+	panel.get_node("%ModOptions").popup()
+	panel._mod_options_open = true
+	await mod.get_tree().process_frame
+	panel._reset_mod_options_scroll()
+	await mod.get_tree().process_frame
+	_assert_mod_options_no_horizontal_overflow(panel, "eight-player")
+	await capture.call(
+		"lobby-together-options-eight",
+		"Together options with eight players · gated Clone-table rounds, no horizontal overflow."
 	)
 
 	panel.get_node("%ModOptions").hide()
 	panel._mod_options_open = false
 	viewport.gui_embed_subwindows = embedded
+
+
+func _assert_mod_options_no_horizontal_overflow(panel: Node, label: String) -> void:
+	var scroll: ScrollContainer = panel.get_node("%ModOptionsScroll")
+	var column: Control = panel.get_node("%ModOptionsColumn")
+	scroll.scroll_horizontal = 0
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# One more layout pass so size reflects the disabled horizontal scroll mode.
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var visible_w: float = scroll.size.x
+	var column_w: float = column.size.x
+	_record(
+		visible_w > 1.0 and column_w <= visible_w + 1.0,
+		"Together options column width fits scroll viewport (%s)" % label
+	)
+	_record(
+		scroll.scroll_horizontal == 0,
+		"Together options horizontal scroll is 0 (%s)" % label
+	)
+	_record(
+		scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED,
+		"Together options horizontal scroll mode disabled (%s)" % label
+	)
 
 
 func capture_shop_presence(mod: Node, capture: Callable, input: Node) -> void:
