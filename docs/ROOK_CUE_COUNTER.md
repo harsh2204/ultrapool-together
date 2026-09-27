@@ -9,7 +9,7 @@ Implementation record for [#20](https://github.com/harsh2204/ultrapool-together/
 - **Interaction:** browse three portrait cues per rack, switch racks with a short slide/fade, preview ten finishes, and use the selected cue's small wooden purchase/equip control. The right-hand felt case shows confirmed equipment independently of browsing.
 - **Roles:** host and guest construct the same local presentation. The table leader owns transactions and cue effects. Spectator mode cannot submit cue transactions; Rook is not a new replicated gameplay entity.
 - **Availability:** fourth native shop stop to the right of snacks; the shortcut from balls remains when snacks are locked. Shared-shop and winner-only gates are unchanged. Personal view following controls navigation only.
-- **Tracking:** PERF-026/027/034/036, GAP-004. This update does not change cue prices, effects or caps.
+- **Tracking:** PERF-026/027/034/036, GAP-004. The later economy update sets 2–8€ prices and adjusts conditional rewards; see [the current roster](CUSTOM_CUES.md). The shared +4/player/round cap remains unchanged.
 
 ## Ownership and integration
 

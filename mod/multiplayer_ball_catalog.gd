@@ -1,5 +1,7 @@
 extends Node
 
+const SET_ID = "TOGETHER"
+
 const OFFER_IDS = [
 	"TOGETHER_CALL",
 	"TOGETHER_BANKROLL",
@@ -16,8 +18,8 @@ const BALLS = {
 		"name": "Relay",
 		"description":
 		(
-			"After a teammate touches this ball on an earlier shot, pocket it for +50% value. "
-			+ "In Score PvP or at a solo table, any later shot qualifies."
+			"#POCKET: [k]+50% value[/k] after a [friend]teammate[/friend] touched this ball "
+			+ "on an earlier shot.[br]In Score PvP or solo, any later shot qualifies."
 		),
 		"color": Color("29c7d8"),
 		"asset": "relay.png",
@@ -28,8 +30,8 @@ const BALLS = {
 		"name": "Called Shot",
 		"description":
 		(
-			"The previous shooter calls a pocket before the next shot. "
-			+ "Pocket this ball there on that shot for +100% value."
+			"#POCKET: [k]+100% value[/k] in the [friend]called pocket[/friend] on the next shot. "
+			+ "The previous shooter chooses the pocket."
 		),
 		"color": Color("f3a83b"),
 		"asset": "called_shot.png",
@@ -40,8 +42,8 @@ const BALLS = {
 		"name": "Patience",
 		"description":
 		(
-			"Survive a shot that hits any object ball to store +25% value for a later "
-			+ "pocket. Stores up to three charges (+75%)."
+			"Survive a shot that hits any object ball to store [k]+25% value[/k] for a later "
+			+ "#POCKET.[br]Stores up to [k]3 charges (+75%)[/k]."
 		),
 		"color": Color("a788ed"),
 		"asset": "patience.png",
@@ -52,56 +54,56 @@ const BALLS = {
 		"name": "Bounty",
 		"description":
 		(
-			"Score PvP: earliest shot earns 25 match points; tied tables each earn 25. "
-			+ "Co-op and Race: pocket within the first three shots for +10 run points."
+			"#POCKET: Score PvP's earliest shot earns [k]25 match points[/k]; tied tables each earn 25. "
+			+ "Co-op/Race: pot within [k]3 shots[/k] for [k]+10 run points[/k]."
 		),
 		"color": Color("eb5876"),
 		"asset": "bounty.png",
-		"rarity": Global.RARITY.COMMON
+		"rarity": Global.RARITY.RARE
 	},
 	"TOGETHER_BANKROLL":
 	{
 		"name": "Bankroll",
 		"description":
 		(
-			"Bounce this ball off a cushion and pocket it in the same shot for 2 coins. "
-			+ "Once per table per round."
+			"#POCKET: [money]+2 coins[/money] after this ball hits a [k]cushion[/k] in the same shot. "
+			+ "[br][k]Once per table per round.[/k]"
 		),
 		"color": Color("efd44e"),
 		"asset": "bankroll.png",
-		"rarity": Global.RARITY.COMMON
+		"rarity": Global.RARITY.UNCOMMON
 	},
 	"TOGETHER_LIFELINE":
 	{
 		"name": "Lifeline",
 		"description":
 		(
-			"Pocket to restore 1 health, up to this difficulty's starting health. "
-			+ "Once per table per round."
+			"#POCKET: restore [tgood]1 health[/tgood], up to this difficulty's starting health. "
+			+ "[br][k]Once per table per round.[/k]"
 		),
 		"color": Color("55ce94"),
 		"asset": "lifeline.png",
-		"rarity": Global.RARITY.UNCOMMON
+		"rarity": Global.RARITY.RARE
 	},
 	"TOGETHER_ENCORE":
 	{
 		"name": "Encore",
 		"description":
 		(
-			"Pocket to return the most recently pocketed ordinary ball to the table. "
-			+ "Once per table per round."
+			"#POCKET: return the most recently potted [friend]ordinary ball[/friend] to the table. "
+			+ "[br][k]Once per table per round.[/k]"
 		),
 		"color": Color("518fef"),
 		"asset": "encore.png",
-		"rarity": Global.RARITY.UNCOMMON
+		"rarity": Global.RARITY.LEGENDARY
 	},
 	"TOGETHER_DOMINO":
 	{
 		"name": "Domino",
 		"description":
 		(
-			"Pocket to give the next ordinary ball pocketed in this shot +100% value. "
-			+ "Once per table per round."
+			"#POCKET: the next [friend]ordinary ball[/friend] potted this shot earns [k]+100% value[/k]. "
+			+ "[br][k]Once per table per round.[/k]"
 		),
 		"color": Color("e783bb"),
 		"asset": "domino.png",
@@ -112,12 +114,16 @@ const BALLS = {
 var _active = false
 var _stock_key = ""
 var _resources: Dictionary = {}
+var _collection: Node
 
 
 func register_balls() -> bool:
 	if not _resources.is_empty():
 		return _resources.size() == BALLS.size()
 	var database = get_node("/root/BallDatabase")
+	# PERF-026/030: prepare the complete bounded catalog before publishing it.
+	# A missing asset must not leave duplicate partial database registration.
+	var prepared: Dictionary = {}
 	for id in BALLS:
 		var definition: Dictionary = BALLS[id]
 		var resource = BallResource.new()
@@ -132,14 +138,126 @@ func register_balls() -> bool:
 		resource.start_level = 1
 		resource.rarity = definition.rarity
 		resource.tags = []
-		resource.from_set = "TOGETHER"
+		resource.from_set = SET_ID
 		resource.can_drop = _active
 		resource.upgradeable = false
+		prepared[id] = resource
+	for id in prepared:
+		var resource = prepared[id]
 		database.id_to_ball[id] = resource
 		database.balls.append(resource)
 		database.plain_ball_ids.append(id.to_lower())
-		_resources[id] = resource
+	_resources = prepared
+	_register_collection_set(database)
+	_collection = (
+		load(get_script().resource_path.get_base_dir().path_join("multiplayer_collection.gd")).new()
+	)
+	add_child(_collection)
+	_collection.setup(self)
 	return true
+
+
+func _register_collection_set(database: Node) -> void:
+	var ball_set = BallSet.new()
+	ball_set.id = SET_ID
+	ball_set.name = "Together"
+	ball_set.description = "Eight shop-only balls. Enable Multiplayer balls in Mod settings to find them during a run."
+	ball_set.main_color = Color("29c7d8")
+	# Registration is permanent presentation; shop eligibility remains separate.
+	ball_set.can_be_chosen_by_shop = false
+	ball_set.available_in_demo = true
+	var native_set = database.get_set_by_id("CLASSIC")
+	if native_set != null:
+		ball_set.poster = native_set.poster
+		ball_set.small_icon = native_set.small_icon
+	database.id_to_set[SET_ID] = ball_set
+
+
+static func concepts_for(id: String) -> Array:
+	var concepts: Array = []
+	match id:
+		"TOGETHER_RELAY":
+			concepts = [
+				_concept(
+					"Teammate",
+					"Another player seated at your table. A contact must be from an [k]earlier accepted shot[/k]; the same shot cannot trigger Relay.",
+					"friend"
+				)
+			]
+		"TOGETHER_CALL":
+			concepts = [
+				_concept(
+					"Called pocket",
+					"After shooting, choose the Called Shot ball, then [k]click a fixed pocket[/k] before the next shot starts. Only that next shot can earn the bonus.",
+					"pocket"
+				)
+			]
+		"TOGETHER_PATIENCE":
+			concepts = [
+				_concept(
+					"Charges",
+					"[k]One charge[/k] is stored after each completed shot that hits an object ball while Patience remains on the table. Its own pot cannot add a charge.",
+					"lvl"
+				)
+			]
+		"TOGETHER_BOUNTY":
+			concepts = [
+				_concept(
+					"Match points",
+					"Score PvP compares the [k]accepted shot number[/k] on which each table pots Bounty. The earliest shot wins; tied tables each earn the reward.",
+					"star"
+				),
+				_concept(
+					"Run points",
+					"Co-op and Race add points to the current round instead. The pot must happen within the table's [k]first three accepted shots of the match[/k].",
+					"pocket"
+				)
+			]
+		"TOGETHER_BANKROLL":
+			concepts = [
+				_concept(
+					"Cushion",
+					"[k]Bankroll itself[/k] must touch the table rail before its pot in the same shot. A bounce by the cue ball or another ball does not count.",
+					"pocket"
+				),
+				_round_limit()
+			]
+		"TOGETHER_LIFELINE":
+			concepts = [_round_limit()]
+		"TOGETHER_ENCORE":
+			concepts = [
+				_concept(
+					"Ordinary ball",
+					"An object ball [k]without a multiplayer-ball effect[/k]. Encore returns the most recent eligible non-fleeting pot; it never returns the cue ball or a snack.",
+					"friend"
+				),
+				_round_limit()
+			]
+		"TOGETHER_DOMINO":
+			concepts = [
+				_concept(
+					"Ordinary ball",
+					"An object ball [k]without a multiplayer-ball effect[/k]. Only the next eligible pot in this accepted shot receives Domino's bonus.",
+					"friend"
+				),
+				_round_limit()
+			]
+	return concepts
+
+
+static func _round_limit() -> Dictionary:
+	return _concept(
+		"Once per table per round",
+		"This reward is [k]shared by the whole table[/k]. Extra copies, mixes and different shooters cannot refresh it until the next round.",
+		"lvl"
+	)
+
+
+static func _concept(title: String, description: String, icon: String) -> Dictionary:
+	var path = (
+		"res://effects/star_particle.png" if icon == "star" else "res://ui/tag-icons/%s.png" % icon
+	)
+	return {"title": title, "description": description, "color": "#286e7b", "icon": path}
 
 
 func set_active(enabled: bool) -> void:
@@ -161,6 +279,7 @@ func prepare_deck(deck: Resource) -> Resource:
 # Opt-in shops: roughly one in six stocks/rerolls rolls a multiplayer offer.
 # Deterministic on stock_key so host and reconnects stay consistent.
 const SHOP_OFFER_CHANCE = 6
+
 
 func ensure_shop_offer(shop) -> void:
 	if not _active or not is_instance_valid(shop) or not shop.is_open:

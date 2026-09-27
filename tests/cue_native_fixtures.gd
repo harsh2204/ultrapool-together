@@ -9,8 +9,20 @@ const CueVisuals = preload("../mod/cue_visuals.gd")
 const CueInventory = preload("../mod/cue_inventory.gd")
 const CueEffects = preload("../mod/cue_effects.gd")
 const SPRITE_FIELDS = [
-	"texture", "transform", "offset", "centered", "flip_h", "flip_v", "hframes", "vframes",
-	"frame", "region_enabled", "region_rect", "modulate", "self_modulate", "visible"
+	"texture",
+	"transform",
+	"offset",
+	"centered",
+	"flip_h",
+	"flip_v",
+	"hframes",
+	"vframes",
+	"frame",
+	"region_enabled",
+	"region_rect",
+	"modulate",
+	"self_modulate",
+	"visible"
 ]
 
 
@@ -87,12 +99,25 @@ func run(mod: Node, game: Node, capture: Callable, check: Callable) -> void:
 			check.call(cue.flip_h, "native cues: %s points its tip toward the ball" % model.label)
 	CueVisuals.apply(player, "house", "native")
 	check.call(
-		cue.texture == native_texture and cue.transform.is_equal_approx(native_transform)
-		and cue.offset.is_equal_approx(native_offset),
+		(
+			cue.texture == native_texture
+			and cue.transform.is_equal_approx(native_transform)
+			and cue.offset.is_equal_approx(native_offset)
+		),
 		"native cues: switching to House restores native geometry"
 	)
-	var bought: Dictionary = mod.cue_inventory.transact(1, "cue_buy", "bankshot", "native", 4.0)
-	check.call(bought.accepted, "native cues: Bankshot is owned before the equipped preview")
+	var bankshot_price: float = CueModels.entry("bankshot").price
+	var bought: Dictionary = mod.cue_inventory.transact(
+		1, "cue_buy", "bankshot", "native", bankshot_price
+	)
+	check.call(
+		(
+			bought.accepted
+			and is_equal_approx(bought.cost, bankshot_price)
+			and mod.cue_inventory.model_for(1) == "bankshot"
+		),
+		"native cues: exact catalog funding buys and equips Bankshot before the preview"
+	)
 	player.preparing_shot = true
 	player.holding_shot = true
 	player.shot = Vector2(145, -80)
@@ -156,7 +181,9 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 	var original_items: Dictionary = {}
 	for candidate in game.balls:
 		original_items[candidate.get_instance_id()] = candidate.ball_item
-	var wrapper = load(mod.get_script().resource_path.get_base_dir().path_join("multiplayer_ball.gd"))
+	var wrapper = load(
+		mod.get_script().resource_path.get_base_dir().path_join("multiplayer_ball.gd")
+	)
 	var sibling = SiblingService.new()
 	mod.add_child(sibling)
 	mod.adapter._replace_script(body, wrapper)
@@ -198,7 +225,8 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 		effects.commit_pocket(award)
 		effects.commit_pocket(effects.record_pocket(body, pocket, 1.0))
 		check.call(
-			is_equal_approx(game.score, baseline + points), "native cue effects: repeated pot is deduplicated"
+			is_equal_approx(game.score, baseline + points),
+			"native cue effects: repeated pot is deduplicated"
 		)
 		effects.finish_shot()
 		body.alive = true
@@ -221,7 +249,9 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 		body.pocketed_this_frame = false
 		var source_data = body.ball_item.data
 		var database = mod.get_node("/root/BallDatabase")
-		if check.call(database.id_to_ball.has("GAMEBALL"), "native cue effects: GAMEBALL data exists"):
+		if check.call(
+			database.id_to_ball.has("GAMEBALL"), "native cue effects: GAMEBALL data exists"
+		):
 			body.ball_item.data = database.id_to_ball["GAMEBALL"]
 			body.ball_item.base_score = 3
 			game.set_score(float(game.get_required_score()) - 0.05)
@@ -245,7 +275,11 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 			body.ball_item.data = source_data
 	effects.end_session()
 	check.call(
-		body.get_script() == wrapper and body.together_balls == sibling and body.cue_effects == null,
+		(
+			body.get_script() == wrapper
+			and body.together_balls == sibling
+			and body.cue_effects == null
+		),
 		"native cue effects: teardown preserves another active service's shared wrapper"
 	)
 	effects.free()
@@ -264,14 +298,20 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 		if child is ScoreDisplay and child not in saved.children:
 			child.queue_free()
 	check.call(
-		body.get_script() == saved.script and body.ball_item == saved.item
-		and game.score == saved.score and body.alive and not body.gone,
+		(
+			body.get_script() == saved.script
+			and body.ball_item == saved.item
+			and game.score == saved.score
+			and body.alive
+			and not body.gone
+		),
 		"native cue effects: fixture restores the native ball, score, and HUD without potting"
 	)
 	var references_preserved = true
 	for candidate in game.balls:
-		references_preserved = references_preserved and (
-			candidate.ball_item == original_items.get(candidate.get_instance_id())
+		references_preserved = (
+			references_preserved
+			and (candidate.ball_item == original_items.get(candidate.get_instance_id()))
 		)
 	check.call(references_preserved, "native cue effects: all native item references survive hooks")
 
@@ -279,10 +319,17 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 func _object_ball(game):
 	for body in game.balls:
 		if (
-			is_instance_valid(body) and body is Ball and not body is PlayerBall
-			and not body.is_passive and body.alive and not body.gone and not body.is_shielded()
-			and not body.has_id("WEREWOLF") and not body.has_id("POT")
-			and body.ball_item != null and body.get_score() > 0
+			is_instance_valid(body)
+			and body is Ball
+			and not body is PlayerBall
+			and not body.is_passive
+			and body.alive
+			and not body.gone
+			and not body.is_shielded()
+			and not body.has_id("WEREWOLF")
+			and not body.has_id("POT")
+			and body.ball_item != null
+			and body.get_score() > 0
 		):
 			return body
 	return null

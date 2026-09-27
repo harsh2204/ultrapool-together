@@ -2,14 +2,20 @@ extends SceneTree
 ## Run only inside the explicitly authorized capture harness. This probe exercises
 ## pure cue ownership, shared-budget sequencing, and rejected/isolated snapshots.
 
+const CueModels = preload("../mod/cue_models.gd")
+
 var checks = 0
 var failures: Array[String] = []
 
 
 func _initialize() -> void:
-	var script = load(get_script().resource_path.get_base_dir().path_join("../mod/cue_inventory.gd"))
+	var script = load(
+		get_script().resource_path.get_base_dir().path_join("../mod/cue_inventory.gd")
+	)
 	var rack = script.new()
-	_check(rack.snapshot() == {"revision": 0, "players": []}, "new inventory has no stale run members")
+	_check(
+		rack.snapshot() == {"revision": 0, "players": []}, "new inventory has no stale run members"
+	)
 	_check(rack.model_for(99) == "house", "missing actors fall back to native handling")
 	_check(rack.finish_for(99) == "native", "missing actors fall back to the native finish")
 	var roster = [{"id": 20, "cue": "emerald"}, {"id": 10, "cue": "coral"}]
@@ -21,6 +27,8 @@ func _initialize() -> void:
 	roster[0].cue = "violet"
 	_check(rack.finish_for(20) == "emerald", "roster changes cannot mutate the run rack")
 	var before: Dictionary = rack.snapshot()
+	var finesse_price: float = CueModels.entry("finesse").price
+	var bankshot_price: float = CueModels.entry("bankshot").price
 	_reject(rack, 99, "cue_buy", "finesse", "gold", 50.0, "outsiders cannot acquire a cue")
 	_reject(rack, 20, "buy", "finesse", "gold", 50.0, "unknown actions fail closed")
 	_reject(rack, 20, "cue_buy", "unknown", "gold", 50.0, "unknown models fail closed")
@@ -28,20 +36,40 @@ func _initialize() -> void:
 	_reject(rack, 20, "cue_buy", "finesse", " GOLD ", 50.0, "wire finishes must be canonical")
 	_reject(rack, 20, "cue_equip", "finesse", "gold", 50.0, "unowned cues cannot be equipped")
 	_reject(rack, 20, "cue_finish", "finesse", "gold", 50.0, "finishes cannot unlock a model")
-	_reject(rack, 20, "cue_buy", "finesse", "gold", 3.99, "insufficient shared money rejects")
+	_reject(
+		rack,
+		20,
+		"cue_buy",
+		"finesse",
+		"gold",
+		finesse_price - 0.01,
+		"even a fractional shortfall rejects the inexpensive cue"
+	)
 	for invalid_money in [-1.0, NAN, INF, -INF]:
 		_reject(rack, 20, "cue_buy", "finesse", "gold", invalid_money, "invalid money rejects")
 	_check(rack.snapshot() == before, "rejected commands leave all ownership and finishes intact")
-	var money = 6.0
+	# Either request fits the original wallet; the host must debit the first
+	# accepted purchase before admitting another player's more expensive request.
+	var money = bankshot_price
 	var purchase: Dictionary = rack.transact(20, "cue_buy", "finesse", "gold", money)
 	_check(purchase.accepted and purchase.changed, "a valid purchase succeeds and changes the rack")
-	_check(purchase.cost > 0 and purchase.cost <= money, "purchase returns its bounded shared cost")
+	_check(
+		is_equal_approx(purchase.cost, finesse_price), "purchase charges the selected cue's price"
+	)
 	money -= purchase.cost
 	_check(rack.model_for(20) == "finesse", "a purchased cue is immediately equipped")
 	_check(rack.finish_for(20) == "gold", "the purchase adopts the selected cosmetic finish")
 	_check(rack.player(20).owned == ["house", "finesse"], "purchase retains the free House cue")
 	_reject(rack, 20, "cue_buy", "finesse", "gold", 50.0, "duplicate purchase cannot debit again")
-	_reject(rack, 10, "cue_buy", "firm", "rose", money, "the next player sees spent shared money")
+	_reject(
+		rack,
+		10,
+		"cue_buy",
+		"bankshot",
+		"rose",
+		money,
+		"a previously affordable higher-priced request sees the first player's shared debit"
+	)
 	_check(rack.model_for(10) == "house", "failed simultaneous spending preserves the other rack")
 	var equip: Dictionary = rack.transact(20, "cue_equip", "house", "ice", money)
 	_check(equip.accepted and equip.changed and equip.cost == 0, "returning to House is free")
@@ -57,7 +85,9 @@ func _initialize() -> void:
 	_check(script.valid_snapshot(saved), "the complete authoritative rack passes wire validation")
 	var guest = script.new()
 	_check(guest.apply_snapshot(saved), "a guest hydrates all run racks from one snapshot")
-	_check(guest.snapshot() == rack.snapshot(), "initial sync reproduces ownership and presentation")
+	_check(
+		guest.snapshot() == rack.snapshot(), "initial sync reproduces ownership and presentation"
+	)
 	_check(guest.apply_snapshot(saved), "an equal snapshot remains a valid no-op")
 	saved.players[0].owned.append("firm")
 	saved.players[1].finish = "rose"
@@ -70,15 +100,95 @@ func _initialize() -> void:
 	exported.players.clear()
 	_check(guest.snapshot() == rack.snapshot(), "exported snapshot arrays are isolated")
 	_check_bad_snapshots(script, guest)
+	_check_price_tiers(script)
 	_check_reordered_snapshots(script)
 	_check_reset(rack)
 	_finish()
 
 
+func _check_price_tiers(script) -> void:
+	var rack = script.new()
+	rack.reset([{"id": 10, "cue": "native"}, {"id": 20, "cue": "native"}])
+	var low_price: float = CueModels.entry("finesse").price
+	var high_price: float = CueModels.entry("closer").price
+	_check(
+		high_price > low_price and low_price > 0.0,
+		"the affordability cases use distinct paid tiers"
+	)
+	_reject(
+		rack,
+		10,
+		"cue_buy",
+		"closer",
+		"gold",
+		high_price - 0.01,
+		"a high-priced cue cannot use a cheaper model's affordability threshold"
+	)
+	var money = high_price + low_price
+	var high: Dictionary = rack.transact(10, "cue_buy", "closer", "gold", money)
+	_check(high.accepted and high.changed, "a wallet covering the high tier admits Closer")
+	_check(is_equal_approx(high.cost, high_price), "the high-tier purchase debits its full price")
+	money -= high.cost
+	_check(
+		is_equal_approx(money, low_price), "the shared wallet retains exactly one inexpensive cue"
+	)
+	_reject(
+		rack,
+		20,
+		"cue_buy",
+		"closer",
+		"ice",
+		money,
+		"another player cannot acquire the high tier with the remaining low-tier balance"
+	)
+	var low: Dictionary = rack.transact(20, "cue_buy", "finesse", "ice", money)
+	_check(low.accepted and low.changed, "an exactly affordable inexpensive cue still succeeds")
+	_check(is_equal_approx(low.cost, low_price), "the second purchase uses its own lower price")
+	money -= low.cost
+	_check(
+		is_zero_approx(money),
+		"heterogeneous purchases exhaust the shared wallet without overdrawing"
+	)
+	_check(
+		rack.model_for(10) == "closer" and rack.model_for(20) == "finesse",
+		"shared spending preserves each buyer's independent equipment"
+	)
+	_reject(
+		rack,
+		10,
+		"cue_buy",
+		"bankshot",
+		"gold",
+		money,
+		"an empty shared wallet cannot fund another tier"
+	)
+	var equip: Dictionary = rack.transact(10, "cue_equip", "house", "native", money)
+	_check(
+		equip.accepted and equip.cost == 0,
+		"an exhausted wallet still permits free equipment changes"
+	)
+	equip = rack.transact(10, "cue_equip", "closer", "gold", money)
+	_check(
+		equip.accepted and equip.cost == 0,
+		"re-equipping an owned high-priced cue does not charge again"
+	)
+	# Reset isolates the upper equality boundary from the earlier surplus wallet.
+	rack.reset([{"id": 10, "cue": "native"}])
+	high = rack.transact(10, "cue_buy", "closer", "gold", high_price)
+	_check(
+		high.accepted and high.changed and is_equal_approx(high.cost, high_price),
+		"the highest-priced cue accepts exact affordability without requiring spare money"
+	)
+
+
 func _check_bad_snapshots(script, rack) -> void:
 	var valid: Dictionary = rack.snapshot()
 	var cases: Array = [
-		null, [], {}, {"players": []}, {"revision": 0, "players": {}},
+		null,
+		[],
+		{},
+		{"players": []},
+		{"revision": 0, "players": {}},
 		{"revision": 0, "players": [], "extra": true},
 	]
 	for revision in [-1, 1.0, "1", null, true]:
@@ -90,10 +200,20 @@ func _check_bad_snapshots(script, rack) -> void:
 		missing.players[0].erase(field)
 		cases.append(missing)
 	for field_and_value in [
-		["id", "10"], ["id", 10.0], ["id", 0], ["id", -10],
-		["owned", "house"], ["owned", []], ["owned", ["house", "house"]],
-		["owned", ["house", "unknown"]], ["owned", ["finesse"]], ["owned", ["house", 3]],
-		["equipped", "firm"], ["equipped", 2], ["finish", "GOLD"], ["finish", "unknown"],
+		["id", "10"],
+		["id", 10.0],
+		["id", 0],
+		["id", -10],
+		["owned", "house"],
+		["owned", []],
+		["owned", ["house", "house"]],
+		["owned", ["house", "unknown"]],
+		["owned", ["finesse"]],
+		["owned", ["house", 3]],
+		["equipped", "firm"],
+		["equipped", 2],
+		["finish", "GOLD"],
+		["finish", "unknown"],
 		["finish", 2],
 	]:
 		var malformed: Dictionary = valid.duplicate(true)
@@ -107,10 +227,15 @@ func _check_bad_snapshots(script, rack) -> void:
 	cases.append(duplicate_actor)
 	var too_many = {"revision": valid.revision, "players": []}
 	for id in range(1, 10):
-		too_many.players.append({"id": id, "owned": ["house"], "equipped": "house", "finish": "native"})
+		too_many.players.append(
+			{"id": id, "owned": ["house"], "equipped": "house", "finish": "native"}
+		)
 	cases.append(too_many)
 	for malformed in cases:
-		_check(not script.valid_snapshot(malformed), "malformed cue snapshots are rejected at the boundary")
+		_check(
+			not script.valid_snapshot(malformed),
+			"malformed cue snapshots are rejected at the boundary"
+		)
 		_check(not rack.apply_snapshot(malformed), "malformed cue snapshots cannot hydrate")
 		_check(rack.snapshot() == valid, "rejected snapshots preserve the last complete state")
 	_check(
@@ -147,17 +272,34 @@ func _check_reordered_snapshots(script) -> void:
 	host.transact(20, "cue_finish", "house", "amber", 50.0)
 	host.transact(20, "cue_equip", "house", "amber", 50.0)
 	host.transact(20, "cue_buy", "finesse", "gold", 50.0)
-	_check(host.snapshot() == finished, "unchanged and rejected actions never advance inventory revision")
+	_check(
+		host.snapshot() == finished,
+		"unchanged and rejected actions never advance inventory revision"
+	)
 	host.transact(20, "cue_equip", "finesse", "gold", 50.0)
 	var restored: Dictionary = host.snapshot()
-	_check(guest.apply_snapshot(restored), "newer state may deliberately return to an earlier appearance")
-	_check(guest.snapshot() == restored, "higher revision imports even when it resembles older state")
+	_check(
+		guest.apply_snapshot(restored),
+		"newer state may deliberately return to an earlier appearance"
+	)
+	_check(
+		guest.snapshot() == restored, "higher revision imports even when it resembles older state"
+	)
 	var newer_identical: Dictionary = restored.duplicate(true)
 	newer_identical.revision += 2
-	_check(guest.apply_snapshot(newer_identical), "newer identical rows still advance the accepted version")
+	_check(
+		guest.apply_snapshot(newer_identical),
+		"newer identical rows still advance the accepted version"
+	)
 	guest.apply_snapshot(finished)
-	_check(guest.snapshot() == newer_identical, "an identical-row import still protects against later stale state")
-	_check(guest.apply_snapshot(newer_identical), "equal authoritative snapshots remain accepted no-ops")
+	_check(
+		guest.snapshot() == newer_identical,
+		"an identical-row import still protects against later stale state"
+	)
+	_check(
+		guest.apply_snapshot(newer_identical),
+		"equal authoritative snapshots remain accepted no-ops"
+	)
 	_check(guest.snapshot() == newer_identical, "equal snapshots retain their revision and data")
 
 
@@ -171,7 +313,10 @@ func _check_reset(rack) -> void:
 	_check(rack.reset([{"id": 20, "cue": "invalid"}]), "unknown saved cosmetics recover safely")
 	_check(rack.finish_for(20) == "native", "unknown saved cosmetics restore native appearance")
 	_check(not rack.reset([{"id": 20}, {"id": 20}]), "duplicate run identities reject reset")
-	_check(rack.snapshot() == {"revision": 0, "players": []}, "a rejected reset cannot retain a previous run")
+	_check(
+		rack.snapshot() == {"revision": 0, "players": []},
+		"a rejected reset cannot retain a previous run"
+	)
 	var roster: Array = []
 	for id in range(1, 9):
 		roster.append({"id": id})
@@ -183,7 +328,9 @@ func _check_reset(rack) -> void:
 	_check(rack.reset(), "disconnect teardown can clear the rack without a roster")
 
 
-func _reject(rack, actor: int, action: String, model: String, finish: String, money: float, label: String):
+func _reject(
+	rack, actor: int, action: String, model: String, finish: String, money: float, label: String
+):
 	var before: Dictionary = rack.snapshot()
 	var result: Dictionary = rack.transact(actor, action, model, finish, money)
 	_check(not result.accepted and not result.changed and result.cost == 0, label)

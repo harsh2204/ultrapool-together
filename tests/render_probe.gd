@@ -129,6 +129,18 @@ func _run():
 	)
 	await fixtures.check_native_run_votes(mod, _capture)
 	await fixtures.capture_all_menu(mod, _capture)
+	var collection_script = load(
+		get_script().resource_path.get_base_dir().path_join("multiplayer_collection_fixture.gd")
+	)
+	if not _check(
+		collection_script != null and collection_script.can_instantiate(),
+		"compiled multiplayer collection fixture"
+	):
+		_finish()
+		return
+	if not await collection_script.new().run(mod, _capture, _check):
+		_finish()
+		return
 	var global_node = get_node("/root/Global")
 	mod._local_id = 1
 	mod.table_leader_id = 1

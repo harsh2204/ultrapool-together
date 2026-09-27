@@ -31,6 +31,8 @@ Transport path: `transport.gd::_process/_receive_wire` → synchronous `main._re
 
 `presence.gd` sends local cursor/aim presentation. `cue_catalog.gd` and `cue_prefs.gd` provide personal finishes. `cue_models.gd`, `cue_inventory.gd`, `cue_effect_rules.gd` and `cue_effects.gd` own the fifteen-cue catalog, authoritative run equipment and bounded host perks. `cue_visuals.gd` caches cue art and changes the native sprite without taking ownership of native pivot fade or charge pose.
 
+`multiplayer_ball_catalog.gd` registers the always-visible `TOGETHER` collection set independently of its opt-in drop gate. `multiplayer_collection.gd` appends one native gallery page at readiness and preserves initialized inspector fields when installing `multiplayer_info_display.gd`. The latter extends native keyword helpers using only the existing four panels. Native Play-menu arrays, discovery records and starting decks remain separate from collection visibility. `tests/multiplayer_collection_fixture.gd` covers this through the shared capture harness.
+
 ## Shop, snack bar and mixer
 
 The **host** uses the installed native `res://ui/shop.gd`. `mod/native_shop.gd` is the **guest** wrapper; its save/play/reroll callbacks are intentionally inert. Editing that file alone does not add host gameplay.

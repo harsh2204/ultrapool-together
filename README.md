@@ -50,13 +50,13 @@ Everyone must use v0.10.0 and a **UP9** room code (protocol 9). Older versions c
 
 ## Multiplayer balls (opt-in)
 
-The host can enable **Multiplayer balls** from the lobby's **Mod settings** gear (off by default). Relay, Called Shot, Patience, Bounty, Bankroll, Lifeline, Encore, and Domino never enter the starting rack; when enabled they appear only rarely in the shared shop. See [ball effects and rules](docs/MULTIPLAYER_BALLS.md).
+The host can enable **Multiplayer balls** from the lobby's **Mod settings** gear (off by default). Relay, Called Shot, Patience, Bounty, Bankroll, Lifeline, Encore, and Domino never enter the starting rack; when enabled they appear only rarely in the shared shop. The native collection always includes a **Together** set with all eight balls, rarity and highlighted effect explanations, including when the option is off. See [ball effects and rules](docs/MULTIPLAYER_BALLS.md).
 
 Six additional **expansion sets** (Phases, Morph, Tide, Relic, Tarot, Zodiac) use the same shop-only pattern. Open **Mod settings** in the lobby for Multiplayer balls, Clone-table rounds, **Shared shop access** (on by default), and an **Expansion sets** master toggle (default off) that reveals the six per-set toggles. Host rules lock at match start; personal view preferences remain available. See [expansion sets](docs/EXPANSION_SETS.md) and [shop access/view following](docs/SYNC_SHOP.md). **Status: implemented, unmeasured.**
 
 ## Custom cues
 
-Visit the **Cue Workshop to the right of the snack bar** to browse fifteen distinct cues, preview ten free finishes, and buy or equip a personal cue. House is included; other cues cost 4€ from the shared run wallet and last for that run. Small handling changes or capped situational score perks add variety without extra shots or permanent upgrades. Finishes persist between runs, and teammates see the current shooter's cue. See the [full roster and balance rules](docs/CUSTOM_CUES.md). **Status: implemented, unmeasured.**
+Visit the **Cue Workshop to the right of the snack bar** to browse fifteen distinct cues, preview ten free finishes, and buy or equip a personal cue. House is included; other cues cost 2–8€ from the shared run wallet, with reliable scoring perks priced above handling preferences and last for that run. Small handling changes or capped situational score perks add variety without extra shots or permanent upgrades. Finishes persist between runs, and teammates see the current shooter's cue. See the [full roster and balance rules](docs/CUSTOM_CUES.md). **Status: implemented, unmeasured.**
 
 Rook runs the counter with upright cue racks, a short next/previous slide animation, and a felt-lined case displaying your equipped cue. Purple icon-only arrows follow the native shop pattern. The revised presentation has bounded Windows rendering and animation-capture coverage; live and cross-platform acceptance remains open.
 

@@ -14,7 +14,7 @@ The composition fits narrower windows at resize boundaries while keeping Rook al
 
 ## Ownership and economy
 
-House is included. Every other cue costs **4€ from the shared run wallet** and belongs to the purchasing player for that run. Buying also equips it. Switching owned cues and finishes while shopping is free. There are no refunds, stacked cues, randomized offers, or permanent gameplay unlocks.
+House is included. Paid cues cost **2–8€ from the shared run wallet** and belong to the purchasing player for that run. Handling preferences cost 2€; reliable, repeatable score perks cost more. Difficult tricks receive larger conditional rewards instead of simply carrying the highest price. Buying also equips the cue. Switching owned cues and finishes while shopping is free. There are no refunds, stacked cues, randomized offers, or permanent gameplay unlocks.
 
 New runs/rematches start with House. Confirmed finish choices persist in the mod's isolated `user://together_cue.cfg`; ownership never comes from local preferences. Multiplayer run continuation across application restarts remains unsupported.
 
@@ -22,31 +22,35 @@ Ten free cosmetic finishes: Native, Emerald, Coral, Gold, Violet, Ice, Rose, Cha
 
 ## Complete roster
 
-| Cue | Visual design | Effect |
-| --- | --- | --- |
-| House | Maple, black wrap, ivory ferrule | Native power and scoring. Free. |
-| Finesse | Pale ash, teal wrap, brass diamonds | Gentler light shots; firmer heavy shots. |
-| Firm | Chestnut, burgundy grip, brass bands | Firmer light shots; gentler heavy shots. |
-| Bankshot | Walnut, emerald wrap, single chevrons | Pot a ball after a rail hit: +4% of its base value, capped at +2 points. |
-| Double Rail | Ebony, copper grip, paired chevrons | Pot a ball after two rail contacts: +6%, capped at +2. |
-| Carom | Maple, navy grip, interlocking diamonds | Pot a ball after it contacts two distinct other object balls: +6%, capped at +2. |
-| Silk | Ivory ash, rose silk, silver inlay | Pot on a light shot (input length ≤90): +3%, capped at +1.5. |
-| Thunder | Charcoal, violet grip, gold lightning | Pot on a heavy shot (input length ≥170): +3%, capped at +1.5. |
-| Opener | Honey wood, orange grip, rising sun | Pot on the round's first accepted shot: +5%, capped at +2. |
-| Closer | Walnut, green grip, three ivory dots | Pot when at most three ordinary live object balls remain at shot start: +4%, capped at +2. |
-| Comeback | Auburn wood, red grip, feather inlay | Pot after your previous shot this round made no eligible pots: +5%, capped at +2. Does not trigger on your first shot. |
-| Relay | Maple, teal/coral grip, brass links | Pot after a different teammate's immediately preceding shot made an eligible pot: +3%, capped at +1.5. |
-| Corner | Oak, burgundy grip, ivory geometry | Pot into a fixed corner pocket: +2%, capped at +1. |
-| Sidewinder | Olivewood, jade grip, brass wave | Pot into a fixed middle pocket: +3%, capped at +1.5. |
-| Clean | Bleached ash, white linen, black pinstripes | Pot a ball that did not contact a rail that shot: +2%, capped at +1. |
+| Cue | Price | Visual design | Effect |
+| --- | ---: | --- | --- |
+| House | Free | Maple, black wrap, ivory ferrule | Native power and scoring. |
+| Finesse | 2€ | Pale ash, teal wrap, brass diamonds | Gentler light shots; firmer heavy shots. |
+| Firm | 2€ | Chestnut, burgundy grip, brass bands | Firmer light shots; gentler heavy shots. |
+| Clean | 3€ | Bleached ash, white linen, black pinstripes | Pot a ball without a rail contact that shot: +3%, capped at +1. |
+| Opener | 3€ | Honey wood, orange grip, rising sun | Pot on the round's first accepted shot: +6%, capped at +1.5. One table-wide opportunity per round. |
+| Silk | 4€ | Ivory ash, rose silk, silver inlay | Pot on a light shot (input length ≤90): +4%, capped at +1.5. |
+| Thunder | 4€ | Charcoal, violet grip, gold lightning | Pot on a heavy shot (input length ≥170): +4%, capped at +1.5. |
+| Comeback | 4€ | Auburn wood, red grip, feather inlay | Pot after your previous shot this round made no eligible pots: +6%, capped at +1.5. Does not trigger on your first shot. |
+| Corner | 5€ | Oak, burgundy grip, ivory geometry | Pot into a fixed corner pocket: +3%, capped at +1.5. |
+| Sidewinder | 5€ | Olivewood, jade grip, brass wave | Pot into a fixed middle pocket: +5%, capped at +1.5. |
+| Carom | 5€ | Maple, navy grip, interlocking diamonds | Pot a ball after it contacts two distinct other object balls: +10%, capped at +2.5. |
+| Double Rail | 6€ | Ebony, copper grip, paired chevrons | Pot a ball after it makes two rail contacts: +9%, capped at +2.5. |
+| Bankshot | 7€ | Walnut, emerald wrap, single chevrons | Pot a ball after it hits a rail: +6% of its unmultiplied value, capped at +2. |
+| Relay | 7€ | Maple, teal/coral grip, brass links | Pot after a different teammate's immediately preceding shot made an eligible pot: +5%, capped at +2. |
+| Closer | 8€ | Walnut, green grip, three ivory dots | Pot with at most three ordinary live object balls at shot start: +5%, capped at +2. |
 
 ## Balance bounds
 
 Score perks trigger only on the **first qualifying pot per shot**. Bonuses use positive **unmultiplied** ball value, retain fractions without rounding upward, and share a **+4-point cap per player per round across every cue**. Changing cues cannot reset that budget. Shielded respawns, virtual pockets, non-scoring pots, and duplicate callbacks cannot farm bonuses. The equipped cue is frozen at shot acceptance.
 
+Contact conditions track the potted ball itself, not the cue ball. Closer counts live ordinary objects: the cue ball and balls with multiplayer or expansion-set effects in either mixed half are excluded. The Relay cue is a separate perk from the Relay multiplayer ball.
+
 Bonus score is applied after the native pot completes and does not trigger native SCORE/SCORE-SELF chains. Crossing the native required-score threshold can still trigger REACH-SCORE and its normal effects. No cue directly grants extra shots, money, health, random outcomes, or persistent ball-stat changes.
 
 Finesse/Firm reshape power with `t=(length-50)/150`, then `t + bias*t*(1-t)*(1-2*t)`, bias −0.30/+0.30. They preserve direction, monotonicity, minimum/maximum input 50/200, midpoint 125, and maximum power. The largest adjustment is about 4.33 vector units, or 2.17% of full power. Other cues use native power.
+
+Prices account for opportunity frequency: Closer already qualifies in the three-ball Classic starter, while Opener has only one table-wide attempt. Double Rail retains a larger cap than Bankshot so the harder requirement still has a payoff on high-value balls. Native level-one balls cost 3/4/6/9€ by rarity and a round win pays 4€; an 8€ cue is a meaningful shared-wallet choice. Score can indirectly improve native overflow payout, even though cues never grant money directly.
 
 These are initial tuning values. Balance review should compare identical seeds, decks, difficulties, and player counts, measuring proc frequency, total bonus contribution, and shared-money opportunity cost.
 
@@ -75,7 +79,7 @@ Windows capture `20260927T070455Z-1962c3ec` passed all 731 harness assertions an
 
 The branch has since been rebased onto main `c07f6be`, preserving native initial-click/charge behavior, opt-in shop-view following, client/spectator table-effect replication, and the localized difficulty/native-menu fixes. All 109 GDScript files parsed after integration. The older captures do not verify the rebased Rook layout; the newer native run below does.
 
-The current Windows run `20260927T104101Z-rook-animation` at gameplay/fixture commit `bb80925` passed **2,175/2,175 harness checks**, produced **79 native screenshots** and **96 actual animation frames**, and preserved installed files and normal saves. It used one muted process, a 30 FPS cap and a 180-second watchdog, exiting normally in about 100 seconds with no script errors. Existing engine shutdown resource warnings remain. The sequence shows next/previous racks, seller idle/blink/talk/nudge, and finish previews while confirmed Finesse/Gold stays in the case. It uses fixture UI callbacks, not a recorded human or live network session.
+The preceding Windows run `20260927T104101Z-rook-animation` at gameplay/fixture commit `bb80925` passed **2,175/2,175 harness checks**, produced **79 native screenshots** and **96 actual animation frames**, and preserved installed files and normal saves. It used one muted process, a 30 FPS cap and a 180-second watchdog, exiting normally in about 100 seconds with no script errors. Existing engine shutdown resource warnings remain. The sequence shows next/previous racks, seller idle/blink/talk/nudge, and finish previews while confirmed Finesse/Gold stays in the case. It uses fixture UI callbacks, not a recorded human or live network session.
 
 The first Rook capture exposed an oversized case despite passing parent-bound assertions. The production fix sets `TextureRect.EXPAND_IGNORE_SIZE` before assigning its texture, and the repeated run checks the actual artwork descendant against the case, viewport and native inventory. PNG encoding now follows the bounded recording so compression does not stall the shown animation. GIF palette conversion uses recorded frame timing; no generated or interpolated frames are used. This establishes rendering/callback correctness for this fixture, not foreground frame-time or input-latency performance.
 Runtime verification uses the existing bounded Capture-Screens harness after authorization. Keep #20 open until the remaining acceptance work is complete.
