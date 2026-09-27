@@ -130,25 +130,34 @@ func _show_cue_aim(vector: Vector2) -> void:
 	# leave the shaft floating at table mid-left (#18).
 	pivot.global_position = global_position
 	pivot.visible = true
-	# Native packs Cue at (-426, 0): shaft extends opposite +X. Aim direction is the
-	# shot vector, so the butt sits behind the ball along -aim (rotation = angle + PI).
-	pivot.rotation = vector.angle() + PI
+	# Native packs Cue at (-426, 0) on local -X. rotation = aim.angle() puts -X behind
+	# the ball (opposite the shot), matching the vanilla aim pose.
+	pivot.rotation = vector.angle()
 	var cue = pivot.get_node_or_null("Cue")
 	if cue is Node2D:
-		cue.position = CUE_REST_OFFSET
+		# Aim pose uses the shoot-anim start offset, not the far RESET park.
+		cue.position = Vector2(-350, 0)
 		cue.visible = true
 		cue.modulate.a = 1.0
 		var shadow = cue.get_node_or_null("CueShadow")
 		if shadow is CanvasItem:
 			shadow.visible = true
+	var anim = pivot.get_node_or_null("AnimationPlayer")
+	if anim is AnimationPlayer:
+		anim.active = true
 
 
 func _hide_cue_pivot() -> void:
 	var pivot = get_node_or_null("CuePivot")
 	if pivot == null:
 		return
+	var anim = pivot.get_node_or_null("AnimationPlayer")
+	if anim is AnimationPlayer and anim.is_playing():
+		anim.stop()
+	if anim is AnimationPlayer:
+		anim.active = false
 	var cue = pivot.get_node_or_null("Cue")
 	if cue is CanvasItem:
 		cue.visible = false
-	if pivot.visible:
-		pivot.visible = false
+		cue.modulate.a = 0.0
+	pivot.visible = false

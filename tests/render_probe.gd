@@ -200,11 +200,24 @@ func _run():
 	mod.latest_state["in_shop"] = false
 	# Hide parked cue before the idle guest table capture (#18).
 	if is_instance_valid(game) and is_instance_valid(game.player_ball):
-		if game.player_ball.has_method("_hide_cue_pivot"):
-			game.player_ball._hide_cue_pivot()
+		var cue_ball = game.player_ball
+		if cue_ball.has_method("_hide_cue_pivot"):
+			cue_ball._hide_cue_pivot()
+		var pivot = cue_ball.get_node_or_null("CuePivot")
+		if pivot is CanvasItem:
+			pivot.visible = false
+			var cue = pivot.get_node_or_null("Cue")
+			if cue is CanvasItem:
+				cue.visible = false
+				cue.modulate.a = 0.0
 	mod._update_hud()
 	_check_run_config("guest")
 	_check_balls(game.replicas.values(), "guest")
+	await get_tree().process_frame
+	# Re-assert hide after a process tick in case native aim chrome revived the shaft.
+	if is_instance_valid(game) and is_instance_valid(game.player_ball):
+		if game.player_ball.has_method("_hide_cue_pivot"):
+			game.player_ball._hide_cue_pivot()
 	await _capture("30-guest-table", "Guest table · reconstructed from the host snapshot")
 	await _capture_guest_aim(game)
 	await _capture_ball_previews(game)
