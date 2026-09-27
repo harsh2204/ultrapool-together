@@ -1411,8 +1411,13 @@ func _result_text() -> String:
 func _annotate_shop_counters(shop_state: Dictionary) -> Dictionary:
 	if shop_state.is_empty() or not bool(shop_state.get("open", false)):
 		return shop_state
+	# Probe fixtures and early boot lack /root/Global; skip annotation so the
+	# publish path still advances last_shop_state (PERF-010). native_shop falls
+	# back to local Global methods when wire flags are absent.
+	var global = get_node_or_null("/root/Global")
+	if global == null:
+		return shop_state
 	var annotated: Dictionary = shop_state.duplicate(true)
-	var global = get_node("/root/Global")
 	annotated["show_tapas"] = (
 		global.is_tapas_available() if global.has_method("is_tapas_available") else false
 	)

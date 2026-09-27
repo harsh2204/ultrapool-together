@@ -176,6 +176,14 @@ class ShopStub:
 		state = data.duplicate(true)
 		return true
 
+	## Mirrors shop_sync.wire_shop_state for controller fixtures (Refs #34).
+	## Passthrough when sync is on; probes do not exercise the closed-stub path.
+	func wire_shop_state(captured: Dictionary = {}) -> Dictionary:
+		return captured if not captured.is_empty() else state.duplicate(true)
+
+	func shared_shop_sync_active() -> bool:
+		return true
+
 
 class BallsServiceStub:
 	extends Node
