@@ -1398,6 +1398,23 @@ func _result_text() -> String:
 	return "Match ended · Open lobby for standings"
 
 
+## Host-authoritative snack/cocktail counter visibility for guests (#33).
+## Additive wire fields — shop_sync validation allows extras so we avoid editing
+## shop_sync.gd while PR #35 is in flight. Cleared when shop closes (open:false).
+func _annotate_shop_counters(shop_state: Dictionary) -> Dictionary:
+	if shop_state.is_empty() or not bool(shop_state.get("open", false)):
+		return shop_state
+	var annotated: Dictionary = shop_state.duplicate(true)
+	var global = get_node("/root/Global")
+	annotated["show_tapas"] = (
+		global.is_tapas_available() if global.has_method("is_tapas_available") else false
+	)
+	annotated["show_cocktail"] = (
+		global.is_cocktail_available() if global.has_method("is_cocktail_available") else false
+	)
+	return annotated
+
+
 func _publish_state(
 	target: int = 0, captured_shop: Dictionary = {}, captured_lobby_revision: int = -1
 ):
@@ -1465,7 +1482,9 @@ func _publish_state(
 	var reuse_shop = (
 		not captured_shop.is_empty() and captured_lobby_revision == lobby.get("revision", -1)
 	)
-	var shop_state = captured_shop if reuse_shop else shop_sync.capture()
+	var shop_state = _annotate_shop_counters(
+		captured_shop if reuse_shop else shop_sync.capture()
+	)
 	var phase = [
 		latest_state.get("available", false),
 		latest_state.get("round", 0),
@@ -1718,7 +1737,7 @@ func _received_table(actor: int, message: Dictionary):
 			multiplayer_balls.prepare_shop()
 			expansion_balls.prepare_shop()
 			var accepted = not finished and shop_sync.handle_request(message, actor)
-			var shop_state = shop_sync.capture()
+			var shop_state = _annotate_shop_counters(shop_sync.capture())
 			var captured_lobby_revision: int = lobby.get("revision", -1)
 			_table_send(
 				{

@@ -531,7 +531,7 @@ func _inventory_problem(data) -> String:
 				continue
 			if not item is Dictionary or not PlayerInventory._valid_item(item, resources):
 				return "inventory " + group + " item"
-			if group == "cubes" and resources[item.data].from_set != &"NEGATIVE":
+			if group == "cubes" and not PlayerInventory._is_negative_cube(resources[item.data]):
 				return "inventory cubes non-NEGATIVE " + str(item.data)
 	return "inventory"
 

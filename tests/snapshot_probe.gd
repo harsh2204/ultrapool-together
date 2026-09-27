@@ -411,6 +411,11 @@ func _check_inventory(sync: Node, state: Dictionary) -> void:
 	info.cocktail_tickets = 2
 	var payload = inventory_sync.capture(info)
 	_check(inventory_sync.valid(payload, database), "complete native inventory accepted")
+	_check(
+		payload.cubes.size() == 1 and payload.cubes[0] != null,
+		"NEGATIVE cube slot survives host capture (#33)"
+	)
+	_check(payload.snacks == 3, "snack tickets survive host capture (#33)")
 	inventory_sync.apply(replica_info, payload, database)
 	_check(
 		inventory_sync.capture(replica_info) == payload,
