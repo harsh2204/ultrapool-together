@@ -1,15 +1,18 @@
 extends Node
 
-## PERF-026/030: append one native collection page at scene readiness. Never
+## PERF-026/030: append one native collection section at scene readiness. Never
 ## poll/rebuild the gallery or alter native Play-menu arrays, discovery or saves.
 const SET_ID = "TOGETHER"
 const PAGE_NAME = "TogetherCollection"
 const GALLERY_SCRIPT = "res://gallery.gd"
 const SET_SCRIPT = "res://gallery_set_display.gd"
 const INFO_SCRIPT = "res://info_display.gd"
+const SET_CONTAINER_PATH = "ShopBalls/ScrollContainer/MarginContainer/VBoxContainer"
+const SET_DISPLAY_PATH = "Control/GallerySetDisplay"
 const SLOT_PROPERTIES = ["slots_common", "slots_uncommon", "slots_rare", "slots_legendary"]
 const MAX_SLOTS = 64
 const MAX_GALLERIES = 2
+const MAX_SET_CONTAINER_CHILDREN = 32
 
 var _catalog: Node
 var _info_script: Script
@@ -77,31 +80,49 @@ func attach_gallery(gallery: Node) -> bool:
 	if not is_instance_valid(gallery) or not gallery.is_node_ready():
 		return false
 	var manager = gallery.get("tab_manager")
-	var selector = gallery.get("tab_selector")
-	if not is_instance_valid(manager) or not is_instance_valid(selector):
+	if not is_instance_valid(manager):
 		return false
-	if manager.get_node_or_null(PAGE_NAME) != null:
+	# Native 0.15.7 has two major tabs. Its ball sets are panels in the
+	# ShopBalls scroll list, not children of the tab manager itself.
+	var container = manager.get_node_or_null(SET_CONTAINER_PATH)
+	if not container is VBoxContainer:
+		push_warning("Together collection: native ball-set scroll list was not found.")
+		return false
+	if container.get_node_or_null(PAGE_NAME) != null:
 		return true
 	_pages = _pages.filter(func(reference): return is_instance_valid(reference.get_ref()))
 	if _pages.size() >= MAX_GALLERIES:
 		push_warning("Together collection: two native gallery views are already attached.")
 		return false
-	var template: Node
-	for child in manager.get_children():
-		var script = child.get_script()
+	if container.get_child_count() > MAX_SET_CONTAINER_CHILDREN:
+		push_warning("Together collection: unsupported native ball-set list size.")
+		return false
+	var template: PanelContainer
+	var insertion_index = 0
+	for child in container.get_children():
+		if not child is PanelContainer:
+			continue
+		var display = child.get_node_or_null(SET_DISPLAY_PATH)
+		if display == null:
+			continue
+		var script = display.get_script()
 		if script is Script and script.resource_path == SET_SCRIPT:
-			template = child
-			break
+			if template == null:
+				template = child
+			insertion_index = child.get_index() + 1
 	if template == null:
 		push_warning("Together collection: native set-page template was not found.")
 		return false
-	var page = template.duplicate(Node.DUPLICATE_SCRIPTS | Node.DUPLICATE_USE_INSTANTIATION)
-	page.name = PAGE_NAME
+	var panel = template.duplicate(Node.DUPLICATE_SCRIPTS | Node.DUPLICATE_USE_INSTANTIATION)
+	panel.name = PAGE_NAME
+	panel.process_mode = Node.PROCESS_MODE_INHERIT
+	panel.show()
+	var page = panel.get_node(SET_DISPLAY_PATH)
 	page.ball_set = get_node("/root/BallDatabase").get_set_by_id(SET_ID)
 	page.only_can_drop = false
 	var slots = _own_slots(page)
 	if slots.is_empty() or not _has_capacity(slots):
-		page.free()
+		panel.free()
 		push_warning("Together collection: unsupported native rarity-slot layout.")
 		return false
 	# Native prefab materials are mutable. Isolate the clone before its _ready
@@ -112,7 +133,8 @@ func attach_gallery(gallery: Node) -> bool:
 				var art = slot.get_node_or_null(path)
 				if art != null and art.material != null:
 					art.material = art.material.duplicate()
-	manager.add_child(page)
+	container.add_child(panel)
+	container.move_child(panel, insertion_index)
 	var database = get_node("/root/BallDatabase")
 	for rarity in slots.size():
 		var resources: Array = []
@@ -141,10 +163,9 @@ func attach_gallery(gallery: Node) -> bool:
 				slot.hide()
 				slot.set_process(false)
 	_build_heading(page)
-	manager.set_tab_state(page, false)
-	# set_count() resets idx to zero; preserve current page/selector agreement.
-	selector.count = manager.get_child_count()
-	_pages.append(weakref(page))
+	# Inherit the ShopBalls major tab's native visibility/process gating. The
+	# original major tabs, selector count and scroll behavior stay native-owned.
+	_pages.append(weakref(panel))
 	return true
 
 
@@ -217,16 +238,9 @@ func _exit_tree() -> void:
 		var page = reference.get_ref()
 		if not is_instance_valid(page) or page.is_queued_for_deletion():
 			continue
-		var manager = page.get_parent()
-		if not is_instance_valid(manager) or not manager.is_inside_tree():
+		var container = page.get_parent()
+		if not is_instance_valid(container) or not container.is_inside_tree():
 			continue
-		var gallery = manager.owner
-		if manager.cur == page.get_index():
-			manager.cur = 0
-			manager.set_tab_state(manager.get_child(0), true)
-		manager.remove_child(page)
+		container.remove_child(page)
 		page.queue_free()
-		if is_instance_valid(gallery) and is_instance_valid(gallery.get("tab_selector")):
-			gallery.tab_selector.count = manager.get_child_count()
-			gallery.tab_selector.idx = manager.cur
 	_pages.clear()

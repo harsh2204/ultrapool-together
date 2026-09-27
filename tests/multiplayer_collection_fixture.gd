@@ -4,6 +4,8 @@ extends RefCounted
 ## Invoke from the menu before starting a run; no gameplay or save unlocks.
 const Catalog = preload("../mod/multiplayer_ball_catalog.gd")
 const SLOT_PROPERTIES = ["slots_common", "slots_uncommon", "slots_rare", "slots_legendary"]
+const SET_LIST_PATH = "ShopBalls/ScrollContainer/MarginContainer/VBoxContainer"
+const SET_DISPLAY_PATH = "Control/GallerySetDisplay"
 const INSPECT_CAPTURES = {
 	"TOGETHER_BANKROLL": "collection-together-bankroll",
 	"TOGETHER_BOUNTY": "collection-together-bounty",
@@ -42,20 +44,41 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 		catalog.set_active(active_before)
 		return false
 	var manager = gallery.tab_manager
-	var page = manager.get_node_or_null("TogetherCollection")
+	var container = manager.get_node_or_null(SET_LIST_PATH)
+	var panel = container.get_node_or_null("TogetherCollection") if container != null else null
+	var page = panel.get_node_or_null(SET_DISPLAY_PATH) if panel != null else null
 	if not check.call(page != null, "collection: startup adds Together while multiplayer is off"):
+		_describe_gallery(manager)
 		await _return_menu(mod)
 		catalog.set_active(active_before)
 		return false
-	var page_count: int = manager.get_child_count()
-	check.call(catalog._collection.attach_gallery(gallery), "collection: reattach is accepted")
+	var panel_count: int = container.get_child_count()
+	var major_tab_count: int = manager.get_child_count()
+	var native_displays = _set_displays(container).filter(func(display): return display != page)
 	check.call(
-		manager.get_child_count() == page_count and gallery.tab_selector.count == page_count,
-		"collection: reattach does not duplicate pages or desynchronize navigation"
+		major_tab_count == 2 and gallery.tab_selector.count == 2,
+		"collection: native ball and board-customization tabs remain unchanged"
 	)
 	check.call(
-		not page.visible and page.process_mode == Node.PROCESS_MODE_DISABLED,
-		"collection: offscreen page disables native hover and rotation processing"
+		(
+			panel.get_index() > 0
+			and (
+				container.get_child(panel.get_index() - 1).get_node_or_null(SET_DISPLAY_PATH)
+				!= null
+			)
+			and container.get_node("PlanetsDisplay").get_index() == panel.get_index() + 1
+		),
+		"collection: Together follows native ball sets and precedes planets"
+	)
+	check.call(catalog._collection.attach_gallery(gallery), "collection: reattach is accepted")
+	check.call(
+		(
+			container.get_child_count() == panel_count
+			and container.get_node("TogetherCollection") == panel
+			and manager.get_child_count() == major_tab_count
+			and gallery.tab_selector.count == major_tab_count
+		),
+		"collection: reattach retains one set panel and native major-tab navigation"
 	)
 	var slots = _shown_slots(page)
 	check.call(slots.size() == Catalog.BALLS.size(), "collection: exactly eight unlocked mod balls")
@@ -86,12 +109,14 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 			slot.ball_item.get_buy_price() == [3, 4, 6, 9][int(resource.rarity)],
 			"collection: " + id + " uses its native rarity price"
 		)
-		var native = manager.get_child(0)
 		check.call(
-			not native.get("slots_common").has(slot),
+			(
+				page.is_ancestor_of(slot)
+				and not native_displays.any(func(display): return display.is_ancestor_of(slot))
+			),
 			"collection: " + id + " has a clone-owned slot"
 		)
-	_check_native_materials(manager, page, database, check)
+	_check_native_materials(container, page, database, check)
 	catalog.set_active(true)
 	check.call(_all_drop(database, true), "collection: run opt-in enables drop resources")
 	catalog.set_active(false)
@@ -99,9 +124,24 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 		_all_drop(database, false) and _shown_slots(page).size() == Catalog.BALLS.size(),
 		"collection: disabling drops retains every visible collection entry"
 	)
-	gallery.tab_selector.idx = page.get_index()
-	manager.switch_to(page.get_index(), 1)
+	gallery.toggle_selector.select(manager.get_node("BoardCustom").get_index())
 	await _frames(mod, 8)
+	check.call(
+		not panel.is_visible_in_tree() and not page.can_process(),
+		"collection: native board-customization tab suspends Together hover and rotation"
+	)
+	gallery.toggle_selector.select(manager.get_node("ShopBalls").get_index())
+	await _frames(mod, 8)
+	check.call(
+		panel.is_visible_in_tree() and page.can_process(),
+		"collection: returning to native balls tab restores Together processing"
+	)
+	check.call(
+		await _scroll_into_view(mod, gallery, panel),
+		"collection: native scrolling brings the complete Together panel into view"
+	)
+	var slot_processing = _suspend_collection_processing(container)
+	global.clear_hovered_item()
 	await capture.call(
 		"collection-together",
 		"Together collection · all eight balls visible with Multiplayer balls disabled"
@@ -112,7 +152,6 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 		if not slots.has(id):
 			continue
 		var slot = slots[id]
-		slot.set_process(false)
 		global.clear_hovered_item()
 		slot.on_hover()
 		await _frames(mod, 6)
@@ -149,7 +188,6 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 				)
 			)
 		global.clear_hovered_item()
-		slot.set_process(true)
 	check.call(
 		(
 			info.keyword_panels.size() == 4
@@ -159,7 +197,6 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 	)
 	if slots.has("TOGETHER_BOUNTY"):
 		var mixed_slot = slots.TOGETHER_BOUNTY
-		mixed_slot.set_process(false)
 		mixed_slot.ball_item.mixed_data = database.get_ball_by_id("TOGETHER_ENCORE")
 		mixed_slot.on_hover()
 		await _frames(mod, 6)
@@ -200,8 +237,8 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 			break
 		mixed_slot.ball_item.mixed_data = null
 		global.clear_hovered_item()
-		mixed_slot.set_process(true)
-	await _check_vanilla_cleanup(mod, gallery, page, capture, check)
+	_restore_slot_processing(slot_processing)
+	await _check_vanilla_cleanup(mod, gallery, container, page, capture, check)
 	for id in seen:
 		check.call(
 			achievements.has_seen_ball(database.get_ball_by_id(id)) == seen[id],
@@ -212,11 +249,24 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 	var reopened = await _wait_scene(mod, "res://gallery.tscn")
 	var reopen_ok: bool = is_instance_valid(reopened)
 	if reopen_ok:
-		var fresh_page = reopened.tab_manager.get_node_or_null("TogetherCollection")
+		var fresh_container = reopened.tab_manager.get_node_or_null(SET_LIST_PATH)
+		var fresh_panel = (
+			fresh_container.get_node_or_null("TogetherCollection")
+			if fresh_container != null
+			else null
+		)
+		var fresh_page = (
+			fresh_panel.get_node_or_null(SET_DISPLAY_PATH) if fresh_panel != null else null
+		)
 		reopen_ok = fresh_page != null and _shown_slots(fresh_page).size() == Catalog.BALLS.size()
 		check.call(
-			reopened.tab_manager.get_child_count() == page_count,
-			"collection: reopening recreates exactly one Together page"
+			(
+				fresh_container != null
+				and fresh_container.get_child_count() == panel_count
+				and reopened.tab_manager.get_child_count() == major_tab_count
+				and reopened.tab_selector.count == major_tab_count
+			),
+			"collection: reopening recreates one Together set without adding a major tab"
 		)
 	check.call(
 		reopen_ok, "collection: close/reopen preserves all eight balls without enabling shops"
@@ -224,6 +274,35 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 	var menu_ok = await _return_menu(mod)
 	catalog.set_active(active_before)
 	return menu_ok and reopen_ok
+
+
+func _describe_gallery(manager: Node) -> void:
+	# Bounded diagnostics for unsupported native gallery hierarchy changes.
+	var pending: Array = [[manager, 0]]
+	var visited = 0
+	while not pending.is_empty() and visited < 300:
+		var entry: Array = pending.pop_front()
+		var node: Node = entry[0]
+		var depth: int = entry[1]
+		var script = node.get_script()
+		var script_path: String = script.resource_path if script is Script else ""
+		if depth <= 5 or script_path == "res://gallery_set_display.gd":
+			print(
+				"COLLECTION_LAYOUT ",
+				manager.get_path_to(node),
+				" script=",
+				script_path,
+				" class=",
+				node.get_class(),
+				" position=",
+				node.position if node is Control or node is Node2D else Vector2.ZERO,
+				" minimum_size=",
+				node.get_combined_minimum_size() if node is Control else Vector2.ZERO
+			)
+		visited += 1
+		if depth < 8:
+			for child in node.get_children().slice(0, 30):
+				pending.append([child, depth + 1])
 
 
 func _shown_slots(page: Node) -> Dictionary:
@@ -239,6 +318,67 @@ func _shown_slots(page: Node) -> Dictionary:
 	return result
 
 
+func _set_displays(container: Node) -> Array:
+	var result: Array = []
+	for panel in container.get_children():
+		var display = panel.get_node_or_null(SET_DISPLAY_PATH)
+		if display == null:
+			continue
+		var script = display.get_script()
+		if script is Script and script.resource_path == "res://gallery_set_display.gd":
+			result.append(display)
+	return result
+
+
+func _suspend_collection_processing(container: Node) -> Array:
+	# All native sets and planets share the active balls tab. Suspend their
+	# DisplayItemBall nodes so cursor hover cannot replace a forced inspection.
+	var previous: Array = []
+	var pending: Array = [[container, 0]]
+	var visited = 0
+	while not pending.is_empty() and visited < 2000:
+		var entry: Array = pending.pop_back()
+		var node: Node = entry[0]
+		var depth: int = entry[1]
+		visited += 1
+		if node is DisplayItemBall:
+			previous.append({"slot": node, "processing": node.is_processing()})
+			node.set_process(false)
+		elif depth < 8:
+			for child in node.get_children():
+				pending.append([child, depth + 1])
+	return previous
+
+
+func _restore_slot_processing(previous: Array) -> void:
+	for entry in previous:
+		if is_instance_valid(entry.slot):
+			entry.slot.set_process(entry.processing)
+
+
+func _scroll_into_view(mod: Node, gallery: Node, panel: Control) -> bool:
+	var scroll = gallery.tab_manager.get_node("ShopBalls/ScrollContainer")
+	await _frames(mod, 2)
+	for _frame in 24:
+		if not scroll._bounds_dirty and panel.size.y > 0.0:
+			break
+		await mod.get_tree().process_frame
+	if scroll._bounds_dirty or panel.size.y <= 0.0:
+		return false
+	var transform: Transform2D = (
+		scroll.get_global_transform().affine_inverse() * panel.get_global_transform()
+	)
+	var bounds: Rect2 = transform * Rect2(Vector2.ZERO, panel.size)
+	var target_top: float = maxf(0.0, (scroll.size.y - bounds.size.y) * 0.5)
+	scroll.velocity = 0.0
+	scroll.dragging = false
+	scroll._scroll_by(target_top - bounds.position.y)
+	await _frames(mod, 3)
+	transform = scroll.get_global_transform().affine_inverse() * panel.get_global_transform()
+	bounds = transform * Rect2(Vector2.ZERO, panel.size)
+	return Rect2(Vector2.ZERO, scroll.size).grow(1.0).encloses(bounds)
+
+
 func _all_drop(database: Node, expected: bool) -> bool:
 	for id in Catalog.BALLS:
 		if database.get_ball_by_id(id).can_drop != expected:
@@ -246,9 +386,9 @@ func _all_drop(database: Node, expected: bool) -> bool:
 	return true
 
 
-func _check_native_materials(manager: Node, added: Node, database: Node, check: Callable) -> void:
-	for page in manager.get_children():
-		if page == added or not page.get("slots_common") is Array:
+func _check_native_materials(container: Node, added: Node, database: Node, check: Callable) -> void:
+	for page in _set_displays(container):
+		if page == added:
 			continue
 		for property in SLOT_PROPERTIES:
 			for slot in page.get(property):
@@ -265,16 +405,21 @@ func _check_native_materials(manager: Node, added: Node, database: Node, check: 
 
 
 func _check_vanilla_cleanup(
-	mod: Node, gallery: Node, page: Node, capture: Callable, check: Callable
+	mod: Node, gallery: Node, container: Node, added: Node, capture: Callable, check: Callable
 ) -> void:
 	var global = mod.get_node("/root/Global")
 	var info = mod.get_node("/root/UIManager").info_display
-	var native = gallery.tab_manager.get_child(0)
+	var native_displays = _set_displays(container).filter(func(display): return display != added)
+	if not check.call(not native_displays.is_empty(), "collection: native set remains available"):
+		return
+	var native = native_displays[0]
 	var slot = native.slots_common[0]
-	gallery.tab_selector.idx = 0
-	gallery.tab_manager.switch_to(0, -1)
-	await _frames(mod, 6)
-	slot.set_process(false)
+	var native_panel = native.get_parent().get_parent()
+	check.call(
+		await _scroll_into_view(mod, gallery, native_panel),
+		"collection: native scrolling returns to a complete vanilla set"
+	)
+	var slot_processing = _suspend_collection_processing(container)
 	slot.set_data(slot.display_resource, true)
 	global.clear_hovered_item()
 	slot.on_hover()
@@ -294,16 +439,12 @@ func _check_vanilla_cleanup(
 					not panel.l_name.text.contains(title),
 					"collection: vanilla clears helper " + title
 				)
-	check.call(
-		not page.visible and page.process_mode == Node.PROCESS_MODE_DISABLED,
-		"collection: switching away suspends the Together page"
-	)
 	await capture.call(
 		"collection-vanilla-after-together",
 		"Native collection inspection · multiplayer concept panels cleared"
 	)
 	global.clear_hovered_item()
-	slot.set_process(true)
+	_restore_slot_processing(slot_processing)
 
 
 func _return_menu(mod: Node) -> bool:

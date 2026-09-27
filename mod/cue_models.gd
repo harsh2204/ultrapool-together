@@ -83,7 +83,8 @@ const MODELS = [
 		"bonus_cap": 2.5,
 		"trigger": "carom",
 		"asset": "carom.png",
-		"description": "+10% if the potted ball hit 2 distinct object balls (+2.5 max). " + BONUS_LIMITS,
+		"description":
+		"+10% if the potted ball hit 2 distinct object balls (+2.5 max). " + BONUS_LIMITS,
 	},
 	{
 		"id": "silk",
@@ -149,7 +150,7 @@ const MODELS = [
 		"bonus_cap": 2.0,
 		"trigger": "relay",
 		"asset": "relay.png",
-		"description": "+5% after a teammate's shot made a pot (+2 max). " + BONUS_LIMITS,
+		"description": "+5% after the last shot was a teammate's pot (+2 max). " + BONUS_LIMITS,
 	},
 	{
 		"id": "corner",
@@ -182,7 +183,7 @@ const MODELS = [
 		"bonus_cap": 1.0,
 		"trigger": "clean",
 		"asset": "clean.png",
-		"description": "+3% with no object-ball rail hit (+1 point max). " + BONUS_LIMITS,
+		"description": "+3% if the potted ball hit no rail (+1 max). " + BONUS_LIMITS,
 	},
 ]
 
