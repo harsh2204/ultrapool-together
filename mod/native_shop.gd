@@ -210,6 +210,10 @@ func ensure_cubes_popup_textures() -> void:
 				for sprite in ui.find_children("*", "Sprite2D", true, false):
 					if _is_fake_cube_sprite(sprite):
 						sprites.append(sprite)
+	if sprites.is_empty():
+		var tree = get_tree()
+		if tree != null and tree.root != null:
+			sprites = _cubes_popup_sprites(tree.root)
 	# Only rebind cubes that are currently on-screen (popup grid), not unrelated Cube nodes.
 	var live: Array = []
 	for sprite in sprites:
