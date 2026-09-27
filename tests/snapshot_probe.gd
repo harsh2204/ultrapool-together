@@ -289,11 +289,24 @@ func _check_identity_rebuild(sync: Node, state: Dictionary, cue: Dictionary) -> 
 		replica.pocket_replicas[remapped.pockets[0].id].get_meta("remote_base_index") == 1,
 		"rebuilt pocket adopts the new base index"
 	)
+	# Use a real object-ball id from BallDatabase. A literal "1" is not a valid
+	# catalog key, so apply_snapshot used to soft-reject and the rebuild checks
+	# never exercised issue-#7 identity flip semantics.
+	var object_id = _object_ball_id()
+	_check(object_id != "", "native BallDatabase exposes a non-cue object ball")
+	if object_id == "":
+		sync._guest = false
+		sync._scene_key = ""
+		sync._replica = null
+		sync._results = null
+		replica.queue_free()
+		results.queue_free()
+		return
 	var flipped = state.duplicate(true)
 	flipped.balls[0] = cue.duplicate(true)
 	flipped.balls[0].player = false
 	flipped.balls[0].item = cue.item.duplicate(true)
-	flipped.balls[0].item.data = "1"
+	flipped.balls[0].item.data = object_id
 	# Recreate cue-as-player mapping then flip.
 	replica.replicas.clear()
 	cue_body = _BallStub.new()
@@ -314,11 +327,15 @@ func _check_identity_rebuild(sync: Node, state: Dictionary, cue: Dictionary) -> 
 
 
 func _check_potted_rail(sync: Node, cue: Dictionary) -> void:
+	var object_id = _object_ball_id()
+	_check(object_id != "", "native BallDatabase exposes a non-cue object ball for potted-rail checks")
+	if object_id == "":
+		return
 	var pocketed = cue.duplicate(true)
 	pocketed.id = 50
 	pocketed.player = false
 	pocketed.item = cue.item.duplicate(true)
-	pocketed.item.data = "1"
+	pocketed.item.data = object_id
 	pocketed.alive = false
 	pocketed.visible = true
 	pocketed.gone = false
@@ -332,6 +349,7 @@ func _check_potted_rail(sync: Node, cue: Dictionary) -> void:
 	var cue_rail = pocketed.duplicate(true)
 	cue_rail.player = true
 	cue_rail.item = cue.item.duplicate(true)
+	cue_rail.item.data = "PLAYER"
 	_check(not sync.ball_on_potted_rail(cue_rail), "cue ball is never treated as a rail icon")
 	# Synced BallItem fields already carry name/description (via BallDatabase id) and value.
 	_check(
@@ -342,6 +360,17 @@ func _check_potted_rail(sync: Node, cue: Dictionary) -> void:
 		),
 		"rail hover reuses synced ball identity and score fields"
 	)
+
+
+func _object_ball_id() -> String:
+	var database = get_node_or_null("/root/BallDatabase")
+	if database == null or not database.get("id_to_ball") is Dictionary:
+		return ""
+	for ball_id in database.id_to_ball:
+		var key = str(ball_id)
+		if key != "" and key != "PLAYER":
+			return key
+	return ""
 
 
 func _check(condition: bool, description: String) -> void:
