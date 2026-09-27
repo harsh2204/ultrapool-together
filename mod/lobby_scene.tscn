@@ -1,7 +1,8 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="lobby_scene.gd" id="1_lobby"]
 [ext_resource type="Script" path="mod_options_panel.gd" id="2_mod_options"]
+[ext_resource type="Script" path="settings_icon_button.gd" id="3_settings_icon"]
 
 [node name="TogetherLobby" type="Control"]
 layout_mode = 3
@@ -233,9 +234,11 @@ value = 6.0
 
 [node name="ModOptionsButton" type="Button" parent="Margin/Layout/Body/Content/Room/RoomHeading"]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
 layout_mode = 2
 size_flags_vertical = 4
-text = "Together options"
+tooltip_text = "Mod settings"
+script = ExtResource("3_settings_icon")
 
 [node name="Count" type="Label" parent="Margin/Layout/Body/Content/Room/RoomHeading"]
 unique_name_in_owner = true
@@ -435,7 +438,7 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 16
-text = "Ultrapool Together"
+text = "Mod settings"
 autowrap_mode = 3
 
 [node name="ModOptionsHelp" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
@@ -443,7 +446,47 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 13
-text = "Opt-in extras. Off by default. Host changes sync to the lobby."
+text = "Your screen preferences and shared match rules."
+autowrap_mode = 3
+
+[node name="PersonalSettingsTitle" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
+theme_override_font_sizes/font_size = 12
+text = "YOUR VIEW"
+
+[node name="FollowShopView" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+clip_text = true
+text = "Follow host shop view"
+tooltip_text = "Automatically switch between the ball shop, snack bar and mixer when the table host switches. Off by default. This changes only your view; shared shopping stays available."
+
+[node name="FollowShopHelp" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
+theme_override_font_sizes/font_size = 12
+text = "Default off. Change this anytime; shared shopping stays available."
+autowrap_mode = 3
+
+[node name="MatchSettingsDivider" type="HSeparator" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
+layout_mode = 2
+
+[node name="MatchSettingsTitle" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
+theme_override_font_sizes/font_size = 12
+text = "SHARED MATCH RULES"
+
+[node name="MatchSettingsHelp" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.55, 0.68, 0.7, 1)
+theme_override_font_sizes/font_size = 12
+text = "Host chooses before the match. Locked once play begins."
 autowrap_mode = 3
 
 [node name="MultiplayerBalls" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]

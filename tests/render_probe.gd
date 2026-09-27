@@ -295,6 +295,7 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 				"guest shop texture " + slot.data
 			)
 	await _capture("50-guest-shop", "Guest native shop · shared build and offers")
+	await _check_shop_view_preference(shop_state)
 	var inspected_key = ""
 	for slot in shop_state.slots:
 		if slot.id != 0 and slot.group == "build":
@@ -334,6 +335,101 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 	await round_flow.check_guest_snack_drag(mod, _capture)
 	await _capture_guest_negative_cubes(shop, game)
 	mod.shop_sync.end_session()
+
+
+func _check_shop_view_preference(original: Dictionary) -> void:
+	var sync = mod.shop_sync
+	var prefs = load(get_script().resource_path.get_base_dir().path_join("../mod/hud_prefs.gd"))
+	var saved_preference: bool = prefs.follow_shop_view_enabled()
+	var saved_started = mod.lobby.get("started")
+	var saved_nav: Dictionary = mod.latest_state.get("ui_nav", {}).duplicate(true)
+	_check(not saved_preference, "shop view: following defaults off in a fresh profile")
+	_check(sync.shared_shop_sync_active(), "shop view: shared purchasing remains enabled by default")
+	sync.show_section("balls")
+	var host_view: Dictionary = original.duplicate(true)
+	host_view.section = "snacks"
+	host_view.focus = ""
+	_check(sync.apply_state(host_view), "shop view: guest accepts host inventory while follow is off")
+	_check(sync.current_section() == "balls", "shop view: host counter change preserves manual guest view")
+	mod._queue_host_ui_nav({"place": "snack_bar", "section": "snacks", "focus": ""})
+	_check(
+		mod._queued_ui_nav.is_empty() and sync.current_section() == "balls",
+		"shop view: controller navigation also respects opt-out"
+	)
+	mod.lobby["started"] = true
+	mod.settings_button.pressed.emit()
+	_check(
+		mod.panel.visible and mod.panel.get_node("%ModOptions").visible,
+		"mod settings: HUD icon opens the slate during a match"
+	)
+	var toggle = mod.panel.get_node("%ModOptionsColumn").get_node("FollowShopView")
+	_check(
+		not toggle.disabled and not toggle.button_pressed,
+		"mod settings: personal follow toggle is available and off during a match"
+	)
+	_check(mod.panel._sync_shop_check.disabled, "mod settings: shared match rules remain locked")
+	await _capture("mod-settings-shop-follow-off", "Mod settings · personal shop view following is off")
+	toggle.set_pressed(true)
+	_check(prefs.follow_shop_view_enabled(), "mod settings: toggle opts this client into view following")
+	mod.panel._close_mod_options()
+	mod._set_panel(false)
+	sync._try_apply_queued_nav()
+	_check(
+		await _wait(func(): return sync.current_section() == "snacks"),
+		"shop view: opt-in follows the latest authoritative counter after native movement"
+	)
+	host_view.section = "mix"
+	_check(sync.apply_state(host_view), "shop view: guest accepts host mixer navigation")
+	_check(
+		await _wait(func(): return sync.current_section() == "mix"),
+		"shop view: opt-in follows mixer as well as snacks after native movement"
+	)
+	mod.settings_button.pressed.emit()
+	_check(toggle.button_pressed, "mod settings: reopening retains the personal choice")
+	await _capture("mod-settings-shop-follow-on", "Mod settings · shop view following enabled")
+	toggle.set_pressed(false)
+	mod.panel._close_mod_options()
+	mod._set_panel(false)
+	_check(
+		not prefs.follow_shop_view_enabled() and sync._queued_nav.is_empty(),
+		"mod settings: opting out immediately clears pending shop navigation"
+	)
+	sync.show_section("balls")
+	host_view.section = "snacks"
+	sync.apply_state(host_view)
+	sync._try_apply_queued_nav()
+	_check(sync.current_section() == "balls", "shop view: opt-out cannot apply a delayed counter jump")
+	_check(sync.shared_shop_sync_active(), "shop view: personal opt-out preserves shared shopping")
+	mod.settings_button.pressed.emit()
+	mod._toggle_panel()
+	_check(
+		not mod.panel.visible and not mod.panel.is_mod_options_open(),
+		"mod settings: lobby toggle closes the slate and clears its navigation/input guard"
+	)
+	mod.settings_button.pressed.emit()
+	var escape = InputEventKey.new()
+	escape.keycode = KEY_ESCAPE
+	escape.pressed = true
+	mod.panel._input(escape)
+	_check(not mod.panel.is_mod_options_open(), "mod settings: Escape dismisses the slate")
+	mod.panel.open_mod_options()
+	var outside = InputEventMouseButton.new()
+	outside.button_index = MOUSE_BUTTON_LEFT
+	outside.pressed = true
+	outside.position = Vector2(2, 2)
+	mod.panel._input(outside)
+	_check(not mod.panel.is_mod_options_open(), "mod settings: outside click dismisses the slate")
+	mod._set_panel(false)
+	mod._set_follow_shop_view(saved_preference)
+	sync.apply_state(original)
+	sync.show_section("balls")
+	if saved_started == null:
+		mod.lobby.erase("started")
+	else:
+		mod.lobby.started = saved_started
+	mod.latest_state["ui_nav"] = saved_nav
+	mod._queued_ui_nav.clear()
+	mod._applied_ui_nav.clear()
 
 
 func _capture_guest_aim(game) -> void:

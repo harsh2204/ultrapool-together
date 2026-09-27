@@ -6,6 +6,7 @@ const GROUPS = ["offer", "build", "snack", "passive", "mix"]
 const MAX_SLOTS = 64
 const CrtStack = preload("crt_stack.gd")
 const UiNav = preload("ui_nav.gd")
+const HudPrefs = preload("hud_prefs.gd")
 
 var last_error = ""
 var _controller: Node
@@ -49,6 +50,8 @@ var _shared_sync_latched = true
 
 
 func _ready():
+	# Load local presentation preferences at startup, not in navigation/frame work.
+	HudPrefs.follow_shop_view_enabled()
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	process_priority = 500
 	var directory = get_script().resource_path.get_base_dir()
@@ -60,6 +63,7 @@ func _ready():
 
 
 func begin_session(controller: Node):
+	HudPrefs.follow_shop_view_enabled()
 	_controller = controller
 	_revision = 0
 	_last_capture.clear()
@@ -1001,6 +1005,22 @@ func host_focus_key() -> String:
 	return _local_focus_key()
 
 
+## Personal view preference only: shared inventory, money and requests are unchanged.
+func follow_host_view_enabled() -> bool:
+	return HudPrefs.follow_shop_view_enabled()
+
+
+func set_follow_host_view(enabled: bool) -> bool:
+	var value = HudPrefs.set_follow_shop_view_enabled(enabled)
+	_queued_nav.clear()
+	_applied_nav.clear()
+	if value:
+		# The authoritative state continues to advance while following is off.
+		# Resume its latest view through the normal drag/pending boundary.
+		_queue_host_nav(_authoritative_state)
+	return value
+
+
 func nav_follow_blocked() -> bool:
 	return _nav_follow_blocked()
 
@@ -1043,6 +1063,10 @@ func _local_focus_key() -> String:
 
 
 func _queue_host_nav(data: Dictionary) -> void:
+	if not follow_host_view_enabled():
+		_queued_nav.clear()
+		_applied_nav.clear()
+		return
 	if _controller == null or _controller.is_table_host() or not data.get("open", false):
 		return
 	if not shared_shop_sync_active():
@@ -1079,6 +1103,10 @@ func _nav_drag_active() -> bool:
 
 
 func _try_apply_queued_nav() -> void:
+	if not follow_host_view_enabled() or not shared_shop_sync_active():
+		_queued_nav.clear()
+		_applied_nav.clear()
+		return
 	if _queued_nav.is_empty() or _controller == null or _controller.is_table_host():
 		return
 	if _nav_follow_blocked():

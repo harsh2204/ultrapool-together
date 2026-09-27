@@ -2,7 +2,7 @@
 
 Steam multiplayer for **2–8 players**. Share a table in co-op, race other tables to the end of a run, or compete on score. Each table has its own board, shop, and run.
 
-**Source version: v0.9.2** · Requires **Ultrapool 0.15.7**, Steam build **25298901**, on Windows or macOS. [Released builds](https://github.com/harsh2204/ultrapool-together/releases) may be older than this branch.
+**Source version: v0.9.3** · Requires **Ultrapool 0.15.7**, Steam build **25298901**, on Windows or macOS. [Released builds](https://github.com/harsh2204/ultrapool-together/releases) may be older than this branch.
 
 ## Install
 
@@ -42,19 +42,20 @@ Everyone must use v0.8 or v0.9 and a **UP8** room code. Changing seats, settings
 - **Score PvP:** independent runs with an equal shot budget per table—six by default, configurable from 1 to 20. The highest score from completed shots wins; a run ending early also ends that table's match. Uneven groups such as 2v1 and 1v1v1v2 work in either mode.
 - Teammates take turns in seat order using the normal mouse or controller controls. **Pass** hands over the turn without spending a shot.
 - Everyone at a table can shop and arrange items with the game's native ball and snack dragging. Each connected teammate must select **Ready** before leaving the shop. Purchases, rearrangements, and membership changes clear shop readiness. Teammate cursors and aiming are visible on that table.
+- Choose your own shop, snack-bar or mixer view by default. To follow the host's view automatically, open the **Mod settings** gear beside **Lobby · F8** and enable **Follow host shop view**. This personal choice persists; shared shopping remains available with it off.
 - Each player sees the game's native round payout and selects **Continue** before shopping. Clients use the native shop, inventory, settings, and run results. Simple purchases, moves, sales, and Ready respond locally while the table host confirms them; rejected actions restore the shared state.
 - Press **F8** for standings and **Watch** to spectate another table. Switch tables in the spectator view or return to your own table; your run remains loaded. A table in its shop shows its last board with a shopping status.
 - Ending an unfinished match requires approval from every connected player. The host proposes returning to the lobby, and any player can cancel the proposal. Once all tables finish, the host can return directly. Seats stay assigned for the next ready-up. Native restart and menu buttons open this lobby flow.
 
 ## Multiplayer balls (opt-in)
 
-The host can enable **Multiplayer balls** from the lobby's collapsed **Together options** panel (off by default). Relay, Called Shot, Patience, Bounty, Bankroll, Lifeline, Encore, and Domino never enter the starting rack; when enabled they appear only rarely in the shared shop. See [ball effects and rules](docs/MULTIPLAYER_BALLS.md).
+The host can enable **Multiplayer balls** from the lobby's **Mod settings** gear (off by default). Relay, Called Shot, Patience, Bounty, Bankroll, Lifeline, Encore, and Domino never enter the starting rack; when enabled they appear only rarely in the shared shop. See [ball effects and rules](docs/MULTIPLAYER_BALLS.md).
 
-Six additional **expansion sets** (Phases, Morph, Tide, Relic, Tarot, Zodiac) use the same shop-only pattern. Open **Together options** in the lobby for Multiplayer balls, Clone-table rounds, **Sync shop with host** (on by default), and an **Expansion sets** master toggle (default off) that reveals the six per-set toggles. See [expansion sets](docs/EXPANSION_SETS.md) and [shop sync](docs/SYNC_SHOP.md). **Status: implemented, unmeasured.**
+Six additional **expansion sets** (Phases, Morph, Tide, Relic, Tarot, Zodiac) use the same shop-only pattern. Open **Mod settings** in the lobby for Multiplayer balls, Clone-table rounds, **Shared shop access** (on by default), and an **Expansion sets** master toggle (default off) that reveals the six per-set toggles. Host rules lock at match start; personal view preferences remain available. See [expansion sets](docs/EXPANSION_SETS.md) and [shop access/view following](docs/SYNC_SHOP.md). **Status: implemented, unmeasured.**
 
 ## Custom cues
 
-Each player can pick a cue tint from **Together options → Your cue**. Choices are personal (not host-locked), sync to teammates, and persist in the mod’s isolated user folder. Styles are vanilla-safe recolors of the native cue — see [custom cues](docs/CUSTOM_CUES.md). **Status: implemented, unmeasured.**
+Each player can pick a cue tint from **Mod settings → Your cue**. Choices are personal (not host-locked), sync to teammates, and persist in the mod’s isolated user folder. Styles are vanilla-safe recolors of the native cue — see [custom cues](docs/CUSTOM_CUES.md). **Status: implemented, unmeasured.**
 
 ## Current limits
 
