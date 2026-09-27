@@ -4,6 +4,8 @@ signal request(message: Dictionary)
 
 const GROUPS = ["offer", "build", "snack", "passive", "mix"]
 const MAX_SLOTS = 64
+const CrtStack = preload("crt_stack.gd")
+const UiNav = preload("ui_nav.gd")
 
 var last_error = ""
 var _controller: Node
@@ -23,6 +25,7 @@ var _request_id = 0
 var _pending_message: Dictionary = {}
 var _ball_script: Script
 var _passive_script: Script
+var _layer: CanvasLayer
 var _panel: Control
 var _notice: Label
 var _view: Node
@@ -37,6 +40,9 @@ var _continuing = false
 var _actions_blocked = false
 var _vote_hold = false
 var _exclusive_shopper = 0
+# Host-driven shop counter / inspection follow (#16). Queued until drag/purchase settles.
+var _queued_nav: Dictionary = {}
+var _applied_nav: Dictionary = {}
 
 
 func _ready():
@@ -64,6 +70,8 @@ func begin_session(controller: Node):
 	_actions_blocked = false
 	_vote_hold = false
 	_exclusive_shopper = 0
+	_queued_nav.clear()
+	_applied_nav.clear()
 	_was_finished = _controller.finished
 	if _controller.is_table_host():
 		var tutorial = get_node("/root/TutorialManager")
@@ -94,6 +102,8 @@ func end_session():
 	_vote_hold = false
 	_exclusive_shopper = 0
 	_actions_blocked = false
+	_queued_nav.clear()
+	_applied_nav.clear()
 	_panel.hide()
 
 
@@ -175,6 +185,7 @@ func _process(_delta):
 				if _view.get_node("%ShopFloor").texture != floor_texture:
 					_view.set_floor(floor_texture)
 			_update_actions()
+			_try_apply_queued_nav()
 	if _was_finished != _controller.finished:
 		_was_finished = _controller.finished
 		_update_actions()
@@ -274,10 +285,18 @@ func capture() -> Dictionary:
 		_continuing = false
 		data["exclusive_shopper"] = _exclusive_shopper
 		data["winner_shop"] = false
+	# Navigation fields are view-only: they must not bump revision / ready consent
+	# (PERF-010 / PERF-035). Compare inventory without them, then attach.
 	if data != _last_capture:
 		_revision += 1
 		_last_capture = data.duplicate(true)
 	data["revision"] = _revision
+	if data.open and is_instance_valid(_view):
+		data["section"] = current_section()
+		data["focus"] = _local_focus_key()
+	else:
+		data["section"] = ""
+		data["focus"] = ""
 	apply_state(data)
 	return data
 
@@ -507,6 +526,7 @@ func apply_state(data: Dictionary) -> bool:
 
 func _display_state(data: Dictionary):
 	if data == _state and (not data.get("open", false) or is_instance_valid(_view)):
+		_queue_host_nav(data)
 		return
 	var was_open: bool = _state.get("open", false)
 	_state = data.duplicate(true)
@@ -517,11 +537,14 @@ func _display_state(data: Dictionary):
 		_view = null
 		_view_slots.clear()
 		_actions_blocked = false
+		_queued_nav.clear()
+		_applied_nav.clear()
 		return
 	if not was_open:
 		get_viewport().gui_release_focus()
 	_notice.hide()
 	_render()
+	_queue_host_nav(data)
 
 
 func _valid_state(data: Dictionary) -> bool:
@@ -529,6 +552,16 @@ func _valid_state(data: Dictionary) -> bool:
 		return false
 	if not data.open:
 		return true
+	if data.has("section"):
+		var section = data.section
+		if not section is String or (section != "" and section not in UiNav.SHOP_SECTIONS):
+			return false
+	if data.has("focus"):
+		var focus = data.focus
+		if not focus is String or focus.length() > 128:
+			return false
+		if focus != "" and not focus.contains(":"):
+			return false
 	for field in ["scene", "round", "hp", "snacks", "cocktails", "reroll"]:
 		if not data.get(field) is int:
 			return false
@@ -797,12 +830,12 @@ func _restore_items():
 
 
 func _build_ui():
-	var layer = CanvasLayer.new()
-	layer.layer = 110
-	add_child(layer)
+	_layer = CanvasLayer.new()
+	CrtStack.place_under(_layer, self, CrtStack.OFFSET_SHOP_NOTICE)
+	add_child(_layer)
 	_panel = Control.new()
 	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(_panel)
+	_layer.add_child(_panel)
 	_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_notice = Label.new()
 	_notice.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -818,6 +851,10 @@ func _build_ui():
 	_notice.offset_bottom = -12
 	_notice.hide()
 	_panel.hide()
+
+
+func align_under_crt() -> void:
+	CrtStack.place_under(_layer, self, CrtStack.OFFSET_SHOP_NOTICE)
 
 
 func native_shop():
@@ -859,9 +896,21 @@ func _clear_inspection():
 
 
 func current_section() -> String:
-	if not is_instance_valid(_view):
+	var shop = _view if is_instance_valid(_view) else _shop()
+	if not is_instance_valid(shop):
 		return "balls"
-	return ["balls", "mix", "snacks"][_view.state]
+	var state = int(shop.state)
+	if state < 0 or state >= 3:
+		return "balls"
+	return ["balls", "mix", "snacks"][state]
+
+
+func host_focus_key() -> String:
+	return _local_focus_key()
+
+
+func nav_follow_blocked() -> bool:
+	return _nav_follow_blocked()
 
 
 func show_section(section: String) -> bool:
@@ -874,6 +923,77 @@ func show_section(section: String) -> bool:
 	_cancel_native_drag()
 	_view.set_state(["balls", "mix", "snacks"].find(section))
 	return true
+
+
+func _local_focus_key() -> String:
+	var shop = _view if is_instance_valid(_view) else _shop()
+	if not is_instance_valid(shop):
+		return ""
+	if not _view_slots.is_empty():
+		for key in _view_slots:
+			var body = slot_item(key)
+			if not is_instance_valid(body):
+				continue
+			if body == shop.selected_ball or body == shop.selected_passive:
+				return key
+	var hovered = shop.get_hovered_slot() if shop.has_method("get_hovered_slot") else null
+	return _slot_key(hovered)
+
+
+func _queue_host_nav(data: Dictionary) -> void:
+	if _controller == null or _controller.is_table_host() or not data.get("open", false):
+		return
+	var section = str(data.get("section", ""))
+	var focus = str(data.get("focus", ""))
+	if section == "" and focus == "":
+		return
+	var next = {"section": section, "focus": focus}
+	if next == _applied_nav and _queued_nav.is_empty():
+		return
+	_queued_nav = next
+	_try_apply_queued_nav()
+
+
+func _nav_follow_blocked() -> bool:
+	if _pending or not is_instance_valid(_view):
+		return true
+	if _view.moving():
+		return true
+	if is_instance_valid(_view.grabbed_ball) or is_instance_valid(_view.grabbed_passive):
+		return true
+	for entry in _bound_items.values():
+		if is_instance_valid(entry.node) and not entry.node.drag_context.is_empty():
+			return true
+	return false
+
+
+func _try_apply_queued_nav() -> void:
+	if _queued_nav.is_empty() or _controller == null or _controller.is_table_host():
+		return
+	if _nav_follow_blocked():
+		return
+	var section = str(_queued_nav.get("section", ""))
+	var focus = str(_queued_nav.get("focus", ""))
+	var changed = false
+	if section != "" and section != current_section():
+		if not show_section(section):
+			# Section unavailable on this layout; drop it and still try focus.
+			section = current_section()
+		changed = true
+	if focus != "" and _view_slots.has(focus):
+		var body = slot_item(focus)
+		var already = (
+			is_instance_valid(body)
+			and (body == _view.selected_ball or body == _view.selected_passive)
+		)
+		if not already:
+			inspect_slot(focus)
+			changed = true
+	_applied_nav = {"section": section, "focus": focus}
+	_queued_nav.clear()
+	if changed:
+		# Keep notice out of the way; host highlight is the primary signal.
+		pass
 
 
 func _ensure_view() -> bool:

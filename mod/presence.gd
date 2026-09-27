@@ -5,6 +5,7 @@ const STALE_SECONDS = 1.5
 # Quantization steps for the dirty check; sub-pixel / sub-degree jitter is not sent.
 const _POS_STEP = 4.0
 const _AIM_STEP = 0.02
+const CrtStack = preload("crt_stack.gd")
 
 
 class CursorOverlay:
@@ -18,6 +19,7 @@ class CursorOverlay:
 var _controller: Node
 var _transport: Node
 var _shop: Node
+var _layer: CanvasLayer
 var _overlay: CursorOverlay
 var _send_time = 0.0
 var _name_time = 0.0
@@ -32,14 +34,18 @@ func setup(controller: Node, transport: Node, shop: Node) -> void:
 	_transport = transport
 	_shop = shop
 	_transport.peer_left.connect(_remove_peer)
-	var layer = CanvasLayer.new()
-	layer.layer = 121
-	add_child(layer)
+	_layer = CanvasLayer.new()
+	CrtStack.place_under(_layer, self, CrtStack.OFFSET_PRESENCE)
+	add_child(_layer)
 	_overlay = CursorOverlay.new()
 	_overlay.presence = self
 	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(_overlay)
+	_layer.add_child(_overlay)
 	_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+
+func align_under_crt() -> void:
+	CrtStack.place_under(_layer, self, CrtStack.OFFSET_PRESENCE)
 
 
 func tick(delta: float, active: bool, can_aim: bool) -> void:
