@@ -438,11 +438,15 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 		await get_tree().process_frame
 	if shop.has_method("ensure_cubes_popup_textures"):
 		shop.ensure_cubes_popup_textures()
+	await get_tree().process_frame
 	await get_tree().create_timer(0.35).timeout
-	_check(
-		_cubes_popup_textures_bound(popup, cubes),
-		"guest CubesPopup PassiveCube entries sample BallResource textures"
-	)
+	if shop.has_method("ensure_cubes_popup_textures"):
+		shop.ensure_cubes_popup_textures()
+	await get_tree().process_frame
+	var bound_ok: bool = _cubes_popup_textures_bound(popup, cubes)
+	if not bound_ok:
+		print("RENDER_CUBE_DEBUG ", _cubes_popup_debug(popup, cubes))
+	_check(bound_ok, "guest CubesPopup PassiveCube entries sample BallResource textures")
 	await _capture(
 		"54-guest-negative-cubes",
 		"Guest shop · CubesPopup with two textured NEGATIVE cubes (not black silhouettes) and snack tickets."
@@ -497,10 +501,10 @@ func _fixture_negative_cubes(database: Node) -> Array:
 func _cubes_popup_textures_bound(popup: Node, cubes: Array) -> bool:
 	if popup == null or cubes.is_empty():
 		return false
+	var sprites: Array = popup.find_children("Cube", "Sprite2D", true, false)
 	var bound = 0
-	for node in popup.find_children("*", "Node2D", true, false):
-		var sprite = node.get_node_or_null("%Cube")
-		if sprite == null or sprite.material == null:
+	for sprite in sprites:
+		if sprite.material == null:
 			continue
 		var tex = sprite.material.get_shader_parameter("tex")
 		if tex == null:
@@ -510,6 +514,34 @@ func _cubes_popup_textures_bound(popup: Node, cubes: Array) -> bool:
 				bound += 1
 				break
 	return bound >= mini(2, cubes.size())
+
+
+func _cubes_popup_debug(popup: Node, cubes: Array) -> Dictionary:
+	var sprites: Array = []
+	if popup != null:
+		sprites = popup.find_children("Cube", "Sprite2D", true, false)
+	var sprite_info: Array = []
+	for sprite in sprites:
+		var tex = null
+		if sprite.material != null:
+			tex = sprite.material.get_shader_parameter("tex")
+		sprite_info.append(
+			{
+				"path": str(sprite.get_path()),
+				"has_material": sprite.material != null,
+				"tex_null": tex == null,
+				"tex_class": tex.get_class() if tex != null else ""
+			}
+		)
+	var cube_info: Array = []
+	for cube in cubes:
+		cube_info.append(
+			{
+				"id": str(cube.data.id) if cube != null and cube.data != null else "",
+				"tex_null": cube == null or cube.data == null or cube.data.texture == null
+			}
+		)
+	return {"sprites": sprite_info, "cubes": cube_info, "visible": popup.visible if popup else false}
 
 
 func _check_shop_wallet_refresh(shop: Node, original: Dictionary) -> void:

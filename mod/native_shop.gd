@@ -158,8 +158,13 @@ func _sync_cubes_button() -> void:
 
 
 func _on_together_cubes_button_pressed() -> void:
-	# Native `_on_cubes_button_pressed` rebuilds the grid first; bind textures after.
-	call_deferred("ensure_cubes_popup_textures")
+	# Native `_on_cubes_button_pressed` rebuilds the grid first; bind after a beat so
+	# CubeGridItem / PassiveCube nodes exist and the popup is visible.
+	var tree = get_tree()
+	if tree != null:
+		tree.create_timer(0.05).timeout.connect(ensure_cubes_popup_textures, CONNECT_ONE_SHOT)
+	else:
+		call_deferred("ensure_cubes_popup_textures")
 
 
 func _player_has_cubes() -> bool:
@@ -172,10 +177,9 @@ func _player_has_cubes() -> bool:
 
 
 ## Native CubesPopup builds PassiveCube grid entries from player_info.cubes. Guests receive
-## BallItems rebuilt from BallDatabase ids; if the popup opened before textures bound, or
-## shared materials lost their `tex` param, entries render as black cube silhouettes.
-## Re-apply each inventory BallItem through set_item and force shader tex/hint_color from
-## the BallResource (same source host PassiveCube uses). No-op when the popup is closed.
+## BallItems rebuilt from BallDatabase ids; native set_item can leave `fake_cube.tres`
+## with a null `tex`, which raymarches as a pure black silhouette. Re-bind each Cube
+## sprite's material from BallResource.texture / main_color. No-op when closed.
 func ensure_cubes_popup_textures() -> void:
 	var popup = get_node_or_null("%CubesPopup")
 	if popup == null:
@@ -190,50 +194,59 @@ func ensure_cubes_popup_textures() -> void:
 			inventory.append(entry)
 	if inventory.is_empty():
 		return
-	var passives: Array = _cubes_popup_passives(popup)
-	for index in mini(passives.size(), inventory.size()):
-		_bind_passive_cube(passives[index], inventory[index])
+	var sprites: Array = _cubes_popup_sprites(popup)
+	for index in mini(sprites.size(), inventory.size()):
+		_bind_cube_sprite(sprites[index], inventory[index])
 
 
-func _cubes_popup_passives(popup: Node) -> Array:
+func _cubes_popup_sprites(popup: Node) -> Array:
+	# Prefer the Sprite2D named Cube (fake_cube.tres). %Cube unique-name ownership can
+	# sit on CubeGridItem after instancing, so name search is more reliable than %.
+	var sprites: Array = popup.find_children("Cube", "Sprite2D", true, false)
+	if not sprites.is_empty():
+		return sprites
 	var found: Array = []
 	for node in popup.find_children("*", "Node2D", true, false):
-		if node.get_node_or_null("%Cube") == null:
-			continue
-		if node.has_method("set_item") or node.get("ball_item") != null or node.get("item") != null:
-			found.append(node)
-	if not found.is_empty():
-		return found
-	# Fallback: any Node2D under the popup that owns a %Cube sprite.
-	for node in popup.find_children("*", "Node2D", true, false):
-		if node.get_node_or_null("%Cube") != null:
-			found.append(node)
+		var sprite = node.get_node_or_null("%Cube")
+		if sprite is Sprite2D:
+			found.append(sprite)
 	return found
 
 
-func _bind_passive_cube(passive: Node, item) -> void:
-	if item == null or item.get("data") == null:
+func _bind_cube_sprite(sprite: Sprite2D, item) -> void:
+	if item == null or item.get("data") == null or sprite == null:
 		return
-	if passive.has_method("set_item"):
+	var passive = sprite.get_parent()
+	while passive != null and not passive.has_method("set_item"):
+		passive = passive.get_parent()
+	if passive != null and passive.has_method("set_item"):
 		passive.set_item(item)
-	var sprite = passive.get_node_or_null("%Cube")
-	if sprite == null or not (sprite is CanvasItem):
-		return
 	var data = item.data
-	var texture = data.get("texture") if data != null else null
+	var texture = data.texture if data != null else null
 	if texture == null:
 		return
-	var material = sprite.material
+	# Always start from the packed fake_cube material so null/cleared `tex` cannot stick.
+	var template = load("res://materials/fake_cube.tres")
+	var material: ShaderMaterial = null
+	if template is ShaderMaterial:
+		material = template.duplicate(true) as ShaderMaterial
+	elif sprite.material is ShaderMaterial:
+		material = (sprite.material as ShaderMaterial).duplicate(true)
 	if material == null:
 		return
-	# PassiveCube materials are resource_local_to_scene; duplicate before writing so a
-	# shared default cannot leave every entry sampling a cleared/null tex.
-	if not material.resource_local_to_scene:
-		material = material.duplicate()
-		sprite.material = material
+	material.resource_local_to_scene = true
 	material.set_shader_parameter("tex", texture)
 	if data.get("main_color") != null:
 		material.set_shader_parameter("hint_color", data.main_color)
+	sprite.material = material
+
+
+func _bind_passive_cube(passive: Node, item) -> void:
+	var sprite = passive.get_node_or_null("%Cube")
+	if sprite == null:
+		sprite = passive.find_child("Cube", true, false)
+	if sprite is Sprite2D:
+		_bind_cube_sprite(sprite, item)
 
 
 func _counter_available(
