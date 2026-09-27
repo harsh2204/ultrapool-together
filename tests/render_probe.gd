@@ -424,28 +424,28 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 	var popup = shop.get_node_or_null("%CubesPopup")
 	if popup == null:
 		popup = shop.find_child("CubesPopup", true, false)
-	# Open through the native CubesButton path so CubesPopup rebuilds PassiveCube entries
-	# from player_info.cubes (visible=true alone left a black unbound silhouette).
-	if button != null and button.has_signal("pressed"):
+	# Open through the native shop handler (and force the CanvasItem visible). Emitting
+	# CubesButton.pressed alone can leave shop.%CubesPopup hidden while another layer
+	# paints the grid — ensure_cubes_popup_textures then no-ops and cubes stay black.
+	if shop.has_method("_on_cubes_button_pressed"):
+		shop._on_cubes_button_pressed()
+	elif button != null and button.has_signal("pressed"):
 		button.pressed.emit()
-		await get_tree().process_frame
-		await get_tree().process_frame
-	elif popup != null and popup.has_method("popup"):
-		popup.popup()
-		await get_tree().process_frame
-	elif popup is CanvasItem:
+	if popup is CanvasItem:
 		popup.visible = true
-		await get_tree().process_frame
+	if popup != null and popup.has_method("popup"):
+		popup.popup()
+	await get_tree().process_frame
+	await get_tree().process_frame
 	if shop.has_method("ensure_cubes_popup_textures"):
 		shop.ensure_cubes_popup_textures()
-	await get_tree().process_frame
 	await get_tree().create_timer(0.35).timeout
 	if shop.has_method("ensure_cubes_popup_textures"):
 		shop.ensure_cubes_popup_textures()
 	await get_tree().process_frame
-	var bound_ok: bool = _cubes_popup_textures_bound(popup, cubes)
+	var bound_ok: bool = _cubes_popup_textures_bound(shop, popup, cubes)
 	if not bound_ok:
-		print("RENDER_CUBE_DEBUG ", _cubes_popup_debug(popup, cubes))
+		print("RENDER_CUBE_DEBUG ", _cubes_popup_debug(shop, popup, cubes))
 	_check(bound_ok, "guest CubesPopup PassiveCube entries sample BallResource textures")
 	await _capture(
 		"54-guest-negative-cubes",
@@ -498,10 +498,10 @@ func _fixture_negative_cubes(database: Node) -> Array:
 	return picked
 
 
-func _cubes_popup_textures_bound(popup: Node, cubes: Array) -> bool:
-	if popup == null or cubes.is_empty():
+func _cubes_popup_textures_bound(shop: Node, popup: Node, cubes: Array) -> bool:
+	if cubes.is_empty():
 		return false
-	var sprites: Array = popup.find_children("Cube", "Sprite2D", true, false)
+	var sprites: Array = _collect_cube_sprites(shop, popup)
 	var bound = 0
 	for sprite in sprites:
 		if sprite.material == null:
@@ -516,10 +516,30 @@ func _cubes_popup_textures_bound(popup: Node, cubes: Array) -> bool:
 	return bound >= mini(2, cubes.size())
 
 
-func _cubes_popup_debug(popup: Node, cubes: Array) -> Dictionary:
+func _collect_cube_sprites(shop: Node, popup: Node) -> Array:
 	var sprites: Array = []
-	if popup != null:
-		sprites = popup.find_children("Cube", "Sprite2D", true, false)
+	var roots: Array = []
+	if shop != null:
+		roots.append(shop)
+	if popup != null and popup not in roots:
+		roots.append(popup)
+	var ui = shop.get_node_or_null("/root/UIManager") if shop else null
+	if ui != null:
+		roots.append(ui)
+	for root in roots:
+		for sprite in root.find_children("Cube", "Sprite2D", true, false):
+			if sprite not in sprites:
+				sprites.append(sprite)
+		for sprite in root.find_children("*", "Sprite2D", true, false):
+			if sprite in sprites or sprite.material == null:
+				continue
+			if sprite.material.has_method("get_shader_parameter") and sprite.material.get_shader_parameter("hint_color") != null:
+				sprites.append(sprite)
+	return sprites
+
+
+func _cubes_popup_debug(shop: Node, popup: Node, cubes: Array) -> Dictionary:
+	var sprites: Array = _collect_cube_sprites(shop, popup)
 	var sprite_info: Array = []
 	for sprite in sprites:
 		var tex = null
@@ -528,6 +548,8 @@ func _cubes_popup_debug(popup: Node, cubes: Array) -> Dictionary:
 		sprite_info.append(
 			{
 				"path": str(sprite.get_path()),
+				"name": sprite.name,
+				"in_tree": sprite.is_visible_in_tree(),
 				"has_material": sprite.material != null,
 				"tex_null": tex == null,
 				"tex_class": tex.get_class() if tex != null else ""
@@ -541,7 +563,12 @@ func _cubes_popup_debug(popup: Node, cubes: Array) -> Dictionary:
 				"tex_null": cube == null or cube.data == null or cube.data.texture == null
 			}
 		)
-	return {"sprites": sprite_info, "cubes": cube_info, "visible": popup.visible if popup else false}
+	return {
+		"sprites": sprite_info,
+		"cubes": cube_info,
+		"popup_visible": popup.visible if popup is CanvasItem else false,
+		"has_native_open": shop.has_method("_on_cubes_button_pressed") if shop else false
+	}
 
 
 func _check_shop_wallet_refresh(shop: Node, original: Dictionary) -> void:

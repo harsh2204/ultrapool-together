@@ -179,13 +179,8 @@ func _player_has_cubes() -> bool:
 ## Native CubesPopup builds PassiveCube grid entries from player_info.cubes. Guests receive
 ## BallItems rebuilt from BallDatabase ids; native set_item can leave `fake_cube.tres`
 ## with a null `tex`, which raymarches as a pure black silhouette. Re-bind each Cube
-## sprite's material from BallResource.texture / main_color. No-op when closed.
+## sprite's material from BallResource.texture / main_color.
 func ensure_cubes_popup_textures() -> void:
-	var popup = get_node_or_null("%CubesPopup")
-	if popup == null:
-		popup = find_child("CubesPopup", true, false)
-	if popup == null or not (popup is CanvasItem) or not popup.visible:
-		return
 	if player_info == null or not player_info.get("cubes") is Array:
 		return
 	var inventory: Array = []
@@ -194,23 +189,65 @@ func ensure_cubes_popup_textures() -> void:
 			inventory.append(entry)
 	if inventory.is_empty():
 		return
-	var sprites: Array = _cubes_popup_sprites(popup)
-	for index in mini(sprites.size(), inventory.size()):
-		_bind_cube_sprite(sprites[index], inventory[index])
+	# CustomPopupMenu may keep the root CanvasItem hidden while an inner CanvasLayer
+	# shows the grid, so do not require popup.visible. Search the shop tree first.
+	var sprites: Array = find_children("Cube", "Sprite2D", true, false)
+	if sprites.is_empty():
+		for sprite in find_children("*", "Sprite2D", true, false):
+			if _is_fake_cube_sprite(sprite):
+				sprites.append(sprite)
+	if sprites.is_empty():
+		var popup = get_node_or_null("%CubesPopup")
+		if popup == null:
+			popup = find_child("CubesPopup", true, false)
+		if popup != null:
+			sprites = _cubes_popup_sprites(popup)
+	if sprites.is_empty():
+		var ui = get_node_or_null("/root/UIManager")
+		if ui != null:
+			sprites = ui.find_children("Cube", "Sprite2D", true, false)
+			if sprites.is_empty():
+				for sprite in ui.find_children("*", "Sprite2D", true, false):
+					if _is_fake_cube_sprite(sprite):
+						sprites.append(sprite)
+	# Only rebind cubes that are currently on-screen (popup grid), not unrelated Cube nodes.
+	var live: Array = []
+	for sprite in sprites:
+		if sprite is Sprite2D and sprite.is_visible_in_tree():
+			live.append(sprite)
+	if live.is_empty():
+		live = sprites
+	for index in mini(live.size(), inventory.size()):
+		_bind_cube_sprite(live[index], inventory[index])
 
 
 func _cubes_popup_sprites(popup: Node) -> Array:
-	# Prefer the Sprite2D named Cube (fake_cube.tres). %Cube unique-name ownership can
-	# sit on CubeGridItem after instancing, so name search is more reliable than %.
+	# Prefer the Sprite2D named Cube (fake_cube.tres). Also accept any Sprite2D whose
+	# material exposes the fake_cube hint_color parameter (name can differ after instance).
 	var sprites: Array = popup.find_children("Cube", "Sprite2D", true, false)
 	if not sprites.is_empty():
 		return sprites
 	var found: Array = []
+	for sprite in popup.find_children("*", "Sprite2D", true, false):
+		if _is_fake_cube_sprite(sprite):
+			found.append(sprite)
+	if not found.is_empty():
+		return found
 	for node in popup.find_children("*", "Node2D", true, false):
 		var sprite = node.get_node_or_null("%Cube")
 		if sprite is Sprite2D:
 			found.append(sprite)
 	return found
+
+
+func _is_fake_cube_sprite(sprite: Sprite2D) -> bool:
+	if sprite == null or sprite.material == null:
+		return false
+	if not sprite.material.has_method("get_shader_parameter"):
+		return false
+	# fake_cube.gdshader declares hint_color; spherise ball materials do not.
+	var hint = sprite.material.get_shader_parameter("hint_color")
+	return hint != null
 
 
 func _bind_cube_sprite(sprite: Sprite2D, item) -> void:
@@ -239,14 +276,11 @@ func _bind_cube_sprite(sprite: Sprite2D, item) -> void:
 	if data.get("main_color") != null:
 		material.set_shader_parameter("hint_color", data.main_color)
 	sprite.material = material
-
-
-func _bind_passive_cube(passive: Node, item) -> void:
-	var sprite = passive.get_node_or_null("%Cube")
-	if sprite == null:
-		sprite = passive.find_child("Cube", true, false)
-	if sprite is Sprite2D:
-		_bind_cube_sprite(sprite, item)
+	# blank128.png is the raymarch canvas; keep it so the shader has a surface to draw.
+	if sprite.texture == null:
+		var blank = load("res://blank128.png")
+		if blank != null:
+			sprite.texture = blank
 
 
 func _counter_available(
