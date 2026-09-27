@@ -19,14 +19,19 @@ func _process(delta):
 		if is_instance_valid(game) and not game.playing:
 			game.playing = true
 		_remote_aim_active = false
-		super._process(delta)
-		_ensure_aim_chrome()
-		if not preparing_shot:
+		if preparing_shot:
+			super._process(delta)
+			_ensure_aim_chrome()
+			if shot is Vector2 and shot.is_finite() and shot.length() > 1.0:
+				_show_cue_aim(shot)
+		else:
+			# Same in_menu suppress the off-turn path uses — otherwise native leaves the
+			# packed rest shaft visible at the table's left edge (#18).
+			var was_in_menu: bool = game.in_menu
+			game.in_menu = true
+			super._process(delta)
+			game.in_menu = was_in_menu
 			_hide_cue_pivot()
-		elif shot is Vector2 and shot.is_finite() and shot.length() > 1.0:
-			# Native may leave CuePivot at the packed rest pose when playing is forced
-			# late; keep the shaft glued to this ball (#18).
-			_show_cue_aim(shot)
 		return
 	# Off-turn: cancel local input aim, then optionally mirror teammate presence aim (#18).
 	pause_cancel_shot()
