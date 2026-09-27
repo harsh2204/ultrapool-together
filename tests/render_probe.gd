@@ -171,13 +171,41 @@ func _run():
 	mod._local_id = 2
 	mod.active = true
 	mod.latest_state.in_shop = false
+	# Guest seat owns the opening turn so the banner paints on first table entry (#30).
+	mod.turn_owner = 2
+	mod.table_leader_id = 2
+	mod.shot_pending = false
+	mod.awaiting_shot_turn = -1
+	mod.finished = false
+	if mod.turn_banner != null:
+		mod.turn_banner.clear()
+	mod._turn_banner_showing = false
 	if not _check(mod.table_sync.begin_guest(fixture_config), "guest scene begins"):
 		_finish()
 		return
+	# Prove spent pips through snapshot → replica _update_shots (#29), not a post-apply poke.
+	var shots_max: int = maxi(int(snapshot.get("shots_max", 0)), int(snapshot.get("shots", 0)))
+	if shots_max < 1:
+		shots_max = maxi(int(snapshot.get("shots", 1)), 1)
+	snapshot["shots_max"] = shots_max
+	snapshot["shots"] = maxi(shots_max - 1, 0)
+	snapshot["shots_used"] = shots_max - int(snapshot["shots"])
 	_check(mod.table_sync.apply_snapshot(snapshot), "guest snapshot accepted")
 	await get_tree().create_timer(1.0).timeout
 	game = global_node.gameManager
+	var previous_transport = mod.transport
+	var guest_transport = (
+		load(get_script().resource_path.get_base_dir().path_join("render_guest_transport.gd")).new()
+	)
+	guest_transport.people = mod.lobby.get("players", [])
+	add_child(guest_transport)
+	mod.transport = guest_transport
+	mod._local_id = 2
+	mod.turn_owner = 2
 	mod.latest_state = mod.adapter.game_data()
+	mod.latest_state["shots_left"] = int(snapshot["shots"])
+	mod.latest_state["table_active"] = true
+	mod.latest_state["in_shop"] = false
 	mod._update_hud()
 	_check_run_config("guest")
 	_check_balls(game.replicas.values(), "guest")
@@ -185,6 +213,9 @@ func _run():
 	await _capture_guest_aim(game)
 	await _capture_ball_previews(game)
 	await _capture_guest_shop(snapshot, shop_state)
+	if is_instance_valid(mod.transport) and mod.transport != previous_transport:
+		mod.transport.queue_free()
+	mod.transport = previous_transport
 	mod.table_sync.end_guest()
 	for result in await round_flow.replay_guest(mod, _capture):
 		_check(result.passed, result.name)
@@ -283,8 +314,8 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 
 
 func _capture_guest_aim(game) -> void:
-	# Guest local aim chrome (#18). Offline local_id is 0, so native_player's off-turn
-	# path would clear preparing_shot every frame — freeze the cue ball, force chrome.
+	# Guest local aim chrome (#18). Drive CuePivot from the shot vector while process is
+	# frozen so native_player can_control() cannot clear preparing_shot mid-capture.
 	if not is_instance_valid(game) or not is_instance_valid(game.player_ball):
 		_check(false, "guest aim fixture has a cue ball")
 		return
@@ -296,12 +327,9 @@ func _capture_guest_aim(game) -> void:
 	mod._local_id = 2
 	mod.panel.hide()
 	mod.latest_state["can_shoot"] = true
+	mod.latest_state["table_active"] = true
 	mod.shot_pending = false
 	mod.awaiting_shot_turn = -1
-	if is_instance_valid(game.table) and game.table.shots_info != null:
-		game.table.shots_info.shots_used = 1
-		if game.table.shots_info.has_method("update_visuals"):
-			game.table.shots_info.update_visuals(true)
 	var ball = game.player_ball
 	CueCatalog.apply(ball, "gold")
 	game.playing = true
@@ -331,8 +359,12 @@ func _capture_guest_aim(game) -> void:
 	await get_tree().process_frame
 	var shoot_ui = ball.get("shoot_ui")
 	var prediction = ball.get("prediction")
+	var pivot = ball.get_node_or_null("CuePivot")
 	_check(
 		bool(ball.get("preparing_shot"))
+		and pivot is CanvasItem
+		and pivot.visible
+		and pivot.global_position.distance_to(ball.global_position) < 2.0
 		and (
 			(shoot_ui is CanvasItem and shoot_ui.visible)
 			or (prediction is CanvasItem and prediction.visible)
@@ -348,6 +380,8 @@ func _capture_guest_aim(game) -> void:
 	ball.set("holding_shot", false)
 	if ball.has_method("pause_cancel_shot"):
 		ball.pause_cancel_shot()
+	if ball.has_method("_hide_cue_pivot"):
+		ball._hide_cue_pivot()
 	ball.set_process_input(was_input)
 	ball.set_process(was_processing)
 

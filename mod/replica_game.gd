@@ -5,6 +5,7 @@ const TableSync = preload("table_sync.gd")
 const ReplicaFx = preload("replica_fx.gd")
 const CueCatalog = preload("cue_catalog.gd")
 const BallLevelFx = preload("ball_level_fx.gd")
+const ShotsPips = preload("shots_pips.gd")
 
 var remote_ready = false
 var remote_shots = 0
@@ -511,55 +512,24 @@ func _update_shots(remaining: int, maximum: int, used: int) -> void:
 	var info = table.shots_info
 	if not is_instance_valid(info):
 		return
-	_enable_shots_info(info)
+	# Native / spectator show one white pip per remaining shot. Modulate dimming is a
+	# no-op on ShotPip's circle shader (COLOR.rgb comes from shader `color`) (#29).
 	var max_shots: int = maximum if maximum >= remaining else remaining + maxi(used, 0)
-	# Prefer remaining-derived used when the wire value lags (#29).
 	var used_shots: int = clampi(used, 0, max_shots)
 	if remaining >= 0 and remaining <= max_shots:
 		used_shots = clampi(max_shots - remaining, 0, max_shots)
+	var show_count: int = clampi(remaining, 0, max_shots)
 	if (
 		_hud_state.get("shots_max") == max_shots
 		and _hud_state.get("shots_used") == used_shots
+		and _hud_state.get("shots") == remaining
 		and info.shots_max == max_shots
 		and info.shots_used == used_shots
-		and info.shot_pips.size() == max_shots
+		and info.shot_pips.size() == show_count
 	):
-		_apply_pip_spent_state(info, used_shots)
+		ShotsPips.paint(info)
 		return
-	if info.shots_max != max_shots or info.shot_pips.size() != max_shots:
-		for pip in info.shot_pips:
-			pip.queue_free()
-		info.shot_pips.clear()
-		info.shots_max = max_shots
-		var holder = info.get("pips_holder")
-		if holder == null:
-			holder = info.get_node_or_null("%PipsHolder")
-		for index in max_shots:
-			var pip = info.pip_scene.instantiate()
-			if holder != null:
-				holder.add_child(pip)
-			else:
-				info.add_child(pip)
-			info.shot_pips.append(pip)
-	info.shots_used = used_shots
-	if info.has_method("update_visuals"):
-		info.update_visuals(true)
-	_apply_pip_spent_state(info, used_shots)
-
-
-func _apply_pip_spent_state(info: Node, used_shots: int) -> void:
-	# Belt-and-suspenders when native update_visuals cannot animate under replica (#29).
-	for index in info.shot_pips.size():
-		var pip = info.shot_pips[index]
-		if not pip is CanvasItem:
-			continue
-		if not pip.has_meta("together_pip_lit"):
-			pip.set_meta("together_pip_lit", pip.modulate)
-		var lit: Color = pip.get_meta("together_pip_lit")
-		if index < used_shots:
-			pip.modulate = Color(lit.r * 0.35, lit.g * 0.35, lit.b * 0.35, lit.a * 0.5)
-		elif pip.modulate != lit:
-			pip.modulate = lit
+	ShotsPips.apply(info, remaining, max_shots, used_shots)
 
 
 func _refresh_inventory_visuals() -> void:

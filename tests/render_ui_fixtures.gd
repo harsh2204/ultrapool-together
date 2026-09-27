@@ -543,6 +543,9 @@ func capture_table_states(mod: Node, capture: Callable) -> void:
 	var CueCatalog = load(
 		mod.get_script().resource_path.get_base_dir().path_join("cue_catalog.gd")
 	)
+	var ShotsPips = load(
+		mod.get_script().resource_path.get_base_dir().path_join("shots_pips.gd")
+	)
 	var game = mod.get_node("/root/Global").gameManager
 	# Custom cue + one spent shot so #22 / #29 are visible on the host table (#31/#32/#36 also here).
 	for player in mod.lobby.players:
@@ -550,11 +553,22 @@ func capture_table_states(mod: Node, capture: Callable) -> void:
 	mod.used_shots = 1
 	if is_instance_valid(game) and is_instance_valid(game.player_ball):
 		CueCatalog.apply(game.player_ball, "emerald")
+		# Hide parked native cue until the player aims (#18 regression).
+		var pivot = game.player_ball.get_node_or_null("CuePivot")
+		if pivot is CanvasItem:
+			pivot.visible = false
 	if is_instance_valid(game) and is_instance_valid(game.table) and game.table.shots_info != null:
 		var info = game.table.shots_info
+		var remaining_now: int = int(game.get_shots_left())
+		var maximum: int = maxi(int(info.shots_max), remaining_now)
+		if maximum < 1:
+			maximum = remaining_now
+		var remaining: int = maxi(maximum - 1, 0)
+		info.shots_max = maximum
 		info.shots_used = 1
-		if info.has_method("update_visuals"):
-			info.update_visuals(true)
+		ShotsPips.apply(info, remaining, maximum, 1)
+		if mod.latest_state is Dictionary:
+			mod.latest_state["shots_left"] = remaining
 	mod._update_hud()
 	await capture.call(
 		"table-your-turn",

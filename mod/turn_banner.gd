@@ -86,6 +86,9 @@ func present(owner_id: int, text: String, color: Color, show: bool) -> void:
 		and not color_changed
 		and _want_visible == next_show
 	):
+		# Still reconcile visibility — a prior clear/hide must not stick on first table
+		# entry when inputs are unchanged from an earlier session (#30).
+		_apply_visibility()
 		return
 	_owner_id = owner_id
 	_text = text

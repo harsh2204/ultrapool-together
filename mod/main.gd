@@ -40,6 +40,7 @@ var turn_label: Label
 var score_label: Label
 var pass_button: Button
 var turn_banner: Control
+var _turn_banner_showing: bool = false
 var _hud_layer: CanvasLayer
 var _queued_ui_nav: Dictionary = {}
 var _applied_ui_nav: Dictionary = {}
@@ -765,6 +766,7 @@ func _end_table():
 	_applied_ui_nav.clear()
 	if turn_banner != null:
 		turn_banner.clear()
+	_turn_banner_showing = false
 	table_sync.end_guest()
 	run_setup.cancel()
 	shot_pending = false
@@ -1385,6 +1387,11 @@ func _update_turn_banner() -> void:
 			if turn_owner == transport.local_id()
 			else "%s's turn" % _player_name(turn_owner)
 		)
+	# Rising edge: clear so change-driven present() always paints on first table entry
+	# / first ready snapshot, not only when turn_owner later changes (#30).
+	if show and not _turn_banner_showing:
+		turn_banner.clear()
+	_turn_banner_showing = show
 	turn_banner.present(turn_owner, text, player_color(turn_owner), show)
 
 

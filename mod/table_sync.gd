@@ -652,22 +652,14 @@ func _number(value, minimum: float, maximum: float) -> bool:
 func _capture_shots_max(game: Node) -> int:
 	var remaining: int = int(game.get_shots_left())
 	var info = game.table.shots_info if is_instance_valid(game.table) else null
-	var maximum: int = remaining
-	if is_instance_valid(info):
-		maximum = maxi(int(info.shots_max), remaining)
-	var used: int = _capture_shots_used(game)
-	return maxi(maximum, remaining + used)
+	if is_instance_valid(info) and int(info.shots_max) > 0:
+		return maxi(int(info.shots_max), remaining)
+	return maxi(remaining, 0)
 
 
 func _capture_shots_used(game: Node) -> int:
-	# Prefer remaining-vs-max so spent pips stay correct when native ShotsInfo.shots_used
-	# lags the live shot counter (#29 / PERF-015).
+	# Derive spent count from remaining vs round max. Do not trust a fixture-only
+	# shots_used bump that never decremented get_shots_left() (#29 / PERF-015).
 	var remaining: int = int(game.get_shots_left())
-	var info = game.table.shots_info if is_instance_valid(game.table) else null
-	var info_used: int = 0
-	var info_max: int = remaining
-	if is_instance_valid(info):
-		info_used = clampi(int(info.shots_used), 0, 20)
-		info_max = maxi(int(info.shots_max), remaining)
-	var maximum: int = maxi(info_max, remaining + info_used)
+	var maximum: int = _capture_shots_max(game)
 	return clampi(maximum - remaining, 0, maximum)
