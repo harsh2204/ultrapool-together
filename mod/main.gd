@@ -1309,7 +1309,16 @@ func _update_hud():
 				else "Winner shops alone - watching %s" % _player_name(winner)
 			)
 		else:
-			turn_text = "Shared shop · Table %d" % (table_id + 1)
+			# Refs #35: label follows shared_shop_sync_active (sync_shop latch +
+			# exclusive/winner shopper), not the raw lobby flag.
+			var shared_shop: bool = (
+				shop_sync != null and shop_sync.shared_shop_sync_active()
+			)
+			turn_text = (
+				"Shared shop · Table %d" % (table_id + 1)
+				if shared_shop
+				else "Your shop · Table %d" % (table_id + 1)
+			)
 	elif not latest_state.get("table_active", false):
 		turn_text = "Waiting for the table"
 	else:

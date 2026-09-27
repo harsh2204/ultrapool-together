@@ -182,6 +182,7 @@ func _run():
 	_check_run_config("guest")
 	_check_balls(game.replicas.values(), "guest")
 	await _capture("30-guest-table", "Guest table · reconstructed from the host snapshot")
+	await _capture_guest_aim(game)
 	await _capture_ball_previews(game)
 	await _capture_guest_shop(snapshot, shop_state)
 	mod.table_sync.end_guest()
@@ -271,8 +272,137 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 		shop.selected_ball == null and shop.selected_passive == null,
 		"changing native shop counter clears inspection"
 	)
+	await get_tree().create_timer(0.5).timeout
+	await _capture(
+		"53-guest-snack-bar",
+		"Guest snack / tapas bar · ticket counters visible on the shared shop HUD."
+	)
 	await round_flow.check_guest_snack_drag(mod, _capture)
+	await _capture_guest_negative_cubes(shop, game)
 	mod.shop_sync.end_session()
+
+
+func _capture_guest_aim(game) -> void:
+	# Guest local aim chrome (#18). Offline local_id is 0, so native_player's off-turn
+	# path would clear preparing_shot every frame — freeze the cue ball, force chrome.
+	if not is_instance_valid(game) or not is_instance_valid(game.player_ball):
+		_check(false, "guest aim fixture has a cue ball")
+		return
+	var CueCatalog = load(get_script().resource_path.get_base_dir().path_join("../mod/cue_catalog.gd"))
+	for player in mod.lobby.get("players", []):
+		if int(player.get("id", 0)) == 2:
+			player["cue"] = "gold"
+	mod.turn_owner = 2
+	mod._local_id = 2
+	mod.panel.hide()
+	mod.latest_state["can_shoot"] = true
+	mod.shot_pending = false
+	mod.awaiting_shot_turn = -1
+	if is_instance_valid(game.table) and game.table.shots_info != null:
+		game.table.shots_info.shots_used = 1
+		if game.table.shots_info.has_method("update_visuals"):
+			game.table.shots_info.update_visuals(true)
+	var ball = game.player_ball
+	CueCatalog.apply(ball, "gold")
+	game.playing = true
+	game.in_shop = false
+	game.in_menu = false
+	var was_processing = ball.is_processing()
+	var was_input = ball.is_processing_input()
+	ball.set_process(false)
+	ball.set_process_input(false)
+	ball.set("preparing_shot", true)
+	ball.set("holding_shot", true)
+	ball.set("shot", Vector2(90, -140))
+	# Reveal native aim chrome even if controller can_control() is false in fixtures.
+	for prop in ["shoot_ui", "prediction"]:
+		var node = ball.get(prop)
+		if node is CanvasItem:
+			node.visible = true
+	var gauge = ball.get("chargeGauge")
+	if gauge == null and ball.get("visuals") != null:
+		gauge = ball.visuals.get_node_or_null("static/chargeGauge")
+	if gauge is CanvasItem:
+		gauge.visible = true
+	if ball.has_method("_ensure_aim_chrome"):
+		ball._ensure_aim_chrome()
+	mod._update_hud()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var shoot_ui = ball.get("shoot_ui")
+	var prediction = ball.get("prediction")
+	_check(
+		bool(ball.get("preparing_shot"))
+		and (
+			(shoot_ui is CanvasItem and shoot_ui.visible)
+			or (prediction is CanvasItem and prediction.visible)
+			or (gauge is CanvasItem and gauge.visible)
+		),
+		"guest cue ball shows aim chrome (stick / line / reticle)"
+	)
+	await _capture(
+		"31-guest-aim",
+		"Guest turn · native cue stick, aim line, and reticle with a gold custom cue."
+	)
+	ball.set("preparing_shot", false)
+	ball.set("holding_shot", false)
+	if ball.has_method("pause_cancel_shot"):
+		ball.pause_cancel_shot()
+	ball.set_process_input(was_input)
+	ball.set_process(was_processing)
+
+
+func _capture_guest_negative_cubes(shop: Node, game) -> void:
+	if not is_instance_valid(shop) or not is_instance_valid(game) or game.player_info == null:
+		return
+	var database = get_node("/root/BallDatabase")
+	if database.cubes.is_empty():
+		_check(false, "BallDatabase exposes at least one NEGATIVE cube")
+		return
+	var cube = BallItem.new()
+	cube.data = database.cubes[0]
+	_check(
+		str(cube.data.from_set) == "NEGATIVE",
+		"fixture cube comes from the NEGATIVE set for CubesButton (#33)"
+	)
+	var previous_cubes = game.player_info.cubes.duplicate()
+	game.player_info.cubes.assign([cube])
+	if shop.has_method("refresh_inventory_hud"):
+		shop.refresh_inventory_hud()
+	elif shop.has_method("_sync_cubes_button"):
+		shop._sync_cubes_button()
+	await get_tree().process_frame
+	var button = shop.get_node_or_null("%CubesButton")
+	_check(button != null and button.visible, "guest CubesButton visible with a NEGATIVE cube")
+	var popup = shop.get_node_or_null("%CubesPopup")
+	if popup == null:
+		popup = shop.find_child("CubesPopup", true, false)
+	# Prefer showing the popup without emitting pressed (avoids focus/input locks).
+	if popup is CanvasItem:
+		popup.visible = true
+	elif button != null and button.has_signal("pressed"):
+		button.pressed.emit()
+		await get_tree().process_frame
+	await get_tree().create_timer(0.3).timeout
+	await _capture(
+		"54-guest-negative-cubes",
+		"Guest shop · CubesButton / CubesPopup with a NEGATIVE cube and snack ticket counters."
+	)
+	if popup is CanvasItem:
+		popup.visible = false
+	if popup != null and popup.has_method("hide"):
+		popup.hide()
+	# Restore inventory so later hover/drag fixtures keep native input unlocked.
+	game.player_info.cubes.assign(previous_cubes)
+	if shop.has_method("refresh_inventory_hud"):
+		shop.refresh_inventory_hud()
+	get_node("/root/UIManager").info_display.hide_info()
+	if shop.has_method("unselect"):
+		shop.unselect()
+	elif shop.get("selected_ball") != null:
+		shop.selected_ball = null
+		shop.selected_passive = null
+	await get_tree().process_frame
 
 
 func _check_shop_wallet_refresh(shop: Node, original: Dictionary) -> void:

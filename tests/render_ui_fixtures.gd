@@ -298,6 +298,7 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 		"Native starting-set cards and difficulty buttons show live voters."
 	)
 	await _capture_full_catalog(mod, capture)
+	await capture_together_options(mod, capture)
 	panel.render(coop, 1, true)
 
 	panel.set_friends([{"id": 5, "name": "Erin"}, {"id": 6, "name": "Finley"}])
@@ -539,15 +540,35 @@ func _card_roster(label: Control, body: Control) -> ScrollContainer:
 func capture_table_states(mod: Node, capture: Callable) -> void:
 	var saved = _save(mod)
 	_set_table(mod)
+	var CueCatalog = load(
+		mod.get_script().resource_path.get_base_dir().path_join("cue_catalog.gd")
+	)
+	var game = mod.get_node("/root/Global").gameManager
+	# Custom cue + one spent shot so #22 / #29 are visible on the host table (#31/#32/#36 also here).
+	for player in mod.lobby.players:
+		player["cue"] = "emerald"
+	mod.used_shots = 1
+	if is_instance_valid(game) and is_instance_valid(game.player_ball):
+		CueCatalog.apply(game.player_ball, "emerald")
+	if is_instance_valid(game) and is_instance_valid(game.table) and game.table.shots_info != null:
+		var info = game.table.shots_info
+		info.shots_used = 1
+		if info.has_method("update_visuals"):
+			info.update_visuals(true)
 	mod._update_hud()
-	await capture.call("table-your-turn", "Your turn with the selected native starting set.")
+	await capture.call(
+		"table-your-turn",
+		"Host turn · banner, spent shot pip, emerald cue, cue ball without a star."
+	)
 
 	mod.turn_owner = 2
-	var game = mod.get_node("/root/Global").gameManager
 	var origin: Vector2 = game.player_ball.global_position
-	_cursor(mod, 2, "table", origin + Vector2(70, -100), origin, Vector2(70, -100))
+	_cursor(mod, 2, "table", origin + Vector2(70, -100), origin, Vector2(70, -100), "gold")
 	mod._update_hud()
-	await capture.call("table-teammate-aim", "Teammate turn with the shared native aim preview.")
+	await capture.call(
+		"table-teammate-aim",
+		"Teammate turn · seat-colored banner, presence aim line, and CRT over mod UI."
+	)
 
 	mod.presence.clear()
 	mod.lobby = _results()
@@ -560,18 +581,141 @@ func capture_table_states(mod: Node, capture: Callable) -> void:
 	_restore(mod, saved)
 
 
+## Lobby Together options popup (#1) and clone-table vs-mode gating (#3).
+func capture_together_options(mod: Node, capture: Callable) -> void:
+	var panel = mod.panel
+	var ExpansionRegistry = load(
+		mod.get_script().resource_path.get_base_dir().path_join("sets/registry.gd")
+	)
+	var CuePrefs = load(mod.get_script().resource_path.get_base_dir().path_join("cue_prefs.gd"))
+	var HudPrefs = load(mod.get_script().resource_path.get_base_dir().path_join("hud_prefs.gd"))
+	CuePrefs.set_cue_id("emerald")
+	HudPrefs.set_turn_banner_enabled(true)
+	var viewport = mod.get_viewport()
+	var embedded: bool = viewport.gui_embed_subwindows
+	viewport.gui_embed_subwindows = true
+
+	# Clean Settings heading: Tables / Mode / Shots (+ Together options button), popup closed.
+	# Mode and Shots only appear when table_count > 1 (native layout).
+	var heading = _lobby([0, 0, 1, 1], 2)
+	heading.single_table_difficulty = false
+	heading.clone_rounds = false
+	heading.multiplayer_balls = false
+	heading.sync_shop = true
+	heading.expansion_sets_enabled = false
+	heading.expansion_sets = ExpansionRegistry.default_flags()
+	panel.render(heading, 1, true)
+	panel.get_node("%ModOptions").hide()
+	panel._mod_options_open = false
+	_record(panel.get_node("%Settings").visible, "Settings heading stays visible before match start")
+	_record(
+		panel.get_node("%ModOptionsButton").visible,
+		"Together options button sits beside Tables / Mode / Shots"
+	)
+	_record(panel.get_node("%MatchMode").get_parent().visible, "Mode appears with multiple tables")
+	_record(panel.get_node("%ShotBudget").get_parent().visible, "Shots appears with multiple tables")
+	await capture.call(
+		"lobby-settings-heading",
+		"Native Settings heading · Tables / Mode / Shots with Together options closed."
+	)
+
+	# Full Together options with Together All Nighter → clone-table rounds visible.
+	var nighter = heading.duplicate(true)
+	nighter.single_table_difficulty = true
+	nighter.clone_rounds = true
+	nighter.multiplayer_balls = true
+	nighter.sync_shop = true
+	nighter.expansion_sets_enabled = true
+	nighter.expansion_sets = ExpansionRegistry.normalize_flags(
+		{
+			"PHASES": true,
+			"MORPH": true,
+			"TIDE": true,
+			"RELIC": true,
+			"TAROT": true,
+			"ZODIAC": true
+		}
+	)
+	for player in nighter.players:
+		player["cue"] = "emerald"
+		player.run_votes.difficulty = "diff_together_nighter"
+	nighter.run_vote.selected.difficulty = "diff_together_nighter"
+	nighter.run_vote.options.difficulty = [
+		{"id": "diff_1", "label": "Chill Pool Night"},
+		{"id": "diff_together_nighter", "label": "All Nighter (One Table)"}
+	]
+	panel.render(nighter, 1, true)
+	panel._place_mod_options()
+	panel.get_node("%ModOptions").popup()
+	panel._mod_options_open = true
+	await mod.get_tree().process_frame
+	_record(panel.get_node("%CloneRounds").visible, "clone-table rounds shown on Together All Nighter")
+	_record(panel.get_node("%MultiplayerBalls").visible, "multiplayer balls toggle is in Together options")
+	_record(
+		panel.get_node("%ExpansionSetsEnabled").button_pressed
+		and panel.get_node("%ExpansionSets").visible,
+		"expansion master on reveals the six per-set toggles"
+	)
+	_record(panel.get_node("%ExpansionSets").get_child_count() >= 6, "six expansion set toggles present")
+	var options_rect: Rect2 = panel.get_node("%ModOptions").get_global_rect()
+	var header_rect: Rect2 = panel.get_node("%Close").get_global_rect()
+	_record(
+		not options_rect.intersects(header_rect),
+		"Together options stays below the header Close button"
+	)
+	_record(
+		panel.get_node("%ModOptions").size.y <= panel.get_node("%Body").size.y + 8,
+		"Together options height fits inside the lobby body"
+	)
+	_record(
+		panel._turn_banner_check != null and is_instance_valid(panel._turn_banner_check),
+		"Show turn banner toggle exists in Together options"
+	)
+	await capture.call(
+		"lobby-together-options-nighter",
+		"Together options · scrolled panel below header · Multiplayer balls, Clone-table rounds, expansions, sync shop, cue picker."
+	)
+
+	# Same popup away from Nighter → clone-table rounds gated off (#3).
+	var gated = nighter.duplicate(true)
+	gated.single_table_difficulty = false
+	gated.clone_rounds = false
+	gated.run_vote.selected.difficulty = "diff_1"
+	for player in gated.players:
+		player.run_votes.difficulty = "diff_1"
+	panel.render(gated, 1, true)
+	panel._place_mod_options()
+	panel.get_node("%ModOptions").popup()
+	panel._mod_options_open = true
+	await mod.get_tree().process_frame
+	_record(not panel.get_node("%CloneRounds").visible, "clone-table rounds hidden off Together All Nighter")
+	await capture.call(
+		"lobby-together-options-gated",
+		"Together options with a non-Nighter difficulty · Clone-table rounds hidden."
+	)
+
+	panel.get_node("%ModOptions").hide()
+	panel._mod_options_open = false
+	viewport.gui_embed_subwindows = embedded
+
+
 func capture_shop_presence(mod: Node, capture: Callable, input: Node) -> void:
 	var saved = _save(mod)
 	_set_table(mod)
+	mod.lobby["sync_shop"] = true
 	mod.latest_state.in_shop = true
 	mod._update_hud()
 	var shop = mod.shop_sync
+	shop._refresh_shared_sync_latch(true)
 	var section: String = shop.current_section()
 	_record(shop.show_section("balls"), "native ball shop is available")
 	await mod.get_tree().create_timer(0.6).timeout
 	_cursor(mod, 2, "shop", Vector2(0.3, 0.35))
 	_cursor(mod, 3, "shop", Vector2(0.72, 0.55))
-	await capture.call("shop-shared", "Native shared shop, player cursors and native ball offers.")
+	await capture.call(
+		"shop-shared",
+		"Shared shop with sync_shop ON · teammate cursors over native ball offers."
+	)
 
 	var inspected = false
 	input.begin(shop.native_shop())
@@ -590,6 +734,9 @@ func capture_shop_presence(mod: Node, capture: Callable, input: Node) -> void:
 		await capture.call("shop-ball-details", "A native starter's description and shop actions.")
 	input.finish()
 	mod.get_node("/root/UIManager").info_display.hide_info()
+
+	await capture_expansion_shop(mod, capture, input)
+
 	var snacks: bool = shop.show_section("snacks")
 	_record(snacks, "native snack counter is available")
 	if snacks:
@@ -602,9 +749,107 @@ func capture_shop_presence(mod: Node, capture: Callable, input: Node) -> void:
 		await capture.call(
 			"shop-mixing", "The native cocktail counter for mixing the table's balls."
 		)
+
+	# Independent shop (#35): sync_shop OFF suppresses shared presence cursors
+	# and the HUD shop notice reads "Your shop" instead of "Shared shop".
+	mod.presence.clear()
+	mod.lobby["sync_shop"] = false
+	shop._refresh_shared_sync_latch(true)
+	mod.latest_state["in_shop"] = true
+	mod._update_hud()
+	_cursor(mod, 2, "shop", Vector2(0.3, 0.35))
+	_cursor(mod, 3, "shop", Vector2(0.72, 0.55))
+	shop.show_section("balls")
+	await mod.get_tree().create_timer(0.5).timeout
+	_record(not shop.presence_rect().has_area(), "sync_shop OFF clears shared shop presence rect")
+	_record(not shop.shared_shop_sync_active(), "sync_shop OFF clears shared_shop_sync_active")
+	_record(
+		str(mod.turn_label.text).begins_with("Your shop"),
+		"sync_shop OFF HUD notice reads Your shop"
+	)
+	await capture.call(
+		"shop-sync-off",
+		"Independent shop · Your shop label · sync_shop OFF so shared teammate cursors do not draw."
+	)
+	mod.lobby["sync_shop"] = true
+	shop._refresh_shared_sync_latch(true)
+	mod._update_hud()
 	shop.show_section(section)
-	await mod.get_tree().create_timer(0.6).timeout
+	await mod.get_tree().create_timer(0.4).timeout
 	_restore(mod, saved)
+
+
+## Force an expansion ball into the open shop and inspect it (#8 / #10).
+func capture_expansion_shop(mod: Node, capture: Callable, input: Node) -> void:
+	var ExpansionRegistry = load(
+		mod.get_script().resource_path.get_base_dir().path_join("sets/registry.gd")
+	)
+	var flags = ExpansionRegistry.normalize_flags(
+		{
+			"PHASES": true,
+			"MORPH": true,
+			"TIDE": true,
+			"RELIC": true,
+			"TAROT": true,
+			"ZODIAC": true
+		}
+	)
+	mod.expansion_balls.begin_session(flags)
+	var database = mod.get_node("/root/BallDatabase")
+	var resource = database.id_to_ball.get("PHASES_CRESCENT")
+	_record(resource != null, "PHASES_CRESCENT registers while expansion sets are enabled")
+	if resource == null:
+		mod.expansion_balls.end_session()
+		return
+	var shop = mod.shop_sync.native_shop()
+	if not is_instance_valid(shop):
+		mod.expansion_balls.end_session()
+		return
+	var placed = false
+	for slot in shop.shop_slots:
+		if not is_instance_valid(slot.ball) or slot.ball.is_queued_for_deletion():
+			continue
+		var item = BallItem.new()
+		item.data = resource
+		item.base_score = resource.base_score
+		item.level = 1
+		slot.ball.ball_item = item
+		if slot.ball.has_method("update_upgrade_status"):
+			slot.ball.update_upgrade_status(false)
+		slot.set_ball(slot.ball)
+		placed = true
+		break
+	_record(placed, "fixture places an expansion ball into a native shop offer slot")
+	mod.shop_sync.show_section("balls")
+	await mod.get_tree().create_timer(0.55).timeout
+	await capture.call(
+		"shop-expansion-offer",
+		"Shop offering Crescent · expansion ball with placeholder texture while sets are enabled."
+	)
+	input.begin(shop)
+	var inspected = false
+	for slot in shop.shop_slots:
+		if not is_instance_valid(slot.ball):
+			continue
+		if str(slot.ball.ball_item.data.id) != "PHASES_CRESCENT":
+			continue
+		await input.hover(slot.ball)
+		inspected = shop.selected_ball == slot.ball
+		break
+	_record(inspected, "expansion ball can be inspected in the native shop")
+	if inspected:
+		await mod.get_tree().create_timer(0.45).timeout
+		_record(
+			mod.get_node("/root/UIManager").info_display.main_panel.is_visible_in_tree(),
+			"expansion inspection card is visibly rendered"
+		)
+		await capture.call(
+			"shop-expansion-details",
+			"Expansion ball inspection · Crescent name, description, and placeholder art."
+		)
+	input.finish()
+	mod.get_node("/root/UIManager").info_display.hide_info()
+	mod.expansion_balls.end_session()
 
 
 func _record(passed: bool, name: String) -> void:
@@ -627,6 +872,7 @@ func _lobby(tables: Array, count: int) -> Dictionary:
 				"ready": true,
 				"connected": true,
 				"leader": slot == 0 and table >= 0,
+				"cue": "native",
 				"run_votes": {"deck": "1_CLASSIC", "difficulty": "diff_1", "match_mode": "score"}
 			}
 		)
@@ -637,6 +883,20 @@ func _lobby(tables: Array, count: int) -> Dictionary:
 		"table_count": count,
 		"shot_budget": 6,
 		"match_mode": "score",
+		"single_table_difficulty": false,
+		"clone_rounds": false,
+		"multiplayer_balls": false,
+		"sync_shop": true,
+		"expansion_sets_enabled": false,
+		"expansion_sets":
+		{
+			"PHASES": false,
+			"MORPH": false,
+			"TIDE": false,
+			"RELIC": false,
+			"TAROT": false,
+			"ZODIAC": false
+		},
 		"run_vote":
 		{
 			"catalog_revision": 1,
@@ -722,9 +982,11 @@ func _cursor(
 	space: String,
 	position: Vector2,
 	origin = Vector2.ZERO,
-	vector = Vector2.ZERO
+	vector = Vector2.ZERO,
+	cue_id: String = "native"
 ) -> void:
 	mod.presence._names[id] = PLAYER_NAMES[id - 1]
+	mod.presence._cues[id] = cue_id
 	mod.presence._remotes[id] = {
 		"age": 0.0,
 		"position": position,
@@ -738,7 +1000,8 @@ func _cursor(
 			"vector": vector,
 			"table": 0,
 			"target": "",
-			"aiming": vector != Vector2.ZERO
+			"aiming": vector != Vector2.ZERO,
+			"cue": cue_id
 		}
 	}
 	mod.presence._overlay.queue_redraw()
