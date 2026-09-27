@@ -1,0 +1,87 @@
+[
+  {
+    "name": "complete-native-gallery.zip",
+    "bytes": 43817024,
+    "sha256": "eba60236390ba526c82360a966af6da04c65f5d09351ee27267dcbdb664d0405"
+  },
+  {
+    "name": "cue-native-bankshot.png",
+    "bytes": 309847,
+    "sha256": "274735ae85cbf419c5ae8d67d7167a4d43bf0bf2198466923cc6ff2c68fdad90"
+  },
+  {
+    "name": "cue-shop-guest-equipped.png",
+    "bytes": 608660,
+    "sha256": "9fa94e061b468979a823f2885af031a9d5cd36f8cd398d97071d67c34d8c81c5"
+  },
+  {
+    "name": "cue-shop-guest-pending.png",
+    "bytes": 616040,
+    "sha256": "dace38d164df976506b7b6361f6b15bdcb158a78a061ff34bdd7c760b67144f4"
+  },
+  {
+    "name": "cue-shop-guest-rejected.png",
+    "bytes": 620251,
+    "sha256": "f5cff7a71b98a1461770c1b3dc375bc77e247cbb60c1313f4a9a703c57727641"
+  },
+  {
+    "name": "cue-shop-host-equipped.png",
+    "bytes": 605214,
+    "sha256": "7addcc111f8a485387a7d6535a68381b548ff2aacbe017945db90dad6a4bfe5d"
+  },
+  {
+    "name": "cue-shop-host-preview.png",
+    "bytes": 608635,
+    "sha256": "c6cc546ac44bccfab6f83c421927c82345c838268a4cb746cd3eeb8c7c417edb"
+  },
+  {
+    "name": "cue-shop-rack-1.png",
+    "bytes": 605434,
+    "sha256": "7ac09f674dd54ee91a8635d39335433c7e927885052d61241c771e5189db51e4"
+  },
+  {
+    "name": "cue-shop-rack-2.png",
+    "bytes": 610317,
+    "sha256": "8bd3b30eb1fefbd24595bf3c7aa29e5072e152c82c29626784b18275cf15c138"
+  },
+  {
+    "name": "cue-shop-rack-3.png",
+    "bytes": 608135,
+    "sha256": "74065e519e3f92b5fc3b328f3f0cf5ccda5e35a4de6fe7e0146c03c9387743fa"
+  },
+  {
+    "name": "cue-shop-rack-4.png",
+    "bytes": 608963,
+    "sha256": "e5957e08aa85b7505f720c95bd8bc39457fefc18d293f484410cac119d7a5c30"
+  },
+  {
+    "name": "cue-shop-rack-5.png",
+    "bytes": 609163,
+    "sha256": "71a431de7cdc48d5d46927a5cd4c25c833560072b86b209aa85d826e08d72b90"
+  },
+  {
+    "name": "encoding.json",
+    "bytes": 1153,
+    "sha256": "cebd4966bb63222f2e42b93d0809ea3bce64759fc22f14a2b86ae85b7508232d"
+  },
+  {
+    "name": "manifest.json",
+    "bytes": 48826,
+    "sha256": "42757a1eb0d9efc71afceb5336fa241b589ff962bbc7a737dc00961de75edbb9"
+  },
+  {
+    "name": "rook-cue-shop-runtime.gif",
+    "bytes": 5627949,
+    "sha256": "fc906b730526f7c9d43eed3e9b478f97f71a12cac8012d6ef3649f40bb6c9830"
+  },
+  {
+    "name": "shop-snacks.png",
+    "bytes": 449781,
+    "sha256": "b76c78ff709ed0d1cf140f14a7a4bb3f0a4e4ffc3f6264159c02f9f68ba4514b"
+  },
+  {
+    "name": "verification.json",
+    "bytes": 1024,
+    "sha256": "461c81b2a2c99fdce1f704bd66a8fe833160d3b30d554705dbf7e3d12086a640"
+  }
+]

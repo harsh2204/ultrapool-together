@@ -1,0 +1,35 @@
+{
+  "source_commit": "bb80925f648d7fe911d56a7df5c41310526b4ca3",
+  "run_id": "20260927T104101Z-rook-animation",
+  "source": "Actual Godot viewport after RenderingServer.frame_post_draw",
+  "source_frames": 96,
+  "source_dimensions": [
+    1280,
+    720
+  ],
+  "recorded_duration_seconds": 7.935127000000004,
+  "timing": "GIF delays derived from recorded draw intervals, with encoder time-base and GIF quantization. The 7.94-second recording encodes to an 8.00-second loop including its terminal frame.",
+  "processing": "Palette quantization and lossless GIF compression. No generated frames, interpolation, cropping, UI compositing, or speed-up.",
+  "encoder_command": [
+    "ffmpeg",
+    "-hide_banner",
+    "-loglevel",
+    "warning",
+    "-y",
+    "-f",
+    "concat",
+    "-safe",
+    "1",
+    "-i",
+    "frames.ffconcat",
+    "-filter_complex",
+    "[0:v]split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
+    "-vsync",
+    "vfr",
+    "-loop",
+    "0",
+    "rook-cue-shop-runtime.gif"
+  ],
+  "gif_bytes": 5627949,
+  "gif": "rook-cue-shop-runtime.gif"
+}
