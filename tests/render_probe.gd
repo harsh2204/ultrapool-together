@@ -21,6 +21,7 @@ var fixtures: RefCounted
 var round_flow: RefCounted
 var shop_input: Node
 var native_aim = preload("native_aim_fixture.gd").new()
+var native_pocket = preload("native_pocket_fixture.gd").new()
 var fixture_config = {"deck": "1_CLASSIC", "difficulty": "diff_3", "seed": 24681}
 
 
@@ -87,6 +88,10 @@ func _run():
 	for probe in [
 		"team_vote_probe",
 		"lobby_probe",
+		"cue_probe",
+		"ui_nav_probe",
+		"expansion_sets_probe",
+		"multiplayer_balls_probe",
 		"presence_probe",
 		"router_probe",
 		"controller_probe",
@@ -133,6 +138,7 @@ func _run():
 	_check_run_config("host")
 	_check_balls(game.balls, "host")
 	await native_aim.check(mod, game, "host", _check)
+	await native_pocket.check_host(mod, game, _check, _capture)
 	await _capture("10-host-table", "Host table · the selected native Classic starting set")
 	await fixtures.capture_table_states(mod, _capture)
 	var snapshot = mod.table_sync.capture()
@@ -157,6 +163,16 @@ func _run():
 		shop_report.close()
 		await fixtures.capture_shop_presence(mod, _capture, shop_input)
 		await round_flow.check_host_shop_drag(mod, _capture)
+		var shop_probe = load(
+			get_script().resource_path.get_base_dir().path_join("shop_probe.gd")
+		).new()
+		var transactions_complete: bool = await shop_probe.check_native_transactions(
+			mod.shop_sync, _check
+		)
+		shop_probe.free()
+		if not _check(transactions_complete, "native snack and mixer transactions completed"):
+			_finish()
+			return
 		await _check_shop_readiness()
 	await round_flow.record_host(mod, _capture)
 	mod.shop_sync.end_session()
@@ -219,6 +235,7 @@ func _run():
 			game.player_ball._hide_cue_pivot()
 	await _capture("30-guest-table", "Guest table · reconstructed from the host snapshot")
 	await native_aim.check(mod, game, "guest", _check)
+	await native_pocket.check_guest(mod, snapshot, _check, _capture)
 	await _capture_guest_aim(game)
 	await _capture_ball_previews(game)
 	await _capture_guest_shop(snapshot, shop_state)
@@ -863,11 +880,14 @@ func _run_model_probe(name: String):
 		. replace("extends SceneTree", "extends RefCounted")
 		. replace("func _initialize()", "func run()")
 	)
-	script.source_code += "\nfunc quit(_code: int):\n\tpass\n"
+	script.source_code += "\nvar _embedded_exit_code: int = -1\n"
+	script.source_code += "\nfunc quit(code: int):\n\t_embedded_exit_code = code\n"
 	if not _check(script.reload() == OK, "compiled " + name):
 		return
 	var probe = script.new()
 	probe.run()
+	_check(probe._embedded_exit_code == 0, name + ": reached successful completion")
+	_check(probe.checks > 0, name + ": executed assertions")
 	_check(probe.failures.is_empty(), "%s: %d checks" % [name, probe.checks])
 
 

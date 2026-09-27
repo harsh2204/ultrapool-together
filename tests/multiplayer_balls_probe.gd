@@ -334,7 +334,14 @@ func _multiplayer_state_validation():
 	}
 	_check(service.valid_state(valid), "complete multiplayer display state is valid")
 	_check(not service.valid_state(null), "missing multiplayer state is rejected")
-	_check(not service.valid_state({}), "partial multiplayer state is rejected")
+	_check(service.valid_state({}), "inactive multiplayer state is valid")
+	for field in ["last_shooter", "pending", "bounty_shot", "call", "balls", "pockets"]:
+		var partial = valid.duplicate(true)
+		partial.erase(field)
+		_check(
+			not service.valid_state(partial),
+			"nonempty multiplayer state requires %s" % field
+		)
 	var invalid = valid.duplicate(true)
 	invalid.balls.append(invalid.balls[0].duplicate(true))
 	_check(not service.valid_state(invalid), "duplicate ball identities are rejected")

@@ -31,6 +31,8 @@ FIXTURES = (
     "tests/render_gallery.html", "tests/team_vote_probe.gd", "tests/lobby_probe.gd",
     "tests/presence_probe.gd", "tests/router_probe.gd", "tests/controller_probe.gd",
     "tests/shop_layout_probe.gd", "tests/snapshot_probe.gd", "tests/transport_budget_probe.gd",
+    "tests/cue_probe.gd", "tests/ui_nav_probe.gd", "tests/multiplayer_balls_probe.gd",
+    "tests/expansion_sets_probe.gd", "tests/native_pocket_fixture.gd", "tests/shop_probe.gd",
 )
 ERROR_PATTERN = re.compile(r"SCRIPT ERROR:|Parse Error:|Compile Error:|RENDER_PROBE_FAIL")
 BUNDLE_ID = "org.ultrapooltogether.render-test"

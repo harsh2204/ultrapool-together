@@ -2,6 +2,7 @@ extends Node
 
 var failures: Array[String] = []
 var controller: Node
+var _transaction_record: Callable
 
 
 class ShopController:
@@ -152,6 +153,9 @@ func _run():
 		_check(game.player_info.money == money_after, "rearranging does not charge money")
 		_check(not sync.handle_request(move), "replayed rearrangement is rejected")
 	await _check_inspected_sale(sync)
+	if not await check_native_transactions(sync):
+		_finish(sync)
+		return
 	var invalid = sync.capture().duplicate(true)
 	for slot in invalid.slots:
 		if slot.id != 0:
@@ -190,6 +194,302 @@ func _run():
 	)
 	_check_ready_departure(sync)
 	_finish(sync)
+
+
+## Reusable in Capture-Screens: instantiate this script without adding it to the
+## tree, then call this method with the existing open host shop and result sink.
+## All mutations use production shop handlers. Fixtures grant tickets, purchase one
+## passive, and replace two build balls with one mixer result; mix slots end empty.
+func check_native_transactions(sync: Node, record: Callable = Callable()) -> bool:
+	_transaction_record = record
+	var before_failures = failures.size()
+	var shop = sync.native_shop()
+	if not _transaction_check(
+		is_instance_valid(shop) and sync.capture().get("open", false),
+		"native transactions: host shop is open"
+	):
+		_transaction_record = Callable()
+		return false
+	var info = shop.player_info
+	var bar = shop.cocktail_bar
+	var saved = {
+		"snacks": info.snack_tickets,
+		"cocktails": info.cocktail_tickets,
+		"bar_visible": bar.visible,
+		"bar_process": bar.process_mode
+	}
+	info.snack_tickets = 2
+	info.cocktail_tickets = 2
+	bar.visible = true
+	bar.process_mode = Node.PROCESS_MODE_INHERIT
+	bar.update_state()
+	if _transaction_slots(sync.capture(), "snack", true).is_empty():
+		shop.tapas_bar.update_passives()
+	await sync.get_tree().process_frame
+	await sync.get_tree().process_frame
+	var snack_ok: bool = await _check_snack_transactions(sync)
+	var mix_ok: bool = await _check_mixer_transactions(sync)
+	info.snack_tickets = saved.snacks
+	info.cocktail_tickets = saved.cocktails
+	shop.update_snack_tickets()
+	shop.update_cocktail_tickets()
+	bar.update_state()
+	bar.visible = saved.bar_visible
+	bar.process_mode = saved.bar_process
+	sync.capture()
+	_transaction_record = Callable()
+	return snack_ok and mix_ok and failures.size() == before_failures
+
+
+func _check_snack_transactions(sync: Node) -> bool:
+	var shop = sync.native_shop()
+	var state: Dictionary = sync.capture()
+	var offers = _transaction_slots(state, "snack", true)
+	var empty = _transaction_slots(state, "passive", false)
+	if not _transaction_check(
+		not offers.is_empty() and not empty.is_empty(),
+		"native snack: offer and empty passive slot exist"
+	):
+		return false
+	var source: String = offers[0].key
+	var target: String = empty[0].key
+	shop.player_info.snack_tickets = 0
+	_transaction_reject(sync, _transaction_move(sync, source, target), "native snack: no ticket")
+	shop.player_info.snack_tickets = 2
+	state = sync.capture()
+	var before_owned = _transaction_slots(state, "passive", true).size()
+	var purchase = _transaction_move(sync, source, target)
+	var identity: int = purchase.item_id
+	if not _transaction_check(
+		sync.handle_request(purchase, 1), "native snack: purchase accepted through shared handler"
+	):
+		return false
+	await sync.get_tree().process_frame
+	await sync.get_tree().process_frame
+	var after: Dictionary = sync.capture()
+	var owned = _transaction_slot(after, target)
+	_transaction_check(
+		after.snacks == state.snacks - 1 and after.money == state.money,
+		"native snack: purchase spends exactly one ticket and no money"
+	)
+	_transaction_check(
+		owned.id == identity
+		and _transaction_slots(after, "passive", true).size() == before_owned + 1
+		and _transaction_identity_count(after, identity) == 1,
+		"native snack: purchased identity moves once into owned inventory"
+	)
+	_transaction_check(
+		is_instance_valid(sync.slot_item(target))
+		and sync.slot_item(target).get_instance_id() == identity,
+		"native snack: captured ownership matches the actual native passive"
+	)
+	_transaction_reject(sync, purchase, "native snack: replayed purchase")
+	var refreshed_replay = purchase.duplicate()
+	refreshed_replay.revision = sync.capture().revision
+	_transaction_reject(sync, refreshed_replay, "native snack: old item at current revision")
+	offers = _transaction_slots(sync.capture(), "snack", true)
+	if not _transaction_check(not offers.is_empty(), "native snack: remaining ticket restocks offers"):
+		return false
+	_transaction_reject(
+		sync, _transaction_move(sync, offers[0].key, target), "native snack: occupied passive slot"
+	)
+	return true
+
+
+func _check_mixer_transactions(sync: Node) -> bool:
+	var shop = sync.native_shop()
+	var bar = shop.cocktail_bar
+	var state: Dictionary = sync.capture()
+	var inputs: Array = []
+	for slot in _transaction_slots(state, "build", true):
+		if slot.mixed != "":
+			continue
+		if inputs.is_empty() or inputs[0].data != slot.data:
+			inputs.append(slot)
+		if inputs.size() == 2:
+			break
+	if not _transaction_check(
+		inputs.size() == 2 and _transaction_slots(state, "mix", true).is_empty(),
+		"native mixer: two distinct unmixed build balls and empty mixer exist"
+	):
+		return false
+	var left: Dictionary = inputs[0]
+	var right: Dictionary = inputs[1]
+	var before_count = _transaction_slots(state, "build", true).size()
+	var before_money = state.money
+	var expected_score: int = (
+		sync.slot_item(left.key).get_item().get_score()
+		+ sync.slot_item(right.key).get_item().get_score()
+	)
+	shop.player_info.cocktail_tickets = 0
+	_transaction_reject(
+		sync, _transaction_move(sync, left.key, "mix:0"), "native mixer: input without ticket"
+	)
+	shop.player_info.cocktail_tickets = 2
+	bar.update_state()
+	_transaction_reject(
+		sync, _transaction_move(sync, left.key, "mix:2"), "native mixer: direct drop into output"
+	)
+	var move_left = _transaction_move(sync, left.key, "mix:0")
+	if not _transaction_check(
+		sync.handle_request(move_left, 1), "native mixer: first native input accepted"
+	):
+		return false
+	_transaction_reject(sync, move_left, "native mixer: replayed first input")
+	_transaction_reject(
+		sync, _transaction_move(sync, right.key, "mix:0"), "native mixer: occupied input slot"
+	)
+	_transaction_reject(
+		sync,
+		{"action": "mix", "revision": sync.capture().revision},
+		"native mixer: incomplete recipe"
+	)
+	var offers = _transaction_slots(sync.capture(), "offer", true)
+	if _transaction_check(not offers.is_empty(), "native mixer: unowned offer fixture exists"):
+		_transaction_reject(
+			sync, _transaction_move(sync, offers[0].key, "mix:1"),
+			"native mixer: unowned offer cannot be an ingredient"
+		)
+	if not _transaction_check(
+		sync.handle_request(_transaction_move(sync, right.key, "mix:1"), 1),
+		"native mixer: second native input accepted"
+	):
+		return false
+	state = sync.capture()
+	_transaction_check(
+		state.can_mix and state.cocktails == 2
+		and _transaction_slot(state, "mix:0").id == left.id
+		and _transaction_slot(state, "mix:1").id == right.id,
+		"native mixer: inputs preserve identities and do not spend a ticket"
+	)
+	shop.player_info.cocktail_tickets = 0
+	_transaction_reject(
+		sync, {"action": "mix", "revision": sync.capture().revision},
+		"native mixer: complete recipe without ticket"
+	)
+	shop.player_info.cocktail_tickets = 2
+	state = sync.capture()
+	var mix = {"action": "mix", "revision": state.revision}
+	if not _transaction_check(
+		sync.handle_request(mix, 1), "native mixer: shared handler starts actual native mix"
+	):
+		return false
+	_transaction_check(
+		bar.mix_animation.is_processing() and sync.capture().busy,
+		"native mixer: native animation keeps transactions busy"
+	)
+	_transaction_reject(sync, mix, "native mixer: replayed mix request")
+	_transaction_reject(
+		sync, {"action": "mix", "revision": sync.capture().revision},
+		"native mixer: second mix during native animation"
+	)
+	# Await the native animation and its real completion callback; do not invoke
+	# finish manually or replace it with a state-only simulation.
+	var deadline = Time.get_ticks_msec() + 6000
+	while bar.mix_animation.is_processing() and Time.get_ticks_msec() < deadline:
+		await sync.get_tree().process_frame
+	if not _transaction_check(
+		not bar.mix_animation.is_processing(), "native mixer: animation completes within six seconds"
+	):
+		return false
+	await sync.get_tree().process_frame
+	state = sync.capture()
+	var output = _transaction_slot(state, "mix:2")
+	if not _transaction_check(
+		output.get("id", 0) != 0 and _transaction_slots(state, "mix", true).size() == 1,
+		"native mixer: completion consumes both inputs and leaves one output"
+	):
+		return false
+	_transaction_check(
+		_transaction_identity_count(state, left.id) == 0
+		and _transaction_identity_count(state, right.id) == 0
+		and _transaction_identity_count(state, output.id) == 1
+		and _transaction_slots(state, "build", true).size() + 1 == before_count - 1,
+		"native mixer: exactly two original identities become one new item"
+	)
+	_transaction_check(
+		state.cocktails == 1 and state.money == before_money and output.score == expected_score,
+		"native mixer: one ticket spent, shared money unchanged, input score conserved"
+	)
+	_transaction_check(
+		sync._valid_state(state) and sync.slot_item("mix:2").visible
+		and not sync.slot_item("mix:2").slot.disabled_slot,
+		"native mixer: completed native output is visible, collectible and valid on the wire"
+	)
+	var occupied = _transaction_slots(state, "build", true)
+	if _transaction_check(not occupied.is_empty(), "native mixer: occupied build fixture exists"):
+		_transaction_reject(
+			sync, _transaction_move(sync, "mix:2", occupied[0].key),
+			"native mixer: output cannot replace an occupied build slot"
+		)
+		_transaction_reject(
+			sync, _transaction_move(sync, occupied[0].key, "mix:0"),
+			"native mixer: collect output before adding another input"
+		)
+	_transaction_reject(
+		sync, {"action": "mix", "revision": sync.capture().revision},
+		"native mixer: occupied output cannot mix again"
+	)
+	var collect = _transaction_move(sync, "mix:2", left.key)
+	if not _transaction_check(
+		sync.handle_request(collect, 1), "native mixer: collect output through shared handler"
+	):
+		return false
+	state = sync.capture()
+	_transaction_check(
+		_transaction_slot(state, left.key).id == output.id
+		and _transaction_slots(state, "mix", true).is_empty()
+		and _transaction_slots(state, "build", true).size() == before_count - 1
+		and state.cocktails == 1 and state.can_continue,
+		"native mixer: output enters build once and empty mixer permits continuation"
+	)
+	_transaction_reject(sync, collect, "native mixer: replayed output collection")
+	return true
+
+
+func _transaction_move(sync: Node, source: String, target: String) -> Dictionary:
+	var state: Dictionary = sync.capture()
+	return {
+		"action": "move", "revision": state.revision,
+		"source": source, "item_id": _transaction_slot(state, source).get("id", 0),
+		"target": target, "target_id": _transaction_slot(state, target).get("id", 0)
+	}
+
+
+func _transaction_slot(state: Dictionary, key: String) -> Dictionary:
+	for slot in state.slots:
+		if slot.key == key:
+			return slot
+	return {}
+
+
+func _transaction_slots(state: Dictionary, group: String, occupied: bool) -> Array:
+	return state.slots.filter(func(slot): return slot.group == group and (slot.id != 0) == occupied)
+
+
+func _transaction_identity_count(state: Dictionary, identity: int) -> int:
+	return state.slots.filter(func(slot): return slot.id == identity).size()
+
+
+func _transaction_reject(sync: Node, request: Dictionary, label: String) -> void:
+	var before: Dictionary = sync.capture()
+	_transaction_check(not sync.handle_request(request, 1), label + " is rejected")
+	var after: Dictionary = sync.capture()
+	_transaction_check(
+		before.money == after.money and before.snacks == after.snacks
+		and before.cocktails == after.cocktails and before.slots == after.slots,
+		label + " preserves shared money, tickets and item identities"
+	)
+
+
+func _transaction_check(condition: bool, label: String) -> bool:
+	if _transaction_record.is_valid():
+		_transaction_record.call(condition, label)
+	if not condition:
+		failures.append(label)
+		if not _transaction_record.is_valid():
+			push_error("SHOP_PROBE: " + label)
+	return condition
 
 
 func _check_ready_departure(sync):

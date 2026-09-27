@@ -37,17 +37,18 @@ func _initialize() -> void:
 	_check(CrtStack.OFFSET_SPECTATOR > CrtStack.OFFSET_SHOP_NOTICE, "spectator stays deepest under CRT")
 
 	var layer = CanvasLayer.new()
-	root.add_child(layer)
-	CrtStack.place_under(layer, root, CrtStack.OFFSET_HUD)
+	# A null context explicitly exercises the fallback, including when this probe
+	# runs inside the native screenshot process with a real EffectManager present.
+	CrtStack.place_under(layer, null, CrtStack.OFFSET_HUD)
 	_check(
 		layer.layer == CrtStack.FALLBACK_OVERLAY_LAYER - CrtStack.OFFSET_HUD,
 		"place_under uses the fallback overlay when EffectManager is absent"
 	)
 	_check(
-		CrtStack.under_overlay(root, layer.layer),
+		CrtStack.under_overlay(null, layer.layer),
 		"placed layers report as under the overlay"
 	)
-	layer.queue_free()
+	layer.free()
 
 	print("UI_NAV_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
