@@ -248,6 +248,9 @@ func _build_ui():
 	panel.multiplayer_balls_requested.connect(
 		func(enabled): _lobby_request({"action": "multiplayer_balls", "enabled": enabled})
 	)
+	panel.sync_shop_requested.connect(
+		func(enabled): _lobby_request({"action": "sync_shop", "enabled": enabled})
+	)
 	panel.expansion_sets_enabled_requested.connect(
 		func(enabled): _lobby_request({"action": "expansion_sets_enabled", "enabled": enabled})
 	)
@@ -501,6 +504,9 @@ func _apply_lobby_request(sender: int, message: Dictionary):
 		"multiplayer_balls":
 			if message.get("enabled") is bool:
 				accepted = lobby_model.set_multiplayer_balls(sender, message.enabled)
+		"sync_shop":
+			if message.get("enabled") is bool:
+				accepted = lobby_model.set_sync_shop(sender, message.enabled)
 		"expansion_sets_enabled":
 			if message.get("enabled") is bool:
 				accepted = lobby_model.set_expansion_sets_enabled(sender, message.enabled)
@@ -566,6 +572,7 @@ func _start_match(sender: int):
 		return
 	run_config = run_setup.capture_config(lobby_model.resolved_run_selection())
 	run_config["multiplayer_balls"] = bool(lobby_model.multiplayer_balls)
+	run_config["sync_shop"] = bool(lobby_model.sync_shop)
 	run_config["expansion_sets_enabled"] = bool(lobby_model.expansion_sets_enabled)
 	# Master-off defensively clears every set for registration/shop/rules.
 	run_config["expansion_sets"] = lobby_model.effective_expansion_sets()
@@ -1427,6 +1434,9 @@ func _publish_state(
 		not captured_shop.is_empty() and captured_lobby_revision == lobby.get("revision", -1)
 	)
 	var shop_state = captured_shop if reuse_shop else shop_sync.capture()
+	# Refs #34 / PERF-009/010: when sync_shop is off (and exclusive shopper is not
+	# forcing shared sync), publish a closed stub so guests never apply remote slots.
+	shop_state = shop_sync.wire_shop_state(shop_state)
 	var phase = [
 		latest_state.get("available", false),
 		latest_state.get("round", 0),
@@ -1687,7 +1697,7 @@ func _received_table(actor: int, message: Dictionary):
 					"accepted": accepted,
 					"error": shop_sync.last_error,
 					"request_id": message.get("request_id", 0),
-					"shop": shop_state
+					"shop": shop_sync.wire_shop_state(shop_state)
 				},
 				actor
 			)
@@ -1920,14 +1930,28 @@ func _try_follow_host_ui_nav() -> void:
 			# Vote panel is driven by set_voting messages; only leave lobby if open.
 			if panel.visible:
 				_set_panel(false)
-		"shop", "snack_bar", "table":
+		"shop", "snack_bar":
+			# Refs #34: suppress shop/snack_bar follow while sync_shop is off.
+			# Exclusive/winner shop forces shared sync back on via shop_sync.
+			if shop_sync != null and not shop_sync.shared_shop_sync_active():
+				pass
+			else:
+				if panel.visible:
+					_set_panel(false)
+				if shop_sync != null and shop_sync.is_open():
+					var want = (
+						section if section != "" else ("snacks" if place == "snack_bar" else "")
+					)
+					if want != "":
+						shop_sync._queue_host_nav(
+							{
+								"open": true,
+								"section": want,
+								"focus": str(_queued_ui_nav.get("focus", ""))
+							}
+						)
+		"table":
 			if panel.visible:
 				_set_panel(false)
-			if place in ["shop", "snack_bar"] and shop_sync != null and shop_sync.is_open():
-				var want = section if section != "" else ("snacks" if place == "snack_bar" else "")
-				if want != "":
-					shop_sync._queue_host_nav(
-						{"open": true, "section": want, "focus": str(_queued_ui_nav.get("focus", ""))}
-					)
 	_applied_ui_nav = _queued_ui_nav.duplicate(true)
 	_queued_ui_nav.clear()

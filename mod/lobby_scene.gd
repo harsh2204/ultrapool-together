@@ -11,6 +11,7 @@ signal shot_budget_requested(shots: int)
 signal run_vote_requested(field: String, choice: String, catalog_revision: int)
 signal clone_rounds_requested(enabled: bool)
 signal multiplayer_balls_requested(enabled: bool)
+signal sync_shop_requested(enabled: bool)
 signal expansion_sets_enabled_requested(enabled: bool)
 signal expansion_set_requested(set_id: String, enabled: bool)
 signal cue_requested(cue_id: String)
@@ -87,12 +88,15 @@ var _expansion_checks: Dictionary = {}
 var _mod_options_open = false
 var _cue_buttons: Dictionary = {}
 var _cue_help: Label
+var _sync_shop_check: CheckBox
+var _sync_shop_help: Label
 
 
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_apply_theme()
 	_ensure_expansion_toggles()
+	_ensure_sync_shop_toggle()
 	_ensure_cue_picker()
 	%Host.pressed.connect(func(): host_requested.emit())
 	%Join.pressed.connect(_join)
@@ -174,6 +178,8 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 		%Rules.text += (
 			" Opt-in multiplayer balls may appear rarely in the shop (never in the starting rack)."
 		)
+	if not bool(state.get("sync_shop", true)):
+		%Rules.text += " Shop sync off: each table host shops independently (no shared shop overlay)."
 	var expansion_master: bool = bool(state.get("expansion_sets_enabled", false))
 	var expansion_flags: Dictionary = ExpansionRegistry.effective_flags(
 		expansion_master, state.get("expansion_sets", {})
@@ -423,6 +429,33 @@ func _ensure_expansion_toggles() -> void:
 		_expansion_checks[set_id] = check
 
 
+## Additive ModOptions row: shared shop with host (Refs #34 / PERF-009/010/029).
+## Appended before the cue picker so concurrent ModOptions additions stay additive.
+func _ensure_sync_shop_toggle() -> void:
+	if _sync_shop_check != null and is_instance_valid(_sync_shop_check):
+		return
+	var column: VBoxContainer = %ModOptionsColumn
+	var divider = HSeparator.new()
+	column.add_child(divider)
+	_sync_shop_check = CheckBox.new()
+	_sync_shop_check.name = "SyncShop"
+	_sync_shop_check.text = "Sync shop with host"
+	_sync_shop_check.focus_mode = Control.FOCUS_ALL
+	_sync_shop_check.tooltip_text = (
+		"On (default): shared shop, remote slots, shared cursors, and shop navigation follow. "
+		+ "Off: each table host shops independently — no shop broadcast, remote replicas, "
+		+ "shared shop cursors, or shop/snack_bar ui_nav follow. Winner-only shop still forces shared sync."
+	)
+	_sync_shop_check.toggled.connect(func(enabled): sync_shop_requested.emit(enabled))
+	column.add_child(_sync_shop_check)
+	_sync_shop_help = Label.new()
+	_sync_shop_help.text = "Default on. Applies for the whole match once started."
+	_sync_shop_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_sync_shop_help.add_theme_font_size_override("font_size", 12)
+	_sync_shop_help.add_theme_color_override("font_color", MUTED)
+	column.add_child(_sync_shop_help)
+
+
 ## Additive ModOptions section: per-player cue cosmetics (Refs #20 / PERF-026).
 func _ensure_cue_picker() -> void:
 	if not _cue_buttons.is_empty():
@@ -509,6 +542,7 @@ func _place_mod_options() -> void:
 
 func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> void:
 	_ensure_expansion_toggles()
+	_ensure_sync_shop_toggle()
 	_ensure_cue_picker()
 	# Vs / clone-table rounds are exclusive to Together All Nighter (PERF-026 path).
 	var clone_allowed: bool = bool(state.get("single_table_difficulty", false))
@@ -517,6 +551,9 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 	%CloneRounds.disabled = not is_host or started or not clone_allowed
 	%MultiplayerBalls.set_pressed_no_signal(bool(state.get("multiplayer_balls", false)))
 	%MultiplayerBalls.disabled = not is_host or started
+	if _sync_shop_check != null:
+		_sync_shop_check.set_pressed_no_signal(bool(state.get("sync_shop", true)))
+		_sync_shop_check.disabled = not is_host or started
 	var master: bool = bool(state.get("expansion_sets_enabled", false))
 	%ExpansionSetsEnabled.set_pressed_no_signal(master)
 	%ExpansionSetsEnabled.disabled = not is_host or started
