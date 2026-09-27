@@ -45,8 +45,8 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 		return false
 	var manager = gallery.tab_manager
 	var container = manager.get_node_or_null(SET_LIST_PATH)
-	var panel = container.get_node_or_null("TogetherCollection") if container != null else null
-	var page = panel.get_node_or_null(SET_DISPLAY_PATH) if panel != null else null
+	var set_panel = container.get_node_or_null("TogetherCollection") if container != null else null
+	var page = set_panel.get_node_or_null(SET_DISPLAY_PATH) if set_panel != null else null
 	if not check.call(page != null, "collection: startup adds Together while multiplayer is off"):
 		_describe_gallery(manager)
 		await _return_menu(mod)
@@ -61,12 +61,12 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 	)
 	check.call(
 		(
-			panel.get_index() > 0
+			set_panel.get_index() > 0
 			and (
-				container.get_child(panel.get_index() - 1).get_node_or_null(SET_DISPLAY_PATH)
+				container.get_child(set_panel.get_index() - 1).get_node_or_null(SET_DISPLAY_PATH)
 				!= null
 			)
-			and container.get_node("PlanetsDisplay").get_index() == panel.get_index() + 1
+			and container.get_node("PlanetsDisplay").get_index() == set_panel.get_index() + 1
 		),
 		"collection: Together follows native ball sets and precedes planets"
 	)
@@ -74,7 +74,7 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 	check.call(
 		(
 			container.get_child_count() == panel_count
-			and container.get_node("TogetherCollection") == panel
+			and container.get_node("TogetherCollection") == set_panel
 			and manager.get_child_count() == major_tab_count
 			and gallery.tab_selector.count == major_tab_count
 		),
@@ -127,17 +127,17 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 	gallery.toggle_selector.select(manager.get_node("BoardCustom").get_index())
 	await _frames(mod, 8)
 	check.call(
-		not panel.is_visible_in_tree() and not page.can_process(),
+		not set_panel.is_visible_in_tree() and not page.can_process(),
 		"collection: native board-customization tab suspends Together hover and rotation"
 	)
 	gallery.toggle_selector.select(manager.get_node("ShopBalls").get_index())
 	await _frames(mod, 8)
 	check.call(
-		panel.is_visible_in_tree() and page.can_process(),
+		set_panel.is_visible_in_tree() and page.can_process(),
 		"collection: returning to native balls tab restores Together processing"
 	)
 	check.call(
-		await _scroll_into_view(mod, gallery, panel),
+		await _scroll_into_view(mod, gallery, set_panel),
 		"collection: native scrolling brings the complete Together panel into view"
 	)
 	var slot_processing = _suspend_collection_processing(container)
