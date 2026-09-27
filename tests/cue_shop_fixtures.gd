@@ -105,6 +105,7 @@ func run_host(mod: Node, capture: Callable, check: Callable) -> void:
 	sync.capture()
 	check.call(focused.has_focus(), "cue shop: authoritative refresh preserves local card focus")
 	_check_rack_motion(view, check)
+	_check_resize_layout(mod, view, check)
 	await _check_pages(view, capture, check)
 	view._select_model("finesse")
 	view._select_finish("gold")
@@ -505,6 +506,89 @@ func _check_rack_motion(view, check: Callable) -> void:
 	view.settle_rack()
 	view._link_focus()
 	view._refresh()
+
+
+func _check_resize_layout(mod: Node, view, check: Callable) -> void:
+	# Exercise the production fit boundary without resizing the harness window.
+	# The former fixed case extends past a 16:10 viewport's right edge.
+	var native = mod.shop_sync.native_shop()
+	var camera = mod.get_node("/root/Global").camera
+	var original_size: Vector2 = view.get_viewport_rect().size
+	var retained_nodes: Array = _node_ids(view)
+	var confirmed: Dictionary = view.confirmed_equipment()
+	var inventory_transform: Transform2D = native.inventory.transform
+	var focused = view.get_viewport().gui_get_focus_owner()
+	var background = native.inventory.get_node_or_null("BuildBack")
+	var inventory_rect = Rect2()
+	if check.call(background is Sprite2D, "cue shop: resize checks native inventory artwork"):
+		inventory_rect = (
+			view.get_global_transform().affine_inverse()
+			* background.get_global_transform()
+			* background.get_rect()
+		)
+	for viewport_size in [
+		Vector2(1280, 720),
+		Vector2(1280, 800),
+		Vector2(960, 720),
+		Vector2(900, 1000),
+		Vector2(720, 1280),
+		Vector2(1280, 720)
+	]:
+		view.fit_to_viewport(viewport_size)
+		var target: Vector2 = camera.TABLE_SIZE
+		if viewport_size.x / viewport_size.y < camera.PORTRAIT_ASPECT_THRESHOLD:
+			target.y += 2.0 * camera.PORTRAIT_VERTICAL_UI
+		else:
+			target.x += 2.0 * camera.LANDSCAPE_SIDE_UI
+		var zoom = minf(viewport_size.x / target.x, viewport_size.y / target.y)
+		var extent = viewport_size / zoom
+		var visible_rect = Rect2(native.camera_target.position - extent * 0.5, extent)
+		for control in [
+			view._title.get_parent(),
+			view._rack.get_parent(),
+			view._equipped_case,
+			view._equipped_label,
+			view._action,
+			view._back,
+			view._seller._dialog
+		]:
+			check.call(
+				visible_rect.grow(0.5).encloses(_cue_control_rect(view, control)),
+				"cue shop: %s keeps %s within the native viewport" % [viewport_size, control.name]
+			)
+		check.call(
+			not _cue_control_rect(view, view._equipped_case).intersects(inventory_rect),
+			"cue shop: %s keeps the case clear of native inventory" % viewport_size
+		)
+		check.call(
+			is_equal_approx(view._seller.position.y + view._seller.scale.y * 409.0, 414.0),
+			"cue shop: resize keeps Rook at the countertop"
+		)
+		check.call(
+			(
+				_node_ids(view) == retained_nodes
+				and view.confirmed_equipment() == confirmed
+				and native.inventory.transform == inventory_transform
+				and view.get_viewport().gui_get_focus_owner() == focused
+			),
+			"cue shop: resizing preserves retained nodes, equipment, inventory and focus"
+		)
+	check.call(
+		(
+			view._root.scale == Vector2.ONE
+			and view._root.position == Vector2.ZERO
+			and view._equipped_case.scale == Vector2.ONE
+		),
+		"cue shop: returning to widescreen restores the full-size presentation"
+	)
+	view.fit_to_viewport(original_size)
+
+
+func _cue_control_rect(view, control: Control) -> Rect2:
+	var relative: Transform2D = (
+		view.get_global_transform().affine_inverse() * control.get_global_transform()
+	)
+	return relative * Rect2(Vector2.ZERO, control.size)
 
 
 func _check_confirmed(view, model: String, finish: String, label: String, check: Callable) -> void:

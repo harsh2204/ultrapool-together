@@ -1529,6 +1529,7 @@ func _update_cue_layout() -> void:
 		return
 	_cue_layout_key = key
 	_cue_view.position = Vector2(separation * 2.0, 0)
+	_cue_view.fit_to_viewport(key[2])
 	_cue_link.visible = snacks_visible
 	# Align with the native forward arrow, across the same front counter edge.
 	_cue_link.position = Vector2(separation + 546, 413)

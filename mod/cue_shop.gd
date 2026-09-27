@@ -116,6 +116,7 @@ var _rack_tween: Tween
 var _rack_transitioning = false
 var _rack_generation = 0
 var _restore_card_focus = false
+var _layout_size = Vector2.ZERO
 
 
 func setup(skin: RefCounted) -> void:
@@ -126,9 +127,37 @@ func setup(skin: RefCounted) -> void:
 	_cache_art()
 	_build()
 	_built = true
+	fit_to_viewport(get_viewport_rect().size)
 	_update_focus_access()
 	set_process(false)
 	set_process_unhandled_input(false)
+
+
+## PERF-026: resize only retained presentation, leaving native inventory untouched.
+func fit_to_viewport(viewport_size: Vector2) -> void:
+	if not _built or viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
+		return
+	if viewport_size == _layout_size:
+		return
+	_layout_size = viewport_size
+	# Match the installed camera's landscape/portrait world-size policy.
+	var portrait = viewport_size.x < viewport_size.y
+	var target = Vector2(645, 1330) if portrait else Vector2(1145, 930)
+	var native_zoom = minf(viewport_size.x / target.x, viewport_size.y / target.y)
+	var visible_width = viewport_size.x / native_zoom
+	var factor = minf(1.0, (visible_width - 32.0) / 1485.0)
+	var offset = Vector2.ZERO
+	if factor < 1.0:
+		# Content spans x=-415..1070; center it on native CameraTarget.x=300.
+		# Scale about the counter edge so Rook's base remains at y=414.
+		offset = Vector2(300.0 - 327.5 * factor, 414.0 * (1.0 - factor))
+	_root.scale = Vector2.ONE * factor
+	_root.position = offset
+	_seller.scale = Vector2.ONE * factor
+	_seller.position = Vector2(-30, 5) * factor + offset
+	# Portrait has no lateral inventory margin. Keep the case above y=510
+	# before the shared fit, clear of the native lower inventory surface.
+	_equipped_case.scale = Vector2.ONE * (0.45 if portrait else 1.0)
 
 
 func _cache_art() -> void:

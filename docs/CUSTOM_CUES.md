@@ -10,6 +10,8 @@ Fifteen distinct cue designs occupy five racks of three upright portrait cards. 
 
 The selected cue's paper placard contains a compact purchase/equip control and the effect details. Browse, preview, and customize a finish locally while a purchase awaits table-host confirmation. Rejections reconcile ownership and money and show their reason. The felt-lined case beside the inventory displays only the player's confirmed cue and finish; browsing and pending/rejected purchases never replace it. Rook blinks, talks, idles, and responds to a click using the native merchants' presentation pattern. Seller motion and rack transitions stop when leaving the counter.
 
+The composition fits narrower windows at resize boundaries while keeping Rook aligned with the counter and preserving the native inventory. Portrait windows use a smaller case above the inventory. Readability and rendering at these sizes remain pending native verification.
+
 ## Ownership and economy
 
 House is included. Every other cue costs **4€ from the shared run wallet** and belongs to the purchasing player for that run. Buying also equips it. Switching owned cues and finishes while shopping is free. There are no refunds, stacked cues, randomized offers, or permanent gameplay unlocks.
@@ -70,6 +72,6 @@ Fifteen generated cue sprites are shipped under `mod/assets/cues/`; native files
 
 Windows capture `20260927T070455Z-1962c3ec` passed all 731 harness assertions and produced 67 screenshots. Embedded cue probes passed 226 catalog/curve, 189 inventory, and 204 effect checks. The game exited normally with no script errors; shutdown resource warnings match the earlier baseline. Installed game files were unchanged. The normal save profile changed during the capture, so the runner's overall preservation audit failed; that run does not establish save preservation. Earlier captures preserved normal saves and installed files, but had test failures that were subsequently fixed. The isolated Windows installer suite and source ZIP integrity/asset checks also passed.
 
-The branch has since been rebased onto main `6f3105a`, preserving native initial-click/charge behavior, opt-in shop-view following, and client/spectator table-effect replication. Static parsing was repeated after integration; runtime tests were not rerun. The older captures do not verify the rebased Rook layout.
+The branch has since been rebased onto main `c07f6be`, preserving native initial-click/charge behavior, opt-in shop-view following, client/spectator table-effect replication, and the localized difficulty/native-menu fixes. All 109 GDScript files parsed after integration; runtime tests were not rerun. The older captures do not verify the rebased Rook layout.
 
 Runtime verification uses the existing bounded Capture-Screens harness after authorization. Keep #20 open until the remaining acceptance work is complete.

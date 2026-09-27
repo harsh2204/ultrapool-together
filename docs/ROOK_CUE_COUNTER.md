@@ -5,7 +5,7 @@ Implementation record for [#20](https://github.com/harsh2204/ultrapool-together/
 ## Behavior and scope
 
 - **Identity:** Rook, a mod-owned cue-shop NPC; fifteen existing cue model IDs remain in `cue_models.gd`.
-- **Base:** main `6f3105a`, native Ultrapool 0.15.7, mod v0.10.0 / protocol 9. Subsequent integration revisions are recorded in the PR.
+- **Base:** main `c07f6be`, native Ultrapool 0.15.7, mod v0.10.0 / protocol 9. Subsequent integration revisions are recorded in the PR.
 - **Interaction:** browse three portrait cues per rack, switch racks with a short slide/fade, preview ten finishes, and use the selected cue's small wooden purchase/equip control. The right-hand felt case shows confirmed equipment independently of browsing.
 - **Roles:** host and guest construct the same local presentation. The table leader owns transactions and cue effects. Spectator mode cannot submit cue transactions; Rook is not a new replicated gameplay entity.
 - **Availability:** fourth native shop stop to the right of snacks; the shortcut from balls remains when snacks are locked. Shared-shop and winner-only gates are unchanged. Personal view following controls navigation only.
@@ -16,6 +16,8 @@ Implementation record for [#20](https://github.com/harsh2204/ultrapool-together/
 The native `ShopGirl` and `ShopBoy` instances and snack merchant remain intact. Inspected references include `ui/shop.gd`, `ui/shop.tscn`, `effects/ui/girl/npc.gd`, `npc_body.gd`, `dialog_box.gd`, and `custom_ui/custom_button.gd`. Rook composes a new `cue_seller.gd` component beside those counters and follows their blink, idle, speech and nudge pattern. The counter tiles remain straight through snacks; the curved end belongs to cues.
 
 `shop_sync._ensure_cue_view` attaches the view once per native shop. `cue_shop.setup` caches two shop textures through `cue_shop_art.gd` and retains all cards, tags, swatches and the equipped case. Forward navigation uses native raised-button scenes; rack/back arrows use the native arrow textures. Decorative controls ignore pointer input. Only Rook's bounded body button handles his nudge; it does not cover the rack, transaction button or inventory.
+
+At setup and viewport-size changes, the composition fits within the native camera's landscape/portrait bounds. Rook remains anchored to the counter edge, and the native inventory transform stays intact. Portrait layouts compact the case above the inventory. Returning to widescreen restores the full-size composition. This geometry is covered by authored assertions, not a rendering check.
 
 Purchase input follows `cue_shop._submit → shop_sync._submit → handle_request/_apply_cue_action → apply_result`. Existing actor, scene, table, revision, ownership, wallet and eligibility checks remain authoritative. Pending requests retain immediate local browsing, and matching confirmation or rejection reconciles the UI. The case updates from the authoritative player row through `render`; model/finish preview does not call its update path.
 
@@ -45,8 +47,9 @@ There are no new packets or wire-supplied paths. Artwork decoding and native con
 | Rapid next/previous input | One live tween, canceled predecessor, retained nodes, gated moving cards, responsive arrows | Authored, unrun |
 | Leave mid-transition and reopen | No rack/seller/speech work off-counter; retained node identities | Authored, unrun |
 | Fifteen cues and long descriptions | Every rack reachable; portrait texture identity and description/action bounds | Authored, unrun; native text fit remains open |
+| 16:9, 16:10, 4:3 and portrait resizing | Actual native camera/inventory bounds, no case overlap, fixed counter baseline, retained focus/art/nodes, return to full size | Authored, unrun; readability remains open |
 | Native aim/cue/score behavior | Existing `native_aim_fixture`, `cue_native_fixtures`, model/inventory/effect probes | Earlier evidence predates this rebase; not rerun |
 | Shared access, winner-only, Ready, simultaneous purchases, disconnect/rematch | Existing authority gates preserved; full live/platform acceptance remains open | Static integration review only |
 | Snack/mixer transactions | No transaction changes; upstream native fixtures retained | Not rerun |
 
-Static GDScript parsing, image metadata/alpha/registration inspection and whitespace checks are distinct from native runtime evidence. No game, capture harness or test suite was launched for this presentation update. No new installer behavior was needed: both package and installer paths already recurse through `mod` and record nested assets. The next independent verification is the existing bounded Capture-Screens fixture after runtime authorization, followed by live multiplayer/platform and performance acceptance. Keep #20 and applicable performance gaps open.
+After integration onto `c07f6be`, all 109 GDScript files parsed, the five presentation/fixture files passed formatting checks, and all five Python and six PowerShell scripts parsed without execution. Image metadata/alpha/registration and whitespace were also inspected. These static checks are distinct from native runtime evidence. No game, capture harness or test suite was launched for this presentation update. No new installer behavior was needed: both package and installer paths already recurse through `mod` and record nested assets. The next independent verification is the existing bounded Capture-Screens fixture after runtime authorization, followed by live multiplayer/platform and performance acceptance. Keep #20 and applicable performance gaps open.
