@@ -232,6 +232,8 @@ func capture() -> Dictionary:
 				"sets": shop.sets_offered.map(func(id): return str(id)),
 				"snacks": info.snack_tickets,
 				"cocktails": info.cocktail_tickets,
+				"show_tapas": get_node("/root/Global").is_tapas_available(),
+				"show_cocktail": get_node("/root/Global").is_cocktail_available(),
 				"reroll": shop.roll_cost,
 				"busy": busy,
 				"can_mix":
@@ -573,7 +575,7 @@ func _valid_state(data: Dictionary) -> bool:
 		or not is_finite(float(data.money))
 	):
 		return false
-	for field in ["busy", "can_mix", "can_continue"]:
+	for field in ["busy", "can_mix", "can_continue", "show_tapas", "show_cocktail"]:
 		if not data.get(field) is bool:
 			return false
 	if not _valid_vote(data.get("ready_vote")):

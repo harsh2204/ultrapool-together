@@ -60,6 +60,8 @@ func apply(data: Dictionary) -> void:
 		if _round_key != key:
 			_close(ui.round_over_menu)
 			_round_key = key
+			_seed_payout(ui.round_over_menu, result)
+			_arm_menu_audio(ui.round_over_menu)
 			ui.round_over_menu.round_won = result.won
 			ui.round_over_menu.just_opened_or_closed = false
 			ui.round_over_menu.open_menu()
@@ -70,6 +72,7 @@ func apply(data: Dictionary) -> void:
 		if _end_key != key:
 			_close(ui.game_over_menu)
 			_end_key = key
+			_arm_menu_audio(ui.game_over_menu)
 			ui.game_over_menu.win = result.won
 			ui.game_over_menu.just_opened_or_closed = false
 			ui.game_over_menu.open_menu()
@@ -96,6 +99,33 @@ func end_session() -> void:
 
 func _dismiss_round() -> void:
 	_close(get_node("/root/UIManager").round_over_menu)
+
+
+func _seed_payout(menu: Node, result: Dictionary) -> void:
+	# Guests apply the final round totals before open_menu. Reset the visible
+	# counters so the native count-up (and its sound) still runs.
+	for property in ["displayed_score", "current_score", "shown_score", "score_display"]:
+		if property in menu:
+			menu.set(property, 0)
+	for property in ["displayed_money", "current_money", "shown_money", "money_display"]:
+		if property in menu:
+			menu.set(property, 0)
+	if "score" in menu:
+		menu.score = result.score
+	if "money_earned" in menu:
+		menu.money_earned = result.money_earned
+	if "balls_pocketed" in menu:
+		menu.balls_pocketed = result.balls_pocketed
+
+
+func _arm_menu_audio(menu: Node) -> void:
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio != null:
+		audio.process_mode = Node.PROCESS_MODE_ALWAYS
+	menu.process_mode = Node.PROCESS_MODE_ALWAYS
+	for type_name in ["AudioStreamPlayer", "AudioStreamPlayer2D", "AudioStreamPlayer3D"]:
+		for player in menu.find_children("*", type_name, true, false):
+			player.process_mode = Node.PROCESS_MODE_ALWAYS
 
 
 func _close(menu: Node) -> void:

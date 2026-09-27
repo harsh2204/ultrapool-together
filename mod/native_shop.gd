@@ -83,6 +83,18 @@ func apply_state(data: Dictionary) -> void:
 	player_info.snack_tickets = data.snacks
 	player_info.cocktail_tickets = data.cocktails
 	roll_cost = data.reroll
+	# Host flags are authoritative. Guests often disagree with Global.is_*_available()
+	# because their local run context does not match the shared shop.
+	var show_tapas: bool = _counter_available(data, "show_tapas", "is_tapas_available", "has_tapas_bar")
+	var show_cocktail: bool = _counter_available(
+		data, "show_cocktail", "is_cocktail_available", "hasCocktailBar"
+	)
+	# Reveal counters before placing remote items so snack slots have live transforms.
+	%ButtonMoveToCocktail.visible = show_cocktail
+	%ButtonMoveToTapas.visible = show_tapas
+	cocktail_bar.visible = show_cocktail
+	tapas_bar.visible = show_tapas
+	%CubesButton.hide()
 	var slots_changed: bool = not _displayed.has("slots") or data.slots != _displayed.slots
 	if slots_changed:
 		_sync_items(data.slots)
@@ -107,9 +119,9 @@ func apply_state(data: Dictionary) -> void:
 	if _changed(data, ["sets", "deck", "difficulty"]):
 		sets_offered = data.sets.duplicate()
 		display_sets_offered()
-	if _changed(data, ["snacks", "round"]):
+	if slots_changed or _changed(data, ["snacks", "round", "show_tapas"]):
 		update_snack_tickets()
-	if _changed(data, ["cocktails", "round"]):
+	if slots_changed or _changed(data, ["cocktails", "round", "show_cocktail"]):
 		update_cocktail_tickets()
 	if _changed(data, ["reroll", "money"]):
 		update_reroll_button()
@@ -117,12 +129,6 @@ func apply_state(data: Dictionary) -> void:
 		cocktail_bar.round = data.round
 		cocktail_bar.set_state(cocktail_bar.derive_state(), true)
 		cocktail_bar._on_items_changed()
-	if _changed(data, ["round", "deck", "difficulty"]):
-		%ButtonMoveToCocktail.visible = Global.is_cocktail_available()
-		%ButtonMoveToTapas.visible = Global.is_tapas_available()
-		cocktail_bar.visible = Global.is_cocktail_available()
-		tapas_bar.visible = Global.is_tapas_available()
-		%CubesButton.hide()
 	_displayed = data.duplicate(true)
 
 
@@ -131,6 +137,15 @@ func _changed(data: Dictionary, fields: Array) -> bool:
 		if not _displayed.has(field) or data[field] != _displayed[field]:
 			return true
 	return false
+
+
+func _counter_available(data: Dictionary, flag: String, method: String, difficulty_field: String) -> bool:
+	if data.has(flag):
+		return bool(data[flag])
+	if Global.has_method(method):
+		return bool(Global.call(method))
+	var difficulty = Global.chosen_difficulty
+	return difficulty != null and bool(difficulty.get(difficulty_field))
 
 
 func _previous_slot(key: String) -> Dictionary:
