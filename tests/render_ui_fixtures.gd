@@ -646,10 +646,7 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	]
 	panel.render(nighter, 1, true)
 	panel._place_mod_options()
-	# Fixture capture needs the full column (incl. Show turn banner) without scrolling.
-	panel.get_node("%ModOptions").size = Vector2(
-		maxi(340, int(panel.get_node("%ModOptions").size.x)), 560
-	)
+	# ModOptions is an embedded scrolling Panel sized inside Body (#38); do not force height.
 	panel.get_node("%ModOptions").popup()
 	panel._mod_options_open = true
 	await mod.get_tree().process_frame
