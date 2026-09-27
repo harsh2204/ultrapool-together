@@ -14,6 +14,7 @@ var shot_budget = DEFAULT_SHOT_BUDGET
 var match_mode = "race"
 var clone_rounds = false
 var multiplayer_balls = false
+var expansion_sets_enabled = false
 var expansion_sets: Dictionary = {}
 var revision = 0
 var ready_generation = 0
@@ -47,6 +48,7 @@ func clear() -> void:
 	match_mode = "race"
 	clone_rounds = false
 	multiplayer_balls = false
+	expansion_sets_enabled = false
 	expansion_sets = ExpansionRegistry.default_flags()
 	revision = 0
 	ready_generation = 0
@@ -184,11 +186,26 @@ func set_multiplayer_balls(sender: int, enabled: bool) -> bool:
 	return true
 
 
+func set_expansion_sets_enabled(sender: int, enabled: bool) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can change expansion sets.")
+	if started:
+		return _reject("Expansion sets are locked during a match.")
+	if expansion_sets_enabled == enabled:
+		last_error = ""
+		return true
+	expansion_sets_enabled = enabled
+	_changed(true)
+	return true
+
+
 func set_expansion_set(sender: int, set_id: String, enabled: bool) -> bool:
 	if not _is_host(sender):
 		return _reject("Only the host can change expansion sets.")
 	if started:
 		return _reject("Expansion sets are locked during a match.")
+	if not expansion_sets_enabled:
+		return _reject("Turn on Expansion sets before choosing individual sets.")
 	if set_id not in ExpansionRegistry.SET_IDS:
 		return _reject("Unknown expansion set.")
 	if expansion_sets.is_empty():
@@ -199,6 +216,10 @@ func set_expansion_set(sender: int, set_id: String, enabled: bool) -> bool:
 	expansion_sets[set_id] = enabled
 	_changed(true)
 	return true
+
+
+func effective_expansion_sets() -> Dictionary:
+	return ExpansionRegistry.effective_flags(expansion_sets_enabled, expansion_sets)
 
 
 func set_match_mode(sender: int, mode: String) -> bool:
@@ -435,6 +456,7 @@ func snapshot() -> Dictionary:
 		"match_mode": match_mode,
 		"clone_rounds": clone_rounds,
 		"multiplayer_balls": multiplayer_balls,
+		"expansion_sets_enabled": expansion_sets_enabled,
 		"expansion_sets": ExpansionRegistry.normalize_flags(expansion_sets),
 		"single_table_difficulty": _single_table_difficulty(),
 		"return_vote": return_vote,

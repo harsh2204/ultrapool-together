@@ -62,6 +62,7 @@ var last_guest_snapshot = 0
 var last_started_turn = -1
 var last_shop_state: Dictionary = {}
 const CloneRound = preload("clone_round.gd")
+const ExpansionRegistry = preload("sets/registry.gd")
 var _clone_instances: Array = []
 var _clone_active = false
 var _clone_winner = 0
@@ -231,6 +232,9 @@ func _build_ui():
 	)
 	panel.multiplayer_balls_requested.connect(
 		func(enabled): _lobby_request({"action": "multiplayer_balls", "enabled": enabled})
+	)
+	panel.expansion_sets_enabled_requested.connect(
+		func(enabled): _lobby_request({"action": "expansion_sets_enabled", "enabled": enabled})
 	)
 	panel.expansion_set_requested.connect(
 		func(set_id, enabled): _lobby_request(
@@ -475,6 +479,9 @@ func _apply_lobby_request(sender: int, message: Dictionary):
 		"multiplayer_balls":
 			if message.get("enabled") is bool:
 				accepted = lobby_model.set_multiplayer_balls(sender, message.enabled)
+		"expansion_sets_enabled":
+			if message.get("enabled") is bool:
+				accepted = lobby_model.set_expansion_sets_enabled(sender, message.enabled)
 		"expansion_set":
 			if message.get("set") is String and message.get("enabled") is bool:
 				accepted = lobby_model.set_expansion_set(sender, message.set, message.enabled)
@@ -534,7 +541,9 @@ func _start_match(sender: int):
 		return
 	run_config = run_setup.capture_config(lobby_model.resolved_run_selection())
 	run_config["multiplayer_balls"] = bool(lobby_model.multiplayer_balls)
-	run_config["expansion_sets"] = lobby_model.expansion_sets.duplicate(true)
+	run_config["expansion_sets_enabled"] = bool(lobby_model.expansion_sets_enabled)
+	# Master-off defensively clears every set for registration/shop/rules.
+	run_config["expansion_sets"] = lobby_model.effective_expansion_sets()
 	# Defensive: clone rounds only travel with Together All Nighter.
 	run_config["clone_rounds"] = CloneRound.enabled(
 		{
@@ -631,7 +640,10 @@ func _begin_table(config: Dictionary):
 	else:
 		# Keep registration for probes, but leave can_drop/shop injection off.
 		multiplayer_balls.end_session()
-	var expansion_flags = lobby.get("expansion_sets", config.get("expansion_sets", {}))
+	var expansion_flags = ExpansionRegistry.effective_flags(
+		bool(lobby.get("expansion_sets_enabled", config.get("expansion_sets_enabled", false))),
+		lobby.get("expansion_sets", config.get("expansion_sets", {}))
+	)
 	expansion_balls.begin_session(expansion_flags)
 	if not is_table_host() and not table_sync.begin_guest(config):
 		_match_failed("Could not create the table view. Return to the main menu and try again.")

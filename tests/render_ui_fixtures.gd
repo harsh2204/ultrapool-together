@@ -1,5 +1,6 @@
 extends RefCounted
 
+const SetRegistry = preload("../mod/sets/registry.gd")
 const PLAYER_NAMES = ["Alex", "Bea", "Chen", "Drew", "Erin", "Finley", "Gio", "Harper"]
 const MAIN_FIELDS = [
 	"active",
@@ -400,14 +401,19 @@ func _capture_full_catalog(mod: Node, capture: Callable) -> void:
 	catalog.deck = []
 	catalog.difficulty = []
 	for resource in database.id_to_deck.values():
-		if resource.can_be_chosen and str(resource.id) != "DAILY":
-			catalog.deck.append({"id": str(resource.id), "label": tr(str(resource.name))})
+		var deck_id = str(resource.id)
+		if resource.can_be_chosen and SetRegistry.is_native_lobby_deck(deck_id):
+			catalog.deck.append({"id": deck_id, "label": tr(str(resource.name))})
 	for resource in database.id_to_difficulty.values():
 		if resource.can_be_chosen:
 			catalog.difficulty.append({"id": str(resource.id), "label": tr(str(resource.name))})
 	for field in ["deck", "difficulty"]:
 		catalog[field].sort_custom(func(a, b): return a.id < b.id)
 	_record(catalog.deck.size() == 8, "full native card fixture includes all eight starting sets")
+	_record(
+		catalog.deck.all(func(entry): return SetRegistry.is_native_lobby_deck(entry.id)),
+		"full catalog decks are native base sets only"
+	)
 	_record(
 		catalog.difficulty.size() == 5,
 		"full native button fixture includes all five selectable difficulties"

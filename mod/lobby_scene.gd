@@ -11,6 +11,7 @@ signal shot_budget_requested(shots: int)
 signal run_vote_requested(field: String, choice: String, catalog_revision: int)
 signal clone_rounds_requested(enabled: bool)
 signal multiplayer_balls_requested(enabled: bool)
+signal expansion_sets_enabled_requested(enabled: bool)
 signal expansion_set_requested(set_id: String, enabled: bool)
 signal start_requested
 signal return_requested
@@ -80,6 +81,7 @@ var _vote_buttons: Dictionary = {}
 var _vote_groups: Dictionary = {}
 var _header_plank: Panel
 var _expansion_checks: Dictionary = {}
+var _mod_options_open = false
 
 
 func _ready():
@@ -96,8 +98,13 @@ func _ready():
 	%TableCount.value_changed.connect(func(value): table_count_requested.emit(int(value)))
 	%ShotBudget.value_changed.connect(func(value): shot_budget_requested.emit(int(value)))
 	%MatchMode.item_selected.connect(func(index): _vote_selected("match_mode", %MatchMode, index))
+	%ModOptionsButton.pressed.connect(_toggle_mod_options)
+	%ModOptions.popup_hide.connect(func(): _mod_options_open = false)
 	%CloneRounds.toggled.connect(func(enabled): clone_rounds_requested.emit(enabled))
 	%MultiplayerBalls.toggled.connect(func(enabled): multiplayer_balls_requested.emit(enabled))
+	%ExpansionSetsEnabled.toggled.connect(
+		func(enabled): expansion_sets_enabled_requested.emit(enabled)
+	)
 	%Ready.pressed.connect(_toggle_ready)
 	%Start.pressed.connect(func(): start_requested.emit())
 	%Return.pressed.connect(func(): return_requested.emit())
@@ -137,19 +144,14 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	_render_run_votes(state, local_id, started)
 	%MatchMode.get_parent().visible = multiple_tables
 	%ShotBudget.get_parent().visible = multiple_tables and not racing
-	# Vs / clone-table rounds are exclusive to Together All Nighter (PERF-026 path).
-	var clone_allowed: bool = single_table
-	%CloneRounds.get_parent().visible = clone_allowed
-	%CloneRounds.set_pressed_no_signal(clone_allowed and bool(state.get("clone_rounds", false)))
-	%CloneRounds.disabled = not is_host or started or not clone_allowed
-	%MultiplayerBalls.set_pressed_no_signal(bool(state.get("multiplayer_balls", false)))
-	%MultiplayerBalls.disabled = not is_host or started
-	_render_expansion_toggles(state, is_host, started)
+	# PERF-026: Settings stays Tables/Mode/Shots; opt-ins live in the collapsed ModOptions popup.
+	_render_mod_options(state, is_host, started)
 	var summaries: Array = state.get("table_summaries", [])
 	var complete = (
 		started and not summaries.is_empty() and summaries.all(func(table): return table.finished)
 	)
 	%Settings.visible = not started
+	%ModOptionsButton.visible = not started
 	%VoteChoices.visible = not started
 	%Rules.visible = started
 	%RoomTitle.text = (
@@ -166,8 +168,9 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 		%Rules.text += (
 			" Opt-in multiplayer balls may appear rarely in the shop (never in the starting rack)."
 		)
-	var expansion_flags: Dictionary = ExpansionRegistry.normalize_flags(
-		state.get("expansion_sets", {})
+	var expansion_master: bool = bool(state.get("expansion_sets_enabled", false))
+	var expansion_flags: Dictionary = ExpansionRegistry.effective_flags(
+		expansion_master, state.get("expansion_sets", {})
 	)
 	if ExpansionRegistry.any_enabled(expansion_flags):
 		var names: Array = []
@@ -403,40 +406,65 @@ func set_friends(friends: Array):
 func _ensure_expansion_toggles() -> void:
 	if not _expansion_checks.is_empty():
 		return
-	var settings = %MultiplayerBalls.get_parent().get_parent()
-	var row = HBoxContainer.new()
-	row.name = "ExpansionSetting"
-	row.add_theme_constant_override("separation", 8)
-	var label = Label.new()
-	label.text = "Sets"
-	row.add_child(label)
-	var flow = HFlowContainer.new()
-	flow.name = "ExpansionSets"
-	flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	flow.add_theme_constant_override("h_separation", 8)
-	flow.add_theme_constant_override("v_separation", 4)
+	var flow: HFlowContainer = %ExpansionSets
 	for set_id in ExpansionRegistry.SET_IDS:
 		var check = CheckBox.new()
 		check.text = ExpansionRegistry.SET_LABELS[set_id]
 		check.focus_mode = Control.FOCUS_ALL
 		var captured = set_id
-		check.toggled.connect(
-			func(enabled): expansion_set_requested.emit(captured, enabled)
-		)
+		check.toggled.connect(func(enabled): expansion_set_requested.emit(captured, enabled))
 		flow.add_child(check)
 		_expansion_checks[set_id] = check
-	row.add_child(flow)
-	settings.add_child(row)
-	settings.move_child(row, %MultiplayerBalls.get_parent().get_index() + 1)
 
 
-func _render_expansion_toggles(state: Dictionary, is_host: bool, started: bool) -> void:
+func _toggle_mod_options() -> void:
+	if _mod_options_open:
+		%ModOptions.hide()
+		_mod_options_open = false
+		return
+	_place_mod_options()
+	%ModOptions.popup()
+	_mod_options_open = true
+
+
+func _place_mod_options() -> void:
+	var button: Control = %ModOptionsButton
+	var origin = button.get_global_rect()
+	var width = maxi(320, int(origin.size.x))
+	var height = 280
+	%ModOptions.size = Vector2(width, height)
+	var x = int(origin.position.x)
+	var y = int(origin.position.y + origin.size.y + 4)
+	if x + width > int(size.x):
+		x = maxi(8, int(size.x) - width - 8)
+	if y + height > int(size.y):
+		y = maxi(8, int(origin.position.y) - height - 4)
+	%ModOptions.position = Vector2(x, y)
+
+
+func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> void:
 	_ensure_expansion_toggles()
+	# Vs / clone-table rounds are exclusive to Together All Nighter (PERF-026 path).
+	var clone_allowed: bool = bool(state.get("single_table_difficulty", false))
+	%CloneRounds.visible = clone_allowed
+	%CloneRounds.set_pressed_no_signal(clone_allowed and bool(state.get("clone_rounds", false)))
+	%CloneRounds.disabled = not is_host or started or not clone_allowed
+	%MultiplayerBalls.set_pressed_no_signal(bool(state.get("multiplayer_balls", false)))
+	%MultiplayerBalls.disabled = not is_host or started
+	var master: bool = bool(state.get("expansion_sets_enabled", false))
+	%ExpansionSetsEnabled.set_pressed_no_signal(master)
+	%ExpansionSetsEnabled.disabled = not is_host or started
+	%ExpansionSets.visible = master
 	var flags = ExpansionRegistry.normalize_flags(state.get("expansion_sets", {}))
 	for set_id in ExpansionRegistry.SET_IDS:
 		var check: CheckBox = _expansion_checks[set_id]
 		check.set_pressed_no_signal(bool(flags.get(set_id, false)))
-		check.disabled = not is_host or started
+		check.disabled = not is_host or started or not master
+	if started and _mod_options_open:
+		%ModOptions.hide()
+		_mod_options_open = false
+	elif _mod_options_open:
+		_place_mod_options()
 
 
 func _join():

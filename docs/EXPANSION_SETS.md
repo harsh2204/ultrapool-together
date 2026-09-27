@@ -1,6 +1,8 @@
 # Expansion sets (shop-only)
 
-Opt-in lobby toggles (each **off by default**). Enabled sets never enter the starting rack or between-round set vote pool. When enabled, their balls appear rarely in the shared shop (about one in six stocks/rerolls per set, same gate as TOGETHER). Buying, selling, arranging, and mixing use the existing shared shop.
+Opt-in extras live in the lobby's collapsed **Together options** panel (default closed; does not reshape the Tables/Mode/Shots heading). Inside that panel: Multiplayer balls, Clone-table rounds (Together All Nighter only), and an **Expansion sets** master toggle (**off by default**). The master gates visibility of the six per-set toggles (Phases, Morph, Tide, Relic, Tarot, Zodiac) and defensively forces every set inactive for registration, shop offers, and rules when off—even if a stale per-set flag is on. When the master is on, the six toggles behave as before.
+
+Enabled sets never enter the starting rack, lobby starting-set select, or between-round set vote pool (native base sets only: Classic, Nature, Tech, Spooky, Friends, Food, Space, Gacha). When enabled, their balls appear rarely in the shared shop (about one in six stocks/rerolls per set, same gate as TOGETHER). Buying, selling, arranging, and mixing use the existing shared shop.
 
 **Status: implemented, unmeasured** — needs an authorized live playtest. No runtime FPS/latency claims.
 

@@ -1,6 +1,8 @@
 extends RefCounted
 ## Shared BallResource registration for shop-only expansion sets.
 ## Textures live under mod/assets/balls and use the same 2:1 atlas source format as TOGETHER.
+## Registration writes only id_to_ball / balls / plain_ball_ids — never id_to_deck or id_to_set,
+## so expansion ids cannot appear in lobby starting-set select or between-round vote pools.
 
 const SHOP_OFFER_CHANCE = 6
 const MAX_OFFERS_SCAN = 32

@@ -48,9 +48,9 @@ Everyone must use v0.8 or v0.9 and a **UP8** room code. Changing seats, settings
 
 ## Multiplayer balls (opt-in)
 
-The host can enable **Multiplayer balls** in the lobby (off by default). Relay, Called Shot, Patience, Bounty, Bankroll, Lifeline, Encore, and Domino never enter the starting rack; when enabled they appear only rarely in the shared shop. See [ball effects and rules](docs/MULTIPLAYER_BALLS.md).
+The host can enable **Multiplayer balls** from the lobby's collapsed **Together options** panel (off by default). Relay, Called Shot, Patience, Bounty, Bankroll, Lifeline, Encore, and Domino never enter the starting rack; when enabled they appear only rarely in the shared shop. See [ball effects and rules](docs/MULTIPLAYER_BALLS.md).
 
-Six additional **expansion sets** (Phases, Morph, Tide, Relic, Tarot, Zodiac) use the same shop-only pattern with separate default-off lobby toggles. See [expansion sets](docs/EXPANSION_SETS.md). **Status: implemented, unmeasured.**
+Six additional **expansion sets** (Phases, Morph, Tide, Relic, Tarot, Zodiac) use the same shop-only pattern. Open **Together options** in the lobby for Multiplayer balls, Clone-table rounds, and an **Expansion sets** master toggle (default off) that reveals the six per-set toggles. See [expansion sets](docs/EXPANSION_SETS.md). **Status: implemented, unmeasured.**
 
 ## Current limits
 
