@@ -116,8 +116,8 @@
   },
   {
     "name": "encoding.json",
-    "bytes": 1118,
-    "sha256": "e3f7e28fcbe861ff0e33bdcd87fd98bfa134e13f8df5f66c47157413663b9a34"
+    "bytes": 1083,
+    "sha256": "5e826a939206d8694d00c09ac646091aaefe5f2b75906560243a01f6e44a71d4"
   },
   {
     "name": "manifest.json",
@@ -126,8 +126,8 @@
   },
   {
     "name": "README.md",
-    "bytes": 2487,
-    "sha256": "54f12b1959bcc6aa8ad23ad37179b1be1d3c18cedc86175e8860d0da8bb5289f"
+    "bytes": 2461,
+    "sha256": "b76dd45a22df97a96025f7b50a93949c65d68c8697a3f23578b49077f2a0b021"
   },
   {
     "name": "rook-cue-shop-runtime.gif",
@@ -141,7 +141,7 @@
   },
   {
     "name": "verification.json",
-    "bytes": 1032,
-    "sha256": "fe4332d2371600a3cdf5ca3acea0322d5e2adc5c29763cc01c5263aacfef734d"
+    "bytes": 1000,
+    "sha256": "73a13854d98b06f000c5b885173b68e7ba50ff4a2264695400c91ff58eb2cf1a"
   }
 ]

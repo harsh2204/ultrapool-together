@@ -1,0 +1,35 @@
+{
+  "source_commit": "9541e71fb5c53b03d80e19caa570c7fe9beda3ad",
+  "run_id": "20260927T121822Z-clean-cue-placard",
+  "source": "Actual Godot viewport after RenderingServer.frame_post_draw",
+  "source_frames": 96,
+  "source_dimensions": [
+    1280,
+    720
+  ],
+  "recorded_duration_seconds": 7.935503000000001,
+  "timing": "GIF delays derived from recorded draw intervals, with encoder time-base and GIF centisecond quantization; one terminal frame is repeated.",
+  "processing": "Palette quantization and lossless GIF compression. No generated frames, interpolation, cropping, UI compositing, or speed-up.",
+  "encoder_command": [
+    "ffmpeg",
+    "-hide_banner",
+    "-loglevel",
+    "warning",
+    "-y",
+    "-f",
+    "concat",
+    "-safe",
+    "1",
+    "-i",
+    "frames.ffconcat",
+    "-filter_complex",
+    "[0:v]split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
+    "-vsync",
+    "vfr",
+    "-loop",
+    "0",
+    "rook-cue-shop-runtime.gif"
+  ],
+  "gif_bytes": 5713550,
+  "gif": "rook-cue-shop-runtime.gif"
+}
