@@ -4,6 +4,7 @@ const PlayerInventory = preload("player_inventory_sync.gd")
 const TableSync = preload("table_sync.gd")
 const ReplicaFx = preload("replica_fx.gd")
 const CueCatalog = preload("cue_catalog.gd")
+const BallLevelFx = preload("ball_level_fx.gd")
 
 var remote_ready = false
 var remote_shots = 0
@@ -326,11 +327,16 @@ func _update_hud(data: Dictionary, locale_changed: bool) -> void:
 		table.update_round_text(tr("UI_ROUND") + " " + str(data.round + 1))
 	if _hud_state.get("hp") != data.hp or _hud_state.get("max_hp") != data.max_hp:
 		table.get_hp_info().display_hp(data.hp, data.max_hp, true)
-	_update_shots(data.shots)
+	var shots_max: int = int(data.get("shots_max", data.shots))
+	var shots_used: int = int(data.get("shots_used", 0))
+	_update_shots(data.shots, shots_max, shots_used)
 	for field in ["score", "required_score", "money", "round", "hp", "max_hp"]:
 		_hud_state[field] = data[field]
 	_hud_state.time_seconds = time_seconds
 	_hud_state.locale = TranslationServer.get_locale()
+	_hud_state.shots = data.shots
+	_hud_state.shots_max = shots_max
+	_hud_state.shots_used = shots_used
 
 
 func _update_pockets(states: Array, locale_changed: bool = false) -> void:
@@ -441,7 +447,14 @@ func _set_item(body, item: Dictionary) -> void:
 	body.flash_spr.material = body.flash_spr.material.duplicate()
 	body.ball_item.weight_state = item.weight_state
 	body.update_weight()
-	body.set_star(item.star_power)
+	# Native never draws star chrome on the cue ball (#31). Keep object-ball stars.
+	var is_cue: bool = body == player_ball or item.get("data") == "PLAYER"
+	if is_cue:
+		if body.has_method("set_star"):
+			body.set_star(false)
+		_hide_star_chrome(body)
+	else:
+		body.set_star(item.star_power)
 	body.set_flame(item.flaming)
 	body.set_shield_broken(item.shield_broken)
 	body.set_shield(item.shielded)
@@ -451,22 +464,45 @@ func _set_item(body, item: Dictionary) -> void:
 		body.set_fleeting()
 	body.flash_alpha = 0.0
 	body.flash_spr.material.set_shader_parameter("alpha", 0.0)
+	# Shop Upgradebar defaults visible at level 1; mirror native start_level gate (#32).
+	BallLevelFx.apply_upgrade_badge(body, int(item.level), BallLevelFx.start_level_of(native_item))
 	body.set_meta("remote_item", item.duplicate())
 
 
-func _update_shots(count: int) -> void:
-	var info = table.shots_info
-	if info.shots_max == count and info.shots_used == 0:
+func _hide_star_chrome(body: Node) -> void:
+	if not is_instance_valid(body):
 		return
-	for pip in info.shot_pips:
-		pip.queue_free()
-	info.shot_pips.clear()
-	info.shots_max = count
-	info.shots_used = 0
-	for index in count:
-		var pip = info.pip_scene.instantiate()
-		info.pips_holder.add_child(pip)
-		info.shot_pips.append(pip)
+	var visuals = body.get("visuals")
+	if not is_instance_valid(visuals):
+		return
+	for path in ["static/star_indicator", "static/StarEffect"]:
+		var node = visuals.get_node_or_null(path)
+		if node is CanvasItem and node.visible:
+			node.visible = false
+
+
+func _update_shots(remaining: int, maximum: int, used: int) -> void:
+	var info = table.shots_info
+	var max_shots: int = maximum if maximum >= remaining else remaining + maxi(used, 0)
+	var used_shots: int = clampi(used, 0, max_shots)
+	if (
+		_hud_state.get("shots_max") == max_shots
+		and _hud_state.get("shots_used") == used_shots
+		and info.shots_max == max_shots
+		and info.shots_used == used_shots
+		and info.shot_pips.size() == max_shots
+	):
+		return
+	if info.shots_max != max_shots or info.shot_pips.size() != max_shots:
+		for pip in info.shot_pips:
+			pip.queue_free()
+		info.shot_pips.clear()
+		info.shots_max = max_shots
+		for index in max_shots:
+			var pip = info.pip_scene.instantiate()
+			info.pips_holder.add_child(pip)
+			info.shot_pips.append(pip)
+	info.shots_used = used_shots
 	info.update_visuals(true)
 
 

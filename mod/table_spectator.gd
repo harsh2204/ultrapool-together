@@ -379,7 +379,7 @@ func _render_balls(before: Dictionary, after: Dictionary, weight: float) -> void
 		visual.node.visible = ball.visible and not ball.gone
 		visual.node.modulate = old.color.lerp(ball.color, weight)
 		visual.visuals.scale = old.visual_scale.lerp(ball.visual_scale, weight)
-		_apply_item(visual, ball.item)
+		_apply_item(visual, ball.item, ball.player)
 		var basis = Basis(
 			Quaternion.from_euler(old.spin).slerp(Quaternion.from_euler(ball.spin), weight)
 		)
@@ -408,10 +408,10 @@ func _create_ball(state: Dictionary) -> void:
 		if effect is CanvasItem:
 			effect.hide()
 	_balls[state.id] = {"node": body, "visuals": visuals, "sphere": sphere, "item": {}}
-	_apply_item(_balls[state.id], state.item)
+	_apply_item(_balls[state.id], state.item, state.player)
 
 
-func _apply_item(visual: Dictionary, item: Dictionary) -> void:
+func _apply_item(visual: Dictionary, item: Dictionary, is_player: bool = false) -> void:
 	if item == visual.item:
 		return
 	visual.item = item.duplicate()
@@ -440,7 +440,8 @@ func _apply_item(visual: Dictionary, item: Dictionary) -> void:
 	var indicators = {
 		"fire_indicator": item.flaming,
 		"freeze_indicator": item.locked,
-		"star_indicator": item.star_power,
+		# Native never draws star chrome on the cue ball (#31).
+		"star_indicator": item.star_power and not is_player,
 		"shield_indicator": item.shielded,
 		"shield_broken_indicator": item.shield_broken
 	}

@@ -14,6 +14,7 @@ signal multiplayer_balls_requested(enabled: bool)
 signal expansion_sets_enabled_requested(enabled: bool)
 signal expansion_set_requested(set_id: String, enabled: bool)
 signal cue_requested(cue_id: String)
+signal turn_banner_requested(enabled: bool)
 signal start_requested
 signal return_requested
 signal return_vote_requested(approve: bool)
@@ -25,6 +26,7 @@ const VoteOption = preload("lobby_vote_option.gd")
 const ExpansionRegistry = preload("sets/registry.gd")
 const CueCatalog = preload("cue_catalog.gd")
 const CuePrefs = preload("cue_prefs.gd")
+const HudPrefs = preload("hud_prefs.gd")
 
 const INK = Color("eaf0e7")
 const MUTED = Color("8baeb2")
@@ -87,6 +89,7 @@ var _expansion_checks: Dictionary = {}
 var _mod_options_open = false
 var _cue_buttons: Dictionary = {}
 var _cue_help: Label
+var _turn_banner_check: CheckBox
 
 
 func _ready():
@@ -94,6 +97,7 @@ func _ready():
 	_apply_theme()
 	_ensure_expansion_toggles()
 	_ensure_cue_picker()
+	_ensure_turn_banner_toggle()
 	%Host.pressed.connect(func(): host_requested.emit())
 	%Join.pressed.connect(_join)
 	%JoinCode.text_submitted.connect(func(_text): _join())
@@ -482,6 +486,25 @@ func _paint_cue_selection(cue_id: String) -> void:
 		button.set_pressed_no_signal(id == selected)
 
 
+## Additive ModOptions toggle: clearer in-match turn banner (#30 / PERF-026).
+func _ensure_turn_banner_toggle() -> void:
+	if _turn_banner_check != null:
+		return
+	var column: VBoxContainer = %ModOptionsColumn
+	var divider = HSeparator.new()
+	column.add_child(divider)
+	_turn_banner_check = CheckBox.new()
+	_turn_banner_check.text = "Show turn banner"
+	_turn_banner_check.tooltip_text = (
+		"Name and seat color of the current turn owner during play. Default on."
+	)
+	_turn_banner_check.focus_mode = Control.FOCUS_ALL
+	_turn_banner_check.toggled.connect(
+		func(enabled): turn_banner_requested.emit(enabled)
+	)
+	column.add_child(_turn_banner_check)
+
+
 func _toggle_mod_options() -> void:
 	if _mod_options_open:
 		%ModOptions.hide()
@@ -496,7 +519,7 @@ func _place_mod_options() -> void:
 	var button: Control = %ModOptionsButton
 	var origin = button.get_global_rect()
 	var width = maxi(320, int(origin.size.x))
-	var height = 400
+	var height = 440
 	%ModOptions.size = Vector2(width, height)
 	var x = int(origin.position.x)
 	var y = int(origin.position.y + origin.size.y + 4)
@@ -510,6 +533,7 @@ func _place_mod_options() -> void:
 func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> void:
 	_ensure_expansion_toggles()
 	_ensure_cue_picker()
+	_ensure_turn_banner_toggle()
 	# Vs / clone-table rounds are exclusive to Together All Nighter (PERF-026 path).
 	var clone_allowed: bool = bool(state.get("single_table_difficulty", false))
 	%CloneRounds.visible = clone_allowed
@@ -534,6 +558,8 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 	_paint_cue_selection(cue_id)
 	for id in _cue_buttons:
 		(_cue_buttons[id] as Button).disabled = _local_id <= 0
+	if _turn_banner_check != null:
+		_turn_banner_check.set_pressed_no_signal(HudPrefs.turn_banner_enabled())
 	if started and _mod_options_open:
 		%ModOptions.hide()
 		_mod_options_open = false

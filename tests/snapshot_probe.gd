@@ -76,6 +76,8 @@ func _run() -> void:
 		"score": 0,
 		"required_score": 50,
 		"shots": 5,
+		"shots_max": 5,
+		"shots_used": 0,
 		"money": 0,
 		"hp": 3,
 		"max_hp": 3,
