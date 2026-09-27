@@ -408,6 +408,7 @@ theme_override_constants/margin_right = 16
 theme_override_constants/margin_bottom = 12
 
 [node name="ModOptionsColumn" type="VBoxContainer" parent="ModOptions/ModOptionsBody"]
+unique_name_in_owner = true
 theme_override_constants/separation = 10
 
 [node name="ModOptionsTitle" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsColumn"]
