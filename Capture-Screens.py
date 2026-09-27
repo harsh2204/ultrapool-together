@@ -32,6 +32,7 @@ FIXTURES = (
     "tests/presence_probe.gd", "tests/router_probe.gd", "tests/controller_probe.gd",
     "tests/shop_layout_probe.gd", "tests/snapshot_probe.gd", "tests/transport_budget_probe.gd",
     "tests/transport_reconnect_probe.gd", "tests/recovery_probe.gd",
+    "tests/session_sim_probe.gd",
 )
 ERROR_PATTERN = re.compile(r"SCRIPT ERROR:|Parse Error:|Compile Error:|RENDER_PROBE_FAIL")
 BUNDLE_ID = "org.ultrapooltogether.render-test"

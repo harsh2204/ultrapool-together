@@ -8,6 +8,7 @@ const REJOIN_MAX_AGE_SECONDS = 86400
 const MAX_ROOM_CODE = 32
 
 var database: Node
+var rejoin_path = REJOIN_PATH
 # Latest accepted checkpoint per table: {"epoch", "payload"}. One entry per table.
 var _checkpoints: Dictionary = {}
 # Room host only: table -> {"leader", "since"} while that table's leader is away.
@@ -176,7 +177,7 @@ func remember(room_code: String) -> void:
 	var file = ConfigFile.new()
 	file.set_value("rejoin", "room", room_code)
 	file.set_value("rejoin", "saved_at", int(Time.get_unix_time_from_system()))
-	if file.save(REJOIN_PATH) != OK:
+	if file.save(rejoin_path) != OK:
 		push_warning("[Together] Could not remember the match for rejoining.")
 		return
 	_remembered_room = room_code
@@ -184,13 +185,13 @@ func remember(room_code: String) -> void:
 
 func forget() -> void:
 	_remembered_room = ""
-	if FileAccess.file_exists(REJOIN_PATH):
-		DirAccess.remove_absolute(REJOIN_PATH)
+	if FileAccess.file_exists(rejoin_path):
+		DirAccess.remove_absolute(rejoin_path)
 
 
 func _load_room() -> String:
 	var file = ConfigFile.new()
-	if file.load(REJOIN_PATH) != OK:
+	if file.load(rejoin_path) != OK:
 		return ""
 	var room = file.get_value("rejoin", "room", "")
 	var saved_at = file.get_value("rejoin", "saved_at", 0)

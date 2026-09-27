@@ -122,6 +122,7 @@ func _check_checkpoint_validation() -> void:
 func _recovery() -> Node:
 	var recovery = TableRecovery.new()
 	recovery.database = _database
+	recovery.rejoin_path = "user://recovery_probe_rejoin.cfg"
 	return recovery
 
 
@@ -258,12 +259,12 @@ func _check_rejoin_memory() -> void:
 	recovery.forget()
 	recovery.setup(_database)
 	_check(recovery.remembered_room().is_empty(), "no match is remembered by default")
-	recovery.remember("UP8-12345")
+	recovery.remember("UP9-12345")
 	var reloaded = _recovery()
 	reloaded.setup(_database)
-	_check(reloaded.remembered_room() == "UP8-12345", "rejoin code survives a restart")
+	_check(reloaded.remembered_room() == "UP9-12345", "rejoin code survives a restart")
 	recovery.remember("x".repeat(64))
-	_check(recovery.remembered_room() == "UP8-12345", "oversized room codes are not stored")
+	_check(recovery.remembered_room() == "UP9-12345", "oversized room codes are not stored")
 	reloaded.forget()
 	var cleared = _recovery()
 	cleared.setup(_database)

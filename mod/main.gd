@@ -81,6 +81,8 @@ var _rejoining = false
 var _waiting_for = 0
 var _waiting_successor = 0
 var _waiting_deadline = 0
+var _lobby_received_at = 0
+var _prune_at = 0
 
 
 func _ready():
@@ -117,6 +119,16 @@ func _ready():
 	run_controls.setup(self)
 	presence.setup(self, transport, shop_sync)
 	shop_sync.request.connect(_shop_request)
+	_connect_transport()
+	if str(ProjectSettings.get_setting("application/config/version", "")) != GAME_VERSION:
+		supported = false
+		_status("This mod requires Ultrapool " + GAME_VERSION + ".")
+		return
+	transport.listen_for_invites()
+	print("[Together] Ready v", VERSION)
+
+
+func _connect_transport():
 	transport.connected.connect(_connected)
 	transport.peer_joined.connect(_peer_joined)
 	transport.peer_left.connect(_peer_left)
@@ -126,12 +138,22 @@ func _ready():
 	transport.room_ready.connect(_room_ready)
 	transport.host_lost.connect(_host_lost)
 	transport.reconnected.connect(_reconnected)
-	if str(ProjectSettings.get_setting("application/config/version", "")) != GAME_VERSION:
-		supported = false
-		_status("This mod requires Ultrapool " + GAME_VERSION + ".")
-		return
-	transport.listen_for_invites()
-	print("[Together] Ready v", VERSION)
+	transport.host_changed.connect(_host_changed)
+	transport.host_promoted.connect(_host_promoted)
+
+
+func _popup_open() -> bool:
+	return _native_ui != null and _native_ui.is_popup_open()
+
+
+# The native game cannot start a run while paused, transitioning, or showing a popup.
+func _native_blocked() -> bool:
+	return (
+		not is_inside_tree()
+		or get_node("/root/Global").transitioning
+		or get_tree().paused
+		or _popup_open()
+	)
 
 
 func _build_ui():
@@ -263,12 +285,7 @@ func _toggle_panel():
 func _set_panel(value: bool):
 	if value and is_spectating():
 		spectator.close()
-	if (
-		value
-		and not active
-		and run_setup.at_main_menu()
-		and get_node("/root/UIManager").is_popup_open()
-	):
+	if value and not active and run_setup.at_main_menu() and _popup_open():
 		_status("Close the game's popup before opening the lobby.")
 		return
 	panel.visible = value
@@ -280,7 +297,12 @@ func _set_panel(value: bool):
 
 
 func _suspend_menu():
-	if active or is_instance_valid(_suspended_menu) or not run_setup.at_main_menu():
+	if (
+		active
+		or not is_inside_tree()
+		or is_instance_valid(_suspended_menu)
+		or not run_setup.at_main_menu()
+	):
 		return
 	_suspended_menu = get_tree().current_scene
 	_menu_process_mode = _suspended_menu.process_mode
@@ -314,7 +336,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.8 or v0.9 and a new UP8 room code.")
+		_status("Could not join. Everyone needs this mod version and a UP9 room code.")
 	_render_lobby()
 
 
@@ -549,6 +571,8 @@ func _broadcast_lobby():
 	lobby = lobby_model.snapshot()
 	lobby.table_summaries = table_summaries.duplicate(true)
 	lobby.match = match_id
+	if lobby_model.started:
+		lobby.elapsed_ms = maxi(0, Time.get_ticks_msec() - _match_started_at)
 	transport.send({"kind": "lobby_state", "lobby": lobby})
 	_roster_changed()
 
@@ -630,7 +654,7 @@ func _begin_table(config: Dictionary, resume: Dictionary = {}, late: bool = fals
 	if not run_setup.at_main_menu():
 		fail.call("A player could not start a fresh run. Everyone must be at the main menu.")
 		return
-	if get_tree().paused or get_node("/root/UIManager").is_popup_open():
+	if _native_blocked():
 		fail.call("Close the game's popup before starting the match.")
 		return
 	table_id = player_table(transport.local_id())
@@ -720,12 +744,7 @@ func _process_pending_begin() -> void:
 	if not lobby.get("started", false):
 		_rejoin_pending = false
 		return
-	if (
-		not run_setup.at_main_menu()
-		or get_node("/root/Global").transitioning
-		or get_tree().paused
-		or get_node("/root/UIManager").is_popup_open()
-	):
+	if not run_setup.at_main_menu() or _native_blocked():
 		return
 	_rejoin_pending = false
 	var resume: Dictionary = _pending_resume
@@ -828,6 +847,7 @@ func _disconnected(reason: String):
 	recovery.clear()
 	_link_lost = false
 	_rejoin_pending = false
+	_prune_at = 0
 	if _rejoining:
 		_rejoining = false
 		recovery.forget()
@@ -863,6 +883,49 @@ func _reconnected():
 		last_shop_state.clear()
 	else:
 		_table_send({"kind": "sync_request"})
+	if is_spectating():
+		_watch_changed(spectator.watched_table)
+
+
+func _host_changed(_host: int, previous: int):
+	_link_lost = true
+	_status("%s left the room. Connecting to the new host..." % _player_name(previous))
+
+
+func _host_promoted(previous: int):
+	var departed = _player_name(previous)
+	if lobby.is_empty() or not lobby_model.restore(lobby, _local_id):
+		_leave()
+		_status("The room host left before the room could be handed over.")
+		return
+	_link_lost = false
+	var now = Time.get_ticks_msec()
+	table_summaries = lobby.get("table_summaries", []).duplicate(true)
+	_watchers.clear()
+	_watch_snapshots.clear()
+	_watch_states.clear()
+	_starting_players.clear()
+	_prune_at = 0
+	if lobby_model.started:
+		var elapsed: int = lobby.get("elapsed_ms", 0)
+		_match_started_at = now - elapsed - (now - _lobby_received_at)
+		_finish_count = 0
+		for summary in table_summaries:
+			_finish_count = maxi(_finish_count, summary.get("finish_order", 0))
+			var leader: int = lobby_model.leader_for_table(summary.table)
+			if not summary.finished and leader != _local_id:
+				recovery.leader_left(summary.table, leader, now)
+		_refresh_waiting()
+	else:
+		_prune_at = now + transport.RECONNECT_WINDOW_MS
+	_broadcast_lobby()
+	if active and is_table_host():
+		recovery.reset_leader()
+		_last_phase.clear()
+		last_shop_state.clear()
+	if is_spectating():
+		_watch_changed(spectator.watched_table)
+	_status("%s left. You are hosting the room now." % departed)
 
 
 func _status(value: String):
@@ -1073,6 +1136,31 @@ func _roster_changed():
 		_render_lobby()
 
 
+func _tick_recovery(now: int) -> void:
+	if not transport.is_host:
+		return
+	if lobby.get("started", false):
+		for due in recovery.due_takeovers(lobby, now):
+			_hand_over(due.table, due.successor)
+	elif _prune_at != 0 and now >= _prune_at:
+		_prune_at = 0
+		if lobby_model.prune_disconnected():
+			_broadcast_lobby()
+
+
+func _share_checkpoint(table: int, epoch: int, payload: Dictionary) -> void:
+	var message = {
+		"kind": "checkpoint_copy",
+		"match": match_id,
+		"table": table,
+		"epoch": epoch,
+		"payload": payload
+	}
+	for player in lobby.get("players", []):
+		if player.connected and player.table != table and player.id != transport.local_id():
+			transport.send_to(player.id, message)
+
+
 func _follow_leader(leader: int) -> void:
 	table_leader_id = leader
 	last_guest_snapshot = 0
@@ -1132,9 +1220,7 @@ func _process(delta):
 		if run_setup.return_menu() == OK:
 			_returning_to_menu = false
 	_process_pending_begin()
-	if transport.is_host and lobby.get("started", false):
-		for due in recovery.due_takeovers(lobby, Time.get_ticks_msec()):
-			_hand_over(due.table, due.successor)
+	_tick_recovery(Time.get_ticks_msec())
 	if panel.visible:
 		_suspend_menu()
 	presence.tick(delta, active and not is_spectating(), can_control())
@@ -1516,8 +1602,10 @@ func _route_table(actor: int, envelope: Dictionary):
 		if not _valid_state(payload, routed.table):
 			return
 		_record_summary(routed.table, payload)
-	elif payload.kind == "checkpoint" and not recovery.store(routed.table, routed.epoch, payload):
-		return
+	elif payload.kind == "checkpoint":
+		if not recovery.store(routed.table, routed.epoch, payload):
+			return
+		_share_checkpoint(routed.table, routed.epoch, payload)
 	_forward_watchers(routed.table, payload)
 	var message = {
 		"kind": "table",
@@ -1618,7 +1706,17 @@ func _received(sender: int, message: Dictionary):
 		"lobby_state":
 			if message.get("lobby") is Dictionary:
 				lobby = message.lobby
+				_lobby_received_at = Time.get_ticks_msec()
 				_roster_changed()
+		"checkpoint_copy":
+			if (
+				message.get("match") == match_id
+				and message.get("table") is int
+				and message.table >= 0
+				and message.table < lobby.get("table_count", 0)
+				and message.get("epoch") is int
+			):
+				recovery.store(message.table, message.epoch, message.get("payload"))
 		"lobby_error":
 			if message.get("reason") is String:
 				_status(message.reason)

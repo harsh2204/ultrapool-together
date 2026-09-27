@@ -9,8 +9,11 @@ signal status_changed(text: String)
 signal room_ready
 signal host_lost(reason: String)
 signal reconnected
+signal host_changed(host: int, previous: int)
+signal host_promoted(previous: int)
 
-const PROTOCOL := 8
+const PROTOCOL := 9
+const ROOM_PREFIX := "UP9"
 const MAX_PLAYERS := 8
 const GAME_VERSION := "0.15.7"
 const MOD_ID := "ultrapool-together"
@@ -26,6 +29,8 @@ const HEARTBEAT_MS := 2000
 # A guest keeps its Steam room membership while retrying a lost host link.
 const RECONNECT_WINDOW_MS := 60000
 const RECONNECT_RETRY_MS := 3000
+# Gives a newly promoted Steam room owner time to restore the room before guests connect.
+const MIGRATION_DELAY_MS := 1000
 # Budgets cover decoding and synchronous received handlers, not just socket reads.
 # Whole messages cannot be preempted: one packet/handler can exceed these limits.
 const RECEIVE_BUDGET_USEC := 2000
@@ -71,6 +76,7 @@ var _receive_max_handler_usec := 0
 var _receive_budget_reached := false
 var _reconnect_deadline := 0
 var _reconnect_at := 0
+var _ever_connected := false
 
 
 func _ready() -> void:
@@ -150,7 +156,7 @@ func host_steam() -> Error:
 
 func join_steam(code: String) -> Error:
 	var parts := code.strip_edges().split("-")
-	if parts.size() != 2 or parts[0] != "UP8" or not parts[1].is_valid_int():
+	if parts.size() != 2 or parts[0] != ROOM_PREFIX or not parts[1].is_valid_int():
 		return ERR_INVALID_PARAMETER
 	return _join_lobby(int(parts[1]))
 
@@ -331,6 +337,7 @@ func close() -> void:
 	_joinable = true
 	_reconnect_deadline = 0
 	_reconnect_at = 0
+	_ever_connected = false
 	is_host = false
 	room_code = ""
 	_closing = false
@@ -462,8 +469,9 @@ func _retry_host(now: int) -> void:
 	if now >= _reconnect_deadline:
 		_fail_room("Could not reconnect to the host. Rejoin the match from the lobby.")
 	elif not _peers.has(_host_id) and now >= _reconnect_at:
-		if int(_steam.call("getLobbyOwner", _lobby_id)) != _host_id:
-			_fail_room("The host left the room.")
+		var owner := int(_steam.call("getLobbyOwner", _lobby_id))
+		if owner != _host_id:
+			_follow_owner(owner)
 			return
 		_reconnect_at = now + RECONNECT_RETRY_MS
 		_add_peer(_host_id)
@@ -478,8 +486,38 @@ func _can_reconnect(id: int, was_ready: bool) -> bool:
 		and _lobby_id != 0
 		and id == _host_id
 		and (was_ready or _reconnect_deadline != 0)
-		and int(_steam.call("getLobbyOwner", _lobby_id)) == _host_id
 	)
+
+
+# Steam chooses the next room owner when the host leaves; every member follows it.
+func _follow_owner(owner: int) -> void:
+	if owner == 0:
+		_fail_room("The room closed.")
+		return
+	if owner == _host_id and not is_host:
+		return
+	var previous := _host_id
+	for id in _peers.keys():
+		_close_channels(id)
+	_peers.clear()
+	_members.clear()
+	var now := Time.get_ticks_msec()
+	if owner == local_id():
+		is_host = true
+		_host_id = 0
+		_reconnect_deadline = 0
+		_reconnect_at = 0
+		_seen_nonces.clear()
+		_steam.call("setLobbyData", _lobby_id, "host", str(owner))
+		_update_joinable()
+		status_changed.emit("The room host left. You are hosting the room now.")
+		host_promoted.emit(previous)
+		return
+	_host_id = owner
+	_reconnect_deadline = now + RECONNECT_WINDOW_MS
+	_reconnect_at = now + MIGRATION_DELAY_MS
+	status_changed.emit("The room host left. Connecting to the new host...")
+	host_changed.emit(owner, previous)
 
 
 func _receive_budget_available(started_usec: int) -> bool:
@@ -611,7 +649,7 @@ func _on_lobby_created(result: int, lobby_id: int) -> void:
 		if not bool(_steam.call("setLobbyData", _lobby_id, key, metadata[key])):
 			_fail_room("Steam could not prepare the room. Try again.")
 			return
-	room_code = "UP8-%d" % _lobby_id
+	room_code = "%s-%d" % [ROOM_PREFIX, _lobby_id]
 	_update_joinable()
 	status_changed.emit("Invite friends or share your room code.")
 	room_ready.emit()
@@ -645,7 +683,7 @@ func _on_lobby_joined(lobby_id: int, _permissions: int, _locked: bool, response:
 		return
 	_host_id = owner
 	_add_peer(owner)
-	room_code = "UP8-%d" % _lobby_id
+	room_code = "%s-%d" % [ROOM_PREFIX, _lobby_id]
 	status_changed.emit("Connecting to the host...")
 	_send_hello()
 
@@ -655,10 +693,15 @@ func _on_lobby_chat_update(
 ) -> void:
 	if lobby_id != _lobby_id or _mode != "steam":
 		return
-	if not is_host and int(_steam.call("getLobbyOwner", lobby_id)) != _host_id:
-		_drop_peer(_host_id, "Host left the room.")
-	elif _peers.has(changed_id) and (state & LOBBY_MEMBER_GONE) != 0:
-		_drop_peer(changed_id, "Player left the room." if is_host else "Host left the room.")
+	var gone := (state & LOBBY_MEMBER_GONE) != 0
+	if not is_host:
+		var owner := int(_steam.call("getLobbyOwner", lobby_id))
+		if owner != _host_id:
+			_follow_owner(owner)
+		elif gone and changed_id == _host_id:
+			_drop_peer(changed_id, "Host left the room.", true)
+	elif _peers.has(changed_id) and gone:
+		_drop_peer(changed_id, "Player left the room.")
 	_update_joinable()
 
 
@@ -861,12 +904,15 @@ func _mark_ready(id: int) -> void:
 	_update_joinable()
 	if is_host:
 		_publish_members()
-	elif _reconnect_deadline != 0:
+	else:
+		var resumed := _reconnect_deadline != 0 and _ever_connected
 		_reconnect_deadline = 0
 		_reconnect_at = 0
-		reconnected.emit()
-	else:
-		connected.emit()
+		_ever_connected = true
+		if resumed:
+			reconnected.emit()
+		else:
+			connected.emit()
 	if not _peers.has(id):
 		return
 	status_changed.emit("Player connected." if is_host else "Connected to host.")
@@ -916,6 +962,10 @@ func _drop_peer(id: int, reason: String, recoverable := false) -> void:
 	_peers.erase(id)
 	_close_channels(id)
 	if retry:
+		var owner := int(_steam.call("getLobbyOwner", _lobby_id))
+		if owner != _host_id:
+			_follow_owner(owner)
+			return
 		var now := Time.get_ticks_msec()
 		_reconnect_at = now + RECONNECT_RETRY_MS
 		if _reconnect_deadline == 0:

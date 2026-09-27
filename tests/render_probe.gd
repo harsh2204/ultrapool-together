@@ -95,6 +95,7 @@ func _run():
 		"transport_budget_probe",
 		"transport_reconnect_probe",
 		"recovery_probe",
+		"session_sim_probe",
 		"shop_layout_probe"
 	]:
 		_run_model_probe(probe)

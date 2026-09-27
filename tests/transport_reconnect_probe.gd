@@ -9,6 +9,7 @@ class SteamStub:
 	var local = 20
 	var sent: Array = []
 	var left: Array = []
+	var data: Dictionary = {}
 
 	# Match GodotSteam's API spelling.
 	# gdlint: disable=function-name
@@ -35,6 +36,10 @@ class SteamStub:
 		left.append(lobby)
 
 	func setLobbyJoinable(_lobby: int, _joinable: bool) -> bool:
+		return true
+
+	func setLobbyData(_lobby: int, key: String, value: String) -> bool:
+		data[key] = value
 		return true
 
 	func getNumLobbyMembers(_lobby: int) -> int:
@@ -65,7 +70,7 @@ var checks := 0
 func _initialize() -> void:
 	_lost_host_reconnects()
 	_reconnect_window_expires()
-	_owner_change_ends_session()
+	_owner_change_migrates()
 	_room_closure_is_final()
 	_host_and_lan_keep_existing_behavior()
 	for failure in failures:
@@ -165,25 +170,60 @@ func _reconnect_window_expires() -> void:
 	_dispose(transport)
 
 
-func _owner_change_ends_session() -> void:
+func _owner_change_migrates() -> void:
 	var transport = _guest()
+	var steam: SteamStub = transport._steam
 	var events = Events.new()
 	events.watch(transport)
+	var changes: Array = []
+	transport.host_changed.connect(func(host, previous): changes.append([host, previous]))
 	_time_out(transport)
-	(transport._steam as SteamStub).owner = 30
+	steam.owner = 30
 	transport._reconnect_at = 0
 	transport._process(0.016)
-	_check(events.disconnected.size() == 1, "new room owner ends a pending reconnection")
+	_check(changes == [[30, 10]], "pending reconnection follows Steam's new room owner")
+	_check(events.disconnected.is_empty() and steam.left.is_empty(), "migration keeps the session")
+	_check(
+		transport._host_id == 30 and not transport._peers.has(30),
+		"new host gets time to restore the room before the first hello"
+	)
+	transport._reconnect_at = 0
+	steam.sent.clear()
+	transport._process(0.016)
+	_check(
+		steam.sent.any(func(entry): return entry.id == 30 and entry.message.kind == "hello"),
+		"guest greets the new room host"
+	)
+	_dispose(transport)
+	transport = _guest()
+	steam = transport._steam
+	events = Events.new()
+	events.watch(transport)
+	changes.clear()
+	transport.host_changed.connect(func(host, previous): changes.append([host, previous]))
+	steam.owner = 30
+	transport._on_lobby_chat_update(77, 10, 10, 2)
+	_check(changes == [[30, 10]], "room update announcing a new owner starts migration")
+	_check(events.lost.is_empty() and events.disconnected.is_empty(), "migration is not a failure")
+	_dispose(transport)
+	transport = _guest()
+	steam = transport._steam
+	var promotions: Array = []
+	transport.host_promoted.connect(func(previous): promotions.append(previous))
+	steam.owner = 20
+	transport._on_lobby_chat_update(77, 10, 10, 2)
+	_check(promotions == [10] and transport.is_host, "new Steam owner becomes the room host")
+	_check(steam.data.get("host") == "20", "promoted host advertises itself in the room data")
+	_check(
+		transport._peers.is_empty() and transport.host_id() == 20, "promotion starts a new peer set"
+	)
 	_dispose(transport)
 	transport = _guest()
 	events = Events.new()
 	events.watch(transport)
-	(transport._steam as SteamStub).owner = 30
-	_time_out(transport)
-	_check(
-		events.lost.is_empty() and events.disconnected.size() == 1,
-		"loss after the owner changed is not retried"
-	)
+	(transport._steam as SteamStub).owner = 0
+	transport._on_lobby_chat_update(77, 10, 10, 2)
+	_check(events.disconnected.size() == 1, "a room without an owner has closed")
 	_dispose(transport)
 
 
