@@ -54,6 +54,8 @@ The harness also records and replays native host/client round transitions, inclu
 
 `render_ui_fixtures.gd` checks lobby card/button ballots through the controller, local selection, live voter identities, abstention, disconnects, frozen choices, and retained card identity and keyboard focus. Full-catalog and eight-player consensus fixtures check layout bounds and exact native shop poster references for all starting sets.
 
+`native_aim_fixture.gd` sends mouse press, motion, and release events through the viewport and steps the inherited cue-ball process on both native host and guest tables. It checks idle-to-aim startup, a visible charged cue, one release submission, idle cleanup, and off-turn/native-menu rejection. A controller sink records intent without applying physics; this fixture does not establish production controller authorization or network delivery. This regression coverage is authored and statically parsed; it needs an authorized screenshot-harness run.
+
 ## Native game probes
 
 These probes require your own installed Ultrapool 0.15.7. Make private test directories containing local copies of `game.exe`, `steam_api64.dll`, and `libgodotsteam.windows.template_release.x86_64.dll`. Keep overrides out of the normal game directory. Replace the checkout prefix in the following examples with an absolute path using forward slashes.
