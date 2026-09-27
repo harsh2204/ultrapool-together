@@ -5,6 +5,7 @@ const DEFAULT_SHOT_BUDGET = 6
 const TeamVote = preload("team_vote.gd")
 const DifficultyCatalog = preload("difficulty_catalog.gd")
 const ExpansionRegistry = preload("sets/registry.gd")
+const CueCatalog = preload("cue_catalog.gd")
 const RUN_FIELDS = ["deck", "difficulty", "match_mode"]
 const MATCH_MODES = [{"id": "race", "label": "Race"}, {"id": "score", "label": "Score PvP"}]
 
@@ -215,6 +216,26 @@ func set_expansion_set(sender: int, set_id: String, enabled: bool) -> bool:
 		return true
 	expansion_sets[set_id] = enabled
 	_changed(true)
+	return true
+
+
+## Per-player cosmetic (Refs #20). Any connected player sets only their own cue.
+## Does not clear readiness — unlike host lobby settings.
+func set_cue(sender: int, cue_id: String) -> bool:
+	if not _players.has(sender) or not _players[sender].connected:
+		return _reject("Join the lobby before choosing a cue.")
+	var cleaned: String = cue_id.strip_edges().to_lower()
+	if cleaned.is_empty():
+		cleaned = CueCatalog.DEFAULT_ID
+	if not CueCatalog.is_known(cleaned):
+		return _reject("Unknown cue style.")
+	var normalized: String = CueCatalog.normalize(cleaned)
+	var player: Dictionary = _players[sender]
+	if str(player.get("cue", CueCatalog.DEFAULT_ID)) == normalized:
+		last_error = ""
+		return true
+	player.cue = normalized
+	_changed()
 	return true
 
 
@@ -492,7 +513,8 @@ func _player(id: int, player_name: String) -> Dictionary:
 		"slot": -1,
 		"ready": false,
 		"connected": true,
-		"run_votes": {}
+		"run_votes": {},
+		"cue": CueCatalog.DEFAULT_ID
 	}
 
 

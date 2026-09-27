@@ -13,6 +13,7 @@ signal clone_rounds_requested(enabled: bool)
 signal multiplayer_balls_requested(enabled: bool)
 signal expansion_sets_enabled_requested(enabled: bool)
 signal expansion_set_requested(set_id: String, enabled: bool)
+signal cue_requested(cue_id: String)
 signal start_requested
 signal return_requested
 signal return_vote_requested(approve: bool)
@@ -22,6 +23,8 @@ signal close_requested
 
 const VoteOption = preload("lobby_vote_option.gd")
 const ExpansionRegistry = preload("sets/registry.gd")
+const CueCatalog = preload("cue_catalog.gd")
+const CuePrefs = preload("cue_prefs.gd")
 
 const INK = Color("eaf0e7")
 const MUTED = Color("8baeb2")
@@ -82,12 +85,15 @@ var _vote_groups: Dictionary = {}
 var _header_plank: Panel
 var _expansion_checks: Dictionary = {}
 var _mod_options_open = false
+var _cue_buttons: Dictionary = {}
+var _cue_help: Label
 
 
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_apply_theme()
 	_ensure_expansion_toggles()
+	_ensure_cue_picker()
 	%Host.pressed.connect(func(): host_requested.emit())
 	%Join.pressed.connect(_join)
 	%JoinCode.text_submitted.connect(func(_text): _join())
@@ -417,6 +423,65 @@ func _ensure_expansion_toggles() -> void:
 		_expansion_checks[set_id] = check
 
 
+## Additive ModOptions section: per-player cue cosmetics (Refs #20 / PERF-026).
+func _ensure_cue_picker() -> void:
+	if not _cue_buttons.is_empty():
+		return
+	var column: VBoxContainer = %ModOptionsColumn
+	var divider = HSeparator.new()
+	column.add_child(divider)
+	var title = Label.new()
+	title.text = "Your cue"
+	title.add_theme_font_size_override("font_size", 14)
+	column.add_child(title)
+	_cue_help = Label.new()
+	_cue_help.text = "Personal cosmetic. Synced to teammates. Default matches the native cue."
+	_cue_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_cue_help.add_theme_font_size_override("font_size", 12)
+	_cue_help.add_theme_color_override("font_color", MUTED)
+	column.add_child(_cue_help)
+	var flow = HFlowContainer.new()
+	flow.name = "CuePicker"
+	flow.add_theme_constant_override("h_separation", 6)
+	flow.add_theme_constant_override("v_separation", 6)
+	column.add_child(flow)
+	var group = ButtonGroup.new()
+	for entry in CueCatalog.entries():
+		var button = Button.new()
+		button.toggle_mode = true
+		button.button_group = group
+		button.focus_mode = Control.FOCUS_ALL
+		button.custom_minimum_size = Vector2(28, 28)
+		button.tooltip_text = entry.label
+		button.text = ""
+		var style = _box(entry.modulate if entry.id != CueCatalog.DEFAULT_ID else entry.shaft, GOLD, 1)
+		button.add_theme_stylebox_override("normal", style)
+		button.add_theme_stylebox_override("hover", _box(entry.tip, GOLD, 1))
+		button.add_theme_stylebox_override(
+			"pressed", _box(entry.modulate if entry.id != CueCatalog.DEFAULT_ID else entry.shaft, FELT, 2)
+		)
+		button.add_theme_stylebox_override(
+			"hover_pressed", _box(entry.tip, FELT, 2)
+		)
+		var captured: String = entry.id
+		button.pressed.connect(func(): _select_cue(captured))
+		flow.add_child(button)
+		_cue_buttons[entry.id] = button
+
+
+func _select_cue(cue_id: String) -> void:
+	var normalized: String = CuePrefs.set_cue_id(cue_id)
+	_paint_cue_selection(normalized)
+	cue_requested.emit(normalized)
+
+
+func _paint_cue_selection(cue_id: String) -> void:
+	var selected: String = CueCatalog.normalize(cue_id)
+	for id in _cue_buttons:
+		var button: Button = _cue_buttons[id]
+		button.set_pressed_no_signal(id == selected)
+
+
 func _toggle_mod_options() -> void:
 	if _mod_options_open:
 		%ModOptions.hide()
@@ -431,7 +496,7 @@ func _place_mod_options() -> void:
 	var button: Control = %ModOptionsButton
 	var origin = button.get_global_rect()
 	var width = maxi(320, int(origin.size.x))
-	var height = 280
+	var height = 400
 	%ModOptions.size = Vector2(width, height)
 	var x = int(origin.position.x)
 	var y = int(origin.position.y + origin.size.y + 4)
@@ -444,6 +509,7 @@ func _place_mod_options() -> void:
 
 func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> void:
 	_ensure_expansion_toggles()
+	_ensure_cue_picker()
 	# Vs / clone-table rounds are exclusive to Together All Nighter (PERF-026 path).
 	var clone_allowed: bool = bool(state.get("single_table_difficulty", false))
 	%CloneRounds.visible = clone_allowed
@@ -460,6 +526,14 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 		var check: CheckBox = _expansion_checks[set_id]
 		check.set_pressed_no_signal(bool(flags.get(set_id, false)))
 		check.disabled = not is_host or started or not master
+	# Per-player cue: prefer lobby snapshot for local id, else persisted preference.
+	var local_player = _player(_local_id)
+	var cue_id: String = str(local_player.get("cue", ""))
+	if cue_id.is_empty():
+		cue_id = CuePrefs.cue_id()
+	_paint_cue_selection(cue_id)
+	for id in _cue_buttons:
+		(_cue_buttons[id] as Button).disabled = _local_id <= 0
 	if started and _mod_options_open:
 		%ModOptions.hide()
 		_mod_options_open = false

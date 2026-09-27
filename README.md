@@ -52,6 +52,10 @@ The host can enable **Multiplayer balls** from the lobby's collapsed **Together 
 
 Six additional **expansion sets** (Phases, Morph, Tide, Relic, Tarot, Zodiac) use the same shop-only pattern. Open **Together options** in the lobby for Multiplayer balls, Clone-table rounds, and an **Expansion sets** master toggle (default off) that reveals the six per-set toggles. See [expansion sets](docs/EXPANSION_SETS.md). **Status: implemented, unmeasured.**
 
+## Custom cues
+
+Each player can pick a cue tint from **Together options → Your cue**. Choices are personal (not host-locked), sync to teammates, and persist in the mod’s isolated user folder. Styles are vanilla-safe recolors of the native cue — see [custom cues](docs/CUSTOM_CUES.md). **Status: implemented, unmeasured.**
+
 ## Current limits
 
 This source build is experimental; live Steam sessions, latency, and concurrent remote shopping still need playtesting.

@@ -41,7 +41,8 @@ These scripts extend `SceneTree` and require a Godot 4.6 executable with `--scri
 | Probe | Coverage | Success marker |
 | --- | --- | --- |
 | `team_vote_probe.gd` | Concurrent approvals, context generations, stale-vote rejection, membership changes, and deep-copied vote context. | `TEAM_VOTE_PROBE PASS` |
-| `lobby_probe.gd` | Capacity/seats, run-choice allowlists, per-player votes, ties/abstention, frozen selections, stale readiness rejection, concurrent ready votes, host-only table settings, start/reset, and disconnects. | `LOBBY_PROBE PASS` |
+| `lobby_probe.gd` | Capacity/seats, run-choice allowlists, per-player votes, ties/abstention, frozen selections, stale readiness rejection, concurrent ready votes, host-only table settings, per-player cue cosmetics, start/reset, and disconnects. | `LOBBY_PROBE PASS` |
+| `cue_probe.gd` | Cue catalog roster/normalize/apply idempotence, local prefs helpers, and lobby `set_cue` dirty-gating without clearing Ready. | `CUE_PROBE PASS` |
 | `transport_budget_probe.gd` | Fake Steam queues exercise bounded dispatch, reliable retention/order, channel fairness across frames, and byte/time limits without network connections. | `TRANSPORT_BUDGET_PROBE PASS` |
 | `router_probe.gd` | Authenticated actor identity, requests to the correct table leader, table-isolated broadcasts and replies, reliable actions, disconnected members, and malformed routes. | `ROUTER_PROBE PASS` |
 | `controller_probe.gd` | Main controller lifecycle using off-tree service substitutes: identity teardown, room/match generations, terminal leader disconnects and reconnects, a run closing during a shot, and targeted shop synchronization preserving the broadcast cache. | `CONTROLLER_PROBE PASS` |

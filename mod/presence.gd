@@ -7,6 +7,9 @@ const _POS_STEP = 4.0
 const _AIM_STEP = 0.02
 const CrtStack = preload("crt_stack.gd")
 
+const CueCatalog = preload("cue_catalog.gd")
+const CuePrefs = preload("cue_prefs.gd")
+
 
 class CursorOverlay:
 	extends Control
@@ -27,6 +30,8 @@ var _sequence = 0
 var _remotes: Dictionary = {}
 var _names: Dictionary = {}
 var _last_sent: Dictionary = {}
+## actor_id -> normalized cue id (dirty-gated presence field; Refs #20).
+var _cues: Dictionary = {}
 
 
 func setup(controller: Node, transport: Node, shop: Node) -> void:
@@ -127,7 +132,15 @@ func receive(sender: int, message: Dictionary) -> bool:
 	remote.message = message
 	remote.age = 0.0
 	_remotes[actor] = remote
+	if message.get("cue") is String:
+		_cues[actor] = CueCatalog.normalize(message.cue)
 	return true
+
+
+func cue_for(actor: int) -> String:
+	if actor == _transport.local_id():
+		return _local_cue_id()
+	return str(_cues.get(actor, CueCatalog.DEFAULT_ID))
 
 
 func _relay(message: Dictionary) -> void:
@@ -139,11 +152,13 @@ func _relay(message: Dictionary) -> void:
 func _remove_peer(id: int, _reason: String) -> void:
 	_remotes.erase(id)
 	_names.erase(id)
+	_cues.erase(id)
 
 
 func clear() -> void:
 	_remotes.clear()
 	_names.clear()
+	_cues.clear()
 	_send_time = 0.0
 	_name_time = 1.0
 	if _overlay != null:
@@ -157,7 +172,8 @@ func _capture(can_aim: bool) -> Dictionary:
 		"target": "",
 		"aiming": false,
 		"origin": Vector2.ZERO,
-		"vector": Vector2.ZERO
+		"vector": Vector2.ZERO,
+		"cue": _local_cue_id()
 	}
 	var viewport = get_viewport()
 	var mouse = viewport.get_mouse_position()
@@ -196,6 +212,7 @@ func _changed(state: Dictionary) -> bool:
 		state.space != _last_sent.space
 		or state.target != _last_sent.target
 		or state.aiming != _last_sent.aiming
+		or state.cue != _last_sent.get("cue", CueCatalog.DEFAULT_ID)
 	):
 		return true
 	return (
@@ -210,6 +227,17 @@ static func _moved(a: Vector2, b: Vector2, step: float) -> bool:
 		absf(a.x - b.x) > step
 		or absf(a.y - b.y) > step
 	)
+
+
+func _local_cue_id() -> String:
+	var lobby = _controller.get("lobby") if _controller != null else null
+	if lobby is Dictionary:
+		for player in lobby.get("players", []):
+			if int(player.get("id", 0)) == _transport.local_id():
+				if player.has("cue"):
+					return CueCatalog.normalize(str(player.cue))
+				break
+	return CuePrefs.cue_id()
 
 
 func draw_overlay(canvas: Control) -> void:
@@ -230,6 +258,10 @@ func _draw_cursor(canvas: Control, id: int, remote: Dictionary) -> void:
 	var position: Vector2
 	var shop_rect: Rect2 = _shop.presence_rect()
 	var color: Color = _controller.player_color(id)
+	# Prefer cue tip tint for aim/cursor cosmetics when a custom cue is synced.
+	var cue_id: String = CueCatalog.normalize(str(message.get("cue", _cues.get(id, CueCatalog.DEFAULT_ID))))
+	if cue_id != CueCatalog.DEFAULT_ID:
+		color = CueCatalog.tip_color(cue_id)
 	color.a = clampf((STALE_SECONDS - remote.age) / 0.4, 0.0, 1.0)
 	if message.space == "shop":
 		if not shop_rect.has_area():
@@ -289,6 +321,7 @@ func _valid(message: Dictionary) -> bool:
 		or not message.get("target") is String
 		or message.target.length() > 128
 		or not message.get("aiming") is bool
+		or not _valid_cue(message.get("cue", CueCatalog.DEFAULT_ID))
 	):
 		return false
 	for field in ["position", "origin", "vector"]:
@@ -304,3 +337,16 @@ func _valid(message: Dictionary) -> bool:
 	return (
 		message.position.length() <= 100000.0 and (message.space == "table" or not message.aiming)
 	)
+
+
+static func _valid_cue(value) -> bool:
+	if value == null:
+		return true
+	if not value is String:
+		return false
+	var text: String = value.strip_edges()
+	if text.is_empty():
+		return true
+	if text.length() > CueCatalog.MAX_ID_LENGTH:
+		return false
+	return CueCatalog.is_known(text)

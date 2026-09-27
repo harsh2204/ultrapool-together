@@ -4,6 +4,9 @@ const SETTLE_TIME = 0.6
 const MIN_SHOT_LENGTH = 50.0
 const MAX_SHOT_LENGTH = 200.0
 
+const CueCatalog = preload("cue_catalog.gd")
+const CuePrefs = preload("cue_prefs.gd")
+
 var _session_active = false
 var _controller: Node
 var _native_player_script: Script
@@ -11,6 +14,8 @@ var _hooked_player: Node
 var _original_player_script: Script
 var _settled_seconds = 0.0
 var _last_game_id = 0
+var _applied_cue_owner = 0
+var _applied_cue_id = ""
 
 
 func _ready() -> void:
@@ -35,14 +40,51 @@ func end_session() -> void:
 	_restore_player()
 	_controller = null
 	_settled_seconds = 0.0
+	_applied_cue_owner = 0
+	_applied_cue_id = ""
 
 
 func _exit_tree() -> void:
 	_restore_player()
 
 
+## Host-side cue cosmetics (Refs #20). Guests use CueCatalog.apply via replica hooks.
+func _apply_turn_cue() -> void:
+	if not _session_active or not is_instance_valid(_hooked_player) or _controller == null:
+		return
+	var owner_id: int = int(_controller.get("turn_owner"))
+	var cue_id: String = _cue_id_for(owner_id)
+	if owner_id == _applied_cue_owner and cue_id == _applied_cue_id:
+		return
+	CueCatalog.apply(_hooked_player, cue_id)
+	_applied_cue_owner = owner_id
+	_applied_cue_id = cue_id
+
+
+func _cue_id_for(player_id: int) -> String:
+	if player_id <= 0:
+		return CueCatalog.DEFAULT_ID
+	var lobby = _controller.get("lobby")
+	if lobby is Dictionary:
+		for player in lobby.get("players", []):
+			if int(player.get("id", 0)) == player_id and player.has("cue"):
+				return CueCatalog.normalize(str(player.cue))
+	var presence = _controller.get("presence")
+	if is_instance_valid(presence) and presence.has_method("cue_for"):
+		return CueCatalog.normalize(str(presence.cue_for(player_id)))
+	var transport = _controller.get("transport")
+	if (
+		is_instance_valid(transport)
+		and transport.has_method("local_id")
+		and transport.local_id() == player_id
+	):
+		return CuePrefs.cue_id()
+	return CueCatalog.DEFAULT_ID
+
+
 func _process(delta: float) -> void:
 	_update_player_hook()
+	_apply_turn_cue()
 	if is_instance_valid(_hooked_player) and not _controller.can_control():
 		_hooked_player.pause_cancel_shot()
 	var game = _game()
@@ -50,6 +92,8 @@ func _process(delta: float) -> void:
 	if game_id != _last_game_id:
 		_last_game_id = game_id
 		_settled_seconds = 0.0
+		_applied_cue_owner = 0
+		_applied_cue_id = ""
 	if _raw_settled(game):
 		_settled_seconds += delta
 	else:
