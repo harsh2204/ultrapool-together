@@ -21,7 +21,8 @@ static func capture(info: Node) -> Dictionary:
 				continue
 			# Trusted host boundary: only NEGATIVE-set cubes are wire-valid. Omit others
 			# as empty slots so guests never soft-reject the whole table snapshot (#15/#17).
-			if group == "cubes" and item.data.from_set != &"NEGATIVE":
+			# Compare via str() so String / StringName native from_set values both match (#33).
+			if group == "cubes" and not _is_negative_cube(item.data):
 				slots.append(null)
 				continue
 			var entry = {
@@ -58,9 +59,13 @@ static func valid(data, database: Node) -> bool:
 				continue
 			if not item is Dictionary or not _valid_item(item, resources):
 				return false
-			if group == "cubes" and resources[item.data].from_set != &"NEGATIVE":
+			if group == "cubes" and not _is_negative_cube(resources[item.data]):
 				return false
 	return true
+
+
+static func _is_negative_cube(data_resource) -> bool:
+	return data_resource != null and str(data_resource.from_set) == "NEGATIVE"
 
 
 static func apply(info: Node, data: Dictionary, database: Node) -> void:

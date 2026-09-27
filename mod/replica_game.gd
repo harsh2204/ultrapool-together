@@ -507,7 +507,12 @@ func _update_shots(remaining: int, maximum: int, used: int) -> void:
 
 
 func _refresh_inventory_visuals() -> void:
-	# Cubes/build live on PlayerInfo; nudge native UI after authoritative apply (#15).
+	# Inventory tickets/cubes/passives live on PlayerInfo; native snack counters and the
+	# CubesButton live on the shop inventory HUD. PlayerInfo has no update_cubes API
+	# (PR #23 no-op), so drive the shop HUD on inventory change only (#33 / PERF-015/020).
+	if is_instance_valid(shop) and shop.has_method("refresh_inventory_hud"):
+		shop.refresh_inventory_hud()
+		return
 	if player_info.has_method("update_cubes"):
 		player_info.update_cubes()
 	if player_info.has_method("update_build"):

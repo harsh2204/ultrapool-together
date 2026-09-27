@@ -85,6 +85,18 @@ func apply_state(data: Dictionary) -> void:
 	player_info.snack_tickets = data.snacks
 	player_info.cocktail_tickets = data.cocktails
 	roll_cost = data.reroll
+	# Host counter flags are authoritative (#33). Guests often disagree with
+	# Global.is_*_available() because local run unlocks do not match the shared shop.
+	# Reveal bars before placing remote snack items so slot transforms are live.
+	var show_tapas: bool = _counter_available(data, "show_tapas", "is_tapas_available", "has_tapas_bar")
+	var show_cocktail: bool = _counter_available(
+		data, "show_cocktail", "is_cocktail_available", "hasCocktailBar"
+	)
+	%ButtonMoveToCocktail.visible = show_cocktail
+	%ButtonMoveToTapas.visible = show_tapas
+	cocktail_bar.visible = show_cocktail
+	tapas_bar.visible = show_tapas
+	_sync_cubes_button()
 	var slots_changed: bool = not _displayed.has("slots") or data.slots != _displayed.slots
 	if slots_changed:
 		_sync_items(data.slots)
@@ -109,9 +121,9 @@ func apply_state(data: Dictionary) -> void:
 	if _changed(data, ["sets", "deck", "difficulty"]):
 		sets_offered = data.sets.duplicate()
 		display_sets_offered()
-	if _changed(data, ["snacks", "round"]):
+	if slots_changed or _changed(data, ["snacks", "round", "show_tapas"]):
 		update_snack_tickets()
-	if _changed(data, ["cocktails", "round"]):
+	if slots_changed or _changed(data, ["cocktails", "round", "show_cocktail"]):
 		update_cocktail_tickets()
 	if _changed(data, ["reroll", "money"]):
 		update_reroll_button()
@@ -119,13 +131,47 @@ func apply_state(data: Dictionary) -> void:
 		cocktail_bar.round = data.round
 		cocktail_bar.set_state(cocktail_bar.derive_state(), true)
 		cocktail_bar._on_items_changed()
-	if _changed(data, ["round", "deck", "difficulty"]):
-		%ButtonMoveToCocktail.visible = Global.is_cocktail_available()
-		%ButtonMoveToTapas.visible = Global.is_tapas_available()
-		cocktail_bar.visible = Global.is_cocktail_available()
-		tapas_bar.visible = Global.is_tapas_available()
-		%CubesButton.hide()
 	_displayed = data.duplicate(true)
+
+
+## Change-driven ticket + CubesButton refresh after table inventory apply (#33 / PERF-015).
+func refresh_inventory_hud() -> void:
+	if has_method("update_snack_tickets"):
+		update_snack_tickets()
+	if has_method("update_cocktail_tickets"):
+		update_cocktail_tickets()
+	_sync_cubes_button()
+
+
+func _sync_cubes_button() -> void:
+	var button = get_node_or_null("%CubesButton")
+	if button == null:
+		return
+	# Guests previously always hid this control; show it when the shared inventory
+	# actually holds a debuff cube so CubesPopup can open against player_info.cubes.
+	button.visible = _player_has_cubes()
+
+
+func _player_has_cubes() -> bool:
+	if player_info == null or not player_info.get("cubes") is Array:
+		return false
+	for item in player_info.cubes:
+		if item != null:
+			return true
+	return false
+
+
+func _counter_available(
+	data: Dictionary, flag: String, method: String, difficulty_field: String
+) -> bool:
+	if data.has(flag) and data[flag] is bool:
+		return data[flag]
+	var difficulty = Global.chosen_difficulty
+	if difficulty != null and difficulty.get(difficulty_field) != null:
+		return bool(difficulty.get(difficulty_field))
+	if Global.has_method(method):
+		return bool(Global.call(method))
+	return false
 
 
 func _changed(data: Dictionary, fields: Array) -> bool:
