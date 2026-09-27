@@ -4,6 +4,7 @@ const CAPACITY = 8
 const DEFAULT_SHOT_BUDGET = 6
 const TeamVote = preload("team_vote.gd")
 const DifficultyCatalog = preload("difficulty_catalog.gd")
+const ExpansionRegistry = preload("sets/registry.gd")
 const RUN_FIELDS = ["deck", "difficulty", "match_mode"]
 const MATCH_MODES = [{"id": "race", "label": "Race"}, {"id": "score", "label": "Score PvP"}]
 
@@ -13,6 +14,7 @@ var shot_budget = DEFAULT_SHOT_BUDGET
 var match_mode = "race"
 var clone_rounds = false
 var multiplayer_balls = false
+var expansion_sets: Dictionary = {}
 var revision = 0
 var ready_generation = 0
 var started = false
@@ -45,6 +47,7 @@ func clear() -> void:
 	match_mode = "race"
 	clone_rounds = false
 	multiplayer_balls = false
+	expansion_sets = ExpansionRegistry.default_flags()
 	revision = 0
 	ready_generation = 0
 	started = false
@@ -175,6 +178,23 @@ func set_multiplayer_balls(sender: int, enabled: bool) -> bool:
 		last_error = ""
 		return true
 	multiplayer_balls = enabled
+	_changed(true)
+	return true
+
+
+func set_expansion_set(sender: int, set_id: String, enabled: bool) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can change expansion sets.")
+	if started:
+		return _reject("Expansion sets are locked during a match.")
+	if set_id not in ExpansionRegistry.SET_IDS:
+		return _reject("Unknown expansion set.")
+	if expansion_sets.is_empty():
+		expansion_sets = ExpansionRegistry.default_flags()
+	if bool(expansion_sets.get(set_id, false)) == enabled:
+		last_error = ""
+		return true
+	expansion_sets[set_id] = enabled
 	_changed(true)
 	return true
 
@@ -413,6 +433,7 @@ func snapshot() -> Dictionary:
 		"match_mode": match_mode,
 		"clone_rounds": clone_rounds,
 		"multiplayer_balls": multiplayer_balls,
+		"expansion_sets": ExpansionRegistry.normalize_flags(expansion_sets),
 		"single_table_difficulty": _single_table_difficulty(),
 		"return_vote": return_vote,
 		"run_vote": _run_vote_snapshot(),

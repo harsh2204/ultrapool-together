@@ -117,6 +117,8 @@ func _hook_ball(body: Node) -> void:
 		_hooked[id] = {"body": weakref(body), "script": body.get_script()}
 		_controller.adapter._replace_script(body, _ball_script)
 		body.together_balls = self
+		if _controller.get("expansion_balls") != null:
+			body.expansion_balls = _controller.expansion_balls
 	rules.register_ball(id, _kinds(body))
 
 
@@ -130,6 +132,8 @@ func _kinds(body) -> Array:
 
 
 func begin_shot(index: int, shooter: int) -> bool:
+	if not _active or rules == null:
+		return true
 	_sync_round()
 	return rules.begin_shot(
 		index,
@@ -140,6 +144,8 @@ func begin_shot(index: int, shooter: int) -> bool:
 
 
 func finish_shot() -> void:
+	if not _active or rules == null:
+		return
 	var survivors: Array = []
 	for entry in _hooked.values():
 		var body = entry.body.get_ref()

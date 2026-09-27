@@ -18,3 +18,5 @@ Each ball has distinct Fal-generated art and native inspection text. To change a
 Passing does not charge abilities, advance the bounty deadline, or create a new call. Larger teams receive the same Score PvP bonuses and utility limits as solo tables. Percentage bonuses use the ball's value before pocket multipliers, round upward, and do not multiply other ability bonuses. Relay, Called Shot, and Patience pay at most once per ball per round, including after a respawn.
 
 The table host applies effects and shares their state with teammates. Ball trajectories still simulate locally on each player's machine. Ability state resets between rounds or matches; multiplayer runs start fresh from the lobby.
+
+Shop-only expansion sets (Phases, Morph, Tide, Relic, Tarot, Zodiac) follow the same opt-in pattern with separate lobby toggles. See [EXPANSION_SETS.md](EXPANSION_SETS.md). **Implemented, unmeasured.**

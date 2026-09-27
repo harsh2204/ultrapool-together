@@ -5,6 +5,7 @@ extends Node
 ## tiebreak) applies the chosen set on every member via shop sync.
 
 const SetVote = preload("set_vote.gd")
+const SetRegistry = preload("sets/registry.gd")
 const TIMEOUT_MSEC = 30000
 const CANDIDATE_COUNT = 3
 
@@ -102,6 +103,8 @@ func _candidate_sets(shop, game) -> Array[String]:
 	for set_id in database.id_to_set.keys():
 		var id = str(set_id)
 		if id.is_empty() or id == deck_set or id == "DAILY" or id == "TOGETHER":
+			continue
+		if id in SetRegistry.shop_only_set_ids():
 			continue
 		var resource = database.id_to_set[set_id]
 		if resource != null and _has_property(resource, "can_be_chosen") and not resource.can_be_chosen:
