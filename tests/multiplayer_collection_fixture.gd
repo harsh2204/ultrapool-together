@@ -81,6 +81,20 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 		"collection: reattach retains one set panel and native major-tab navigation"
 	)
 	var slots = _shown_slots(page)
+	var heading = page.get_node("TogetherCollectionTitle")
+	var poster = page.get_node("Poster")
+	var poster_size: Vector2 = poster.get_rect().size * poster.scale.abs()
+	check.call(
+		(
+			heading.get_minimum_size().x <= poster_size.x + 1.0
+			and heading.get_minimum_size().y <= poster_size.y + 1.0
+		),
+		"collection: complete Together heading fits the native poster footprint"
+	)
+	check.call(
+		heading.tooltip_text.contains("Mod settings") and heading.text.contains("Shop-only"),
+		"collection: heading explains shop-only availability and the opt-in setting"
+	)
 	check.call(slots.size() == Catalog.BALLS.size(), "collection: exactly eight unlocked mod balls")
 	for id in Catalog.BALLS:
 		var resource = database.get_ball_by_id(id)

@@ -207,15 +207,16 @@ func _build_heading(page: Node) -> void:
 	var bounds: Rect2 = poster.get_rect()
 	heading.position = poster.position + bounds.position * poster.scale
 	heading.size = bounds.size * poster.scale.abs()
-	heading.text = "TOGETHER\n8 multiplayer balls"
+	heading.text = "TOGETHER\n8 balls\nShop-only"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	heading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	heading.add_theme_font_size_override("font_size", 30)
+	heading.autowrap_mode = TextServer.AUTOWRAP_OFF
+	heading.mouse_filter = Control.MOUSE_FILTER_PASS
+	heading.tooltip_text = "Enable Multiplayer balls in the lobby's Mod settings to find these in shops. Collection visibility does not enable them."
+	heading.add_theme_font_size_override("font_size", 18)
 	heading.add_theme_color_override("font_color", Color("fff1d2"))
 	heading.add_theme_color_override("font_outline_color", Color("39291f"))
-	heading.add_theme_constant_override("outline_size", 5)
+	heading.add_theme_constant_override("outline_size", 2)
 	var ui = get_node_or_null("/root/UIManager")
 	if ui != null:
 		heading.add_theme_font_override("font", ui.FONT_LATIN)
