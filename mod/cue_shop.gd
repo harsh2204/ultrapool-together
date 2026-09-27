@@ -1,8 +1,8 @@
 extends Node2D
 
-## Fourth world-space counter. Parent beside TapasBar under ShopSlider/ShopCamera;
-## shop_sync positions it at the next counter and owns navigation/transactions.
-## PERF-026/034/036: build/cache once, retain controls, keep previews local while pending.
+## Fourth retained counter beside TapasBar; shop_sync owns transactions.
+## PERF-026/034/036: lifecycle artwork cache, local previews, authoritative case.
+## One bounded rack tween is killed and retargeted; no queued transitions.
 
 signal action_requested(action: String, model_id: String, finish_id: String)
 signal close_requested
@@ -10,18 +10,25 @@ signal close_requested
 const CueCatalog = preload("cue_catalog.gd")
 const CueModels = preload("cue_models.gd")
 const CueVisuals = preload("cue_visuals.gd")
+const CueShopArt = preload("cue_shop_art.gd")
+const CueSeller = preload("cue_seller.gd")
 const INK = Color("39291f")
 const PAPER = Color("f4e7cb")
 const WOOD = Color("844b2d")
 const GOLD = Color("edc86b")
-const PURPLE = Color("6427a4")
+const PURPLE = Color(0.27450982, 0, 0.5647059, 1)
 const GREEN = Color("519655")
+const CARD_SIZE = Vector2(171, 344)
+const CARD_STEP = 182.0
 
 
 class CuePreview:
 	extends Control
 
 	var art: Texture2D
+	var texture: Texture2D:
+		get:
+			return art
 	var finish: Dictionary = {}
 	var model_id = "house"
 
@@ -36,41 +43,39 @@ class CuePreview:
 	func _draw() -> void:
 		var tint: Color = finish.get("modulate", Color.WHITE)
 		if art != null:
-			# The full stick establishes its silhouette; a second, magnified crop
-			# makes its wrap/inlays readable at native counter scale. Both draw the
-			# same cached texture, with no image allocation or resource work.
-			var detail_space = Rect2(6, 0, maxf(1.0, size.x - 12), size.y * 0.64)
-			var grip = Rect2(art.get_width() * 0.58, 0, art.get_width() * 0.42, art.get_height())
-			var detail = _fit_rect(grip.size, detail_space)
-			draw_texture_rect_region(art, detail, grip, tint)
-			var rule_y = size.y * 0.72
-			draw_line(
-				Vector2(8, rule_y), Vector2(size.x - 8, rule_y), Color(0.93, 0.78, 0.49, 0.16)
-			)
-			var full_space = Rect2(2, size.y * 0.78, maxf(1.0, size.x - 4), size.y * 0.22)
-			draw_texture_rect(art, _fit_rect(art.get_size(), full_space), false, tint)
+			# Cached source runs tip-to-butt from left to right. Keep the entire
+			# silhouette, rotated upright without cropping or stretching.
+			var factor = minf((size.y - 12.0) / art.get_width(), (size.x - 20.0) / art.get_height())
+			var extent = art.get_size() * maxf(0.01, factor)
+			draw_set_transform(Vector2(size.x * 0.5, (size.y - extent.x) * 0.5), PI * 0.5)
+			draw_texture_rect(art, Rect2(Vector2(0, -extent.y * 0.5), extent), false, tint)
+			draw_set_transform(Vector2.ZERO)
 			return
-		# Readable fallback if optional loose-file artwork is absent.
-		var left = Vector2(12, size.y * 0.5)
-		var right = Vector2(size.x - 12, left.y)
-		var joint = left.lerp(right, 0.4)
-		var shaft: Color = finish.get("shaft", Color("c4a574"))
-		var butt: Color = finish.get("butt", Color("5a3c28"))
-		draw_line(left, right, Color("281d18"), 12, true)
-		draw_line(left, joint, butt, 9, true)
-		draw_line(joint, right, shaft, 6, true)
-		draw_line(joint - Vector2(3, 0), joint + Vector2(3, 0), Color("e9d9b8"), 10)
-		draw_line(right - Vector2(4, 0), right, Color("75bdce"), 7)
-		if model_id != "house":
-			var accent = Color("75bdce") if model_id == "finesse" else Color("db9d50")
-			for point in [0.1, 0.18, 0.26]:
-				var center = left.lerp(right, point)
-				draw_line(center - Vector2(2, 0), center + Vector2(2, 0), accent, 9)
+		var top = Vector2(size.x * 0.5, 8)
+		var bottom = Vector2(top.x, size.y - 8)
+		var joint = top.lerp(bottom, 0.6)
+		draw_line(top, bottom, Color("281d18"), 13, true)
+		draw_line(top, joint, finish.get("shaft", Color("c4a574")), 7, true)
+		draw_line(joint, bottom, finish.get("butt", Color("5a3c28")), 10, true)
+		draw_line(joint - Vector2(0, 3), joint + Vector2(0, 3), Color("e9d9b8"), 11)
+		draw_line(top, top + Vector2(0, 4), finish.get("tip", Color("75bdce")), 8)
 
-	func _fit_rect(source_size: Vector2, space: Rect2) -> Rect2:
-		var factor = minf(space.size.x / source_size.x, space.size.y / source_size.y)
-		var target_size = source_size * factor
-		return Rect2(space.position + (space.size - target_size) * 0.5, target_size)
+
+class RackTrim:
+	extends Control
+
+	func _draw() -> void:
+		var trim = Color("b88c4b")
+		var corners = [
+			Vector2(8, 8), Vector2(size.x - 8, 8), Vector2(8, size.y - 8), size - Vector2(8, 8)
+		]
+		for corner in corners:
+			var inward = Vector2(
+				1 if corner.x < size.x * 0.5 else -1, 1 if corner.y < size.y * 0.5 else -1
+			)
+			draw_line(corner, corner + Vector2(inward.x * 12, 0), trim, 2)
+			draw_line(corner, corner + Vector2(0, inward.y * 12), trim, 2)
+			draw_circle(corner + inward * 3, 1.5, trim)
 
 
 var _built = false
@@ -81,6 +86,8 @@ var _cards: Dictionary = {}
 var _swatches: Dictionary = {}
 var _entries: Array = []
 var _root: Control
+var _seller: Node2D
+var _rack: Control
 var _title: Label
 var _description: Label
 var _wallet: Label
@@ -91,6 +98,10 @@ var _back: Button
 var _previous_page: Button
 var _next_page: Button
 var _page_label: Label
+var _equipped_case: Control
+var _equipped_preview: CuePreview
+var _equipped_label: Label
+var _equipped_signature: Array = []
 var _page = 0
 var _active = false
 var _signature: Array = []
@@ -102,6 +113,10 @@ var _pending = false
 var _blocked = false
 var _error = ""
 var _has_rendered = false
+var _rack_tween: Tween
+var _rack_transitioning = false
+var _rack_generation = 0
+var _restore_card_focus = false
 
 
 func setup(skin: RefCounted) -> void:
@@ -118,100 +133,189 @@ func setup(skin: RefCounted) -> void:
 
 
 func _cache_art() -> void:
-	# Shared with table cues: decoded and alpha-trimmed once at controller startup.
-	# Reopening the native shop never decodes the fifteen cue sprites again.
+	CueShopArt.warm(get_script().resource_path.get_base_dir().path_join("assets/cues/shop"))
 	for entry in _entries:
 		var art: Texture2D = CueVisuals.texture(str(entry.id))
 		if art != null:
 			_textures[str(entry.asset)] = art
+	for name in ["arrow", "arrow_right"]:
+		var path = "res://ui/%s.png" % name
+		if _skin != null:
+			_textures[name] = _skin.native_texture(path)
+		else:
+			_textures[name] = load(path) if ResourceLoader.exists(path) else null
 
 
 func _build() -> void:
+	_seller = CueSeller.new()
+	_seller.name = "Rook"
+	_seller.position = Vector2(-30, 5)
+	_seller.z_index = -6
+	add_child(_seller)
+	_seller.setup(_skin)
+	_seller.set_active(false)
 	_root = Control.new()
 	_root.name = "CounterControls"
-	_root.position = Vector2(-210, 8)
-	_root.size = Vector2(1020, 480)
+	_root.size = Vector2(900, 825)
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.theme = _theme()
 	add_child(_root)
+	_build_header()
+	var clip = Control.new()
+	clip.name = "RackWindow"
+	clip.position = Vector2(300, 70)
+	clip.size = Vector2(535, 344)
+	clip.clip_contents = true
+	clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(clip)
+	_rack = Control.new()
+	_rack.name = "RetainedRack"
+	_rack.size = clip.size
+	_rack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clip.add_child(_rack)
+	for index in _entries.size():
+		_build_card(_rack, _entries[index], index % 3)
+	_build_details()
+	_build_finishes()
+	_build_equipped_case()
+	_update_page()
 
+
+func _build_header() -> void:
 	var sign = PanelContainer.new()
-	sign.position = Vector2(340, 0)
-	sign.size = Vector2(340, 58)
+	sign.position = Vector2(300, 0)
+	sign.size = Vector2(260, 60)
 	sign.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var sign_style = _skin.style("header_plank", [18, 5, 18, 5]) if _skin != null else null
-	sign.add_theme_stylebox_override("panel", sign_style if sign_style != null else _wood_style())
+	var style = _skin.style("header_plank", [18, 5, 18, 5]) if _skin != null else null
+	sign.add_theme_stylebox_override("panel", style if style != null else _wood_style())
 	_root.add_child(sign)
-	var heading = _label("CUE WORKSHOP", 30, Color("fff3d4"))
+	var heading = _label("CUES", 32, Color("fff3d4"))
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.add_theme_color_override("font_outline_color", INK)
-	heading.add_theme_constant_override("outline_size", 4)
+	_outline(heading)
 	sign.add_child(heading)
-	_previous_page = _button("‹", PURPLE)
+	_previous_page = _arrow_button(false, "Previous cue rack")
 	_previous_page.name = "PreviousCues"
-	_previous_page.tooltip_text = "Previous cue rack"
-	_previous_page.position = Vector2(48, 8)
-	_previous_page.size = Vector2(60, 46)
+	_previous_page.position = Vector2(584, 4)
+	_previous_page.size = Vector2(52, 52)
 	_previous_page.pressed.connect(_change_page.bind(-1))
 	_root.add_child(_previous_page)
-	_page_label = _label("Rack 1 / 1", 21, Color("fff1d2"))
-	_page_label.position = Vector2(116, 8)
-	_page_label.size = Vector2(126, 46)
+	_page_label = _label("1 / 5", 27, Color("fff1d2"))
+	_page_label.position = Vector2(644, 4)
+	_page_label.size = Vector2(128, 52)
 	_page_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_page_label.add_theme_color_override("font_outline_color", INK)
-	_page_label.add_theme_constant_override("outline_size", 4)
+	_outline(_page_label)
 	_root.add_child(_page_label)
-	_next_page = _button("›", PURPLE)
+	_next_page = _arrow_button(true, "Next cue rack")
 	_next_page.name = "NextCues"
-	_next_page.tooltip_text = "Next cue rack"
-	_next_page.position = Vector2(250, 8)
-	_next_page.size = Vector2(60, 46)
+	_next_page.position = Vector2(780, 4)
+	_next_page.size = Vector2(52, 52)
 	_next_page.pressed.connect(_change_page.bind(1))
 	_root.add_child(_next_page)
 
-	var cards = HBoxContainer.new()
-	cards.name = "Models"
-	cards.position = Vector2(48, 66)
-	cards.size = Vector2(924, 144)
-	cards.add_theme_constant_override("separation", 12)
-	_root.add_child(cards)
-	for entry in _entries:
-		_build_card(cards, entry)
-	_update_page()
 
-	var paper = PanelContainer.new()
+func _build_card(parent: Control, entry: Dictionary, column: int) -> void:
+	var card = Button.new()
+	card.name = "Model_" + str(entry.id)
+	card.position = Vector2(column * CARD_STEP, 0)
+	card.size = CARD_SIZE
+	card.toggle_mode = true
+	card.tooltip_text = str(entry.label) + ": " + str(entry.description)
+	card.add_theme_stylebox_override("normal", _card_style(false))
+	card.add_theme_stylebox_override("hover", _card_style(true))
+	card.add_theme_stylebox_override("pressed", _card_style(true))
+	card.add_theme_stylebox_override("disabled", _card_style(false))
+	card.pressed.connect(_select_model.bind(str(entry.id)))
+	parent.add_child(card)
+	var trim = RackTrim.new()
+	trim.size = CARD_SIZE
+	trim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(trim)
+	var preview = CuePreview.new()
+	preview.name = "CueArt"
+	preview.position = Vector2(16, 15)
+	preview.size = Vector2(139, 244)
+	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(preview)
+	var tag = Panel.new()
+	tag.position = Vector2(11, 270)
+	tag.size = Vector2(149, 62)
+	tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tag.add_theme_stylebox_override("panel", _paper_style())
+	card.add_child(tag)
+	var label = _label(str(entry.label).to_upper(), 20)
+	label.position = Vector2(4, 5)
+	label.size = Vector2(141, 26)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tag.add_child(label)
+	var ownership = _label("", 19)
+	ownership.position = Vector2(4, 31)
+	ownership.size = Vector2(141, 24)
+	ownership.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tag.add_child(ownership)
+	_cards[entry.id] = {"button": card, "preview": preview, "ownership": ownership, "entry": entry}
+
+
+func _build_details() -> void:
+	var paper = Panel.new()
 	paper.name = "SelectionDetails"
-	paper.position = Vector2(48, 216)
-	paper.size = Vector2(924, 190)
+	paper.position = Vector2(-415, 160)
+	paper.size = Vector2(300, 250)
+	paper.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	paper.add_theme_stylebox_override("panel", _paper_style())
 	_root.add_child(paper)
-	var details = VBoxContainer.new()
-	details.add_theme_constant_override("separation", 3)
-	paper.add_child(details)
-	var headline = HBoxContainer.new()
-	details.add_child(headline)
-	_title = _label("House cue", 24)
-	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	headline.add_child(_title)
-	_wallet = _label("Shared money: 0€", 21)
-	headline.add_child(_wallet)
-	_description = _label("", 18)
-	_description.custom_minimum_size = Vector2(0, 64)
+	_title = _label("House cue", 27)
+	_title.position = Vector2(18, 10)
+	_title.size = Vector2(264, 36)
+	paper.add_child(_title)
+	_description = _label("", 17)
+	_description.position = Vector2(18, 50)
+	_description.size = Vector2(264, 124)
 	_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	details.add_child(_description)
-	var finish_row = HBoxContainer.new()
-	finish_row.add_theme_constant_override("separation", 7)
-	details.add_child(finish_row)
-	_finish_label = _label("Finish: Native", 18)
-	_finish_label.custom_minimum_size = Vector2(184, 42)
-	_finish_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	finish_row.add_child(_finish_label)
+	paper.add_child(_description)
+	var note = _label("Personal cue · this run", 17, Color("70553d"))
+	note.position = Vector2(18, 179)
+	note.size = Vector2(264, 22)
+	paper.add_child(note)
+	_action = _button("Equipped", GREEN)
+	_action.name = "CueAction"
+	_action.position = Vector2(18, 207)
+	_action.size = Vector2(264, 36)
+	_action.add_theme_font_size_override("font_size", 21)
+	_action.tooltip_text = "Buy and equip the selected cue using shared money. Owned cues equip free."
+	_action.pressed.connect(_submit)
+	paper.add_child(_action)
+	_wallet = _label("Shared money: 0€", 19, Color("fff1d2"))
+	_wallet.position = Vector2(-405, 421)
+	_wallet.size = Vector2(282, 25)
+	_outline(_wallet)
+	_root.add_child(_wallet)
+	_status = _label("", 17, Color("fff4d8"))
+	_status.position = Vector2(-405, 451)
+	_status.size = Vector2(284, 46)
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_outline(_status)
+	_root.add_child(_status)
+
+
+func _build_finishes() -> void:
+	_back = _arrow_button(false, "Back to the snack counter")
+	_back.name = "BackToSnacks"
+	_back.position = Vector2(-78, 437)
+	_back.size = Vector2(56, 56)
+	_back.pressed.connect(_close)
+	_root.add_child(_back)
+	_finish_label = _label("Finish: Native · free", 19, Color("fff1d2"))
+	_finish_label.position = Vector2(22, 422)
+	_finish_label.size = Vector2(520, 25)
+	_outline(_finish_label)
+	_root.add_child(_finish_label)
+	var index = 0
 	for entry in CueCatalog.entries():
 		var swatch = Button.new()
 		swatch.name = "Finish_" + str(entry.id)
-		swatch.custom_minimum_size = Vector2(58, 42)
-		swatch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		swatch.position = Vector2(22 + index * 51, 452)
+		swatch.size = Vector2(44, 42)
 		swatch.toggle_mode = true
 		swatch.tooltip_text = str(entry.label) + " finish · free cosmetic recolor"
 		swatch.add_theme_stylebox_override("normal", _swatch_style(entry.shaft, false))
@@ -220,72 +324,61 @@ func _build() -> void:
 		)
 		swatch.add_theme_stylebox_override("pressed", _swatch_style(entry.shaft, true))
 		swatch.pressed.connect(_select_finish.bind(str(entry.id)))
-		finish_row.add_child(swatch)
+		_root.add_child(swatch)
 		_swatches[entry.id] = swatch
-	var note = _label(
-		"Personal cues last this run. Finishes are free. Purchases use shared money.", 16
-	)
-	note.add_theme_color_override("font_color", Color("70553d"))
-	details.add_child(note)
-
-	_back = _button("‹  Snacks", PURPLE)
-	_back.name = "BackToSnacks"
-	_back.position = Vector2(48, 414)
-	_back.size = Vector2(182, 58)
-	_back.pressed.connect(func(): close_requested.emit())
-	_root.add_child(_back)
-	_status = _label("", 17, Color("fff4d8"))
-	_status.position = Vector2(246, 412)
-	_status.size = Vector2(420, 64)
-	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_status.add_theme_color_override("font_outline_color", INK)
-	_status.add_theme_constant_override("outline_size", 4)
-	_root.add_child(_status)
-	_action = _button("Equipped", GREEN)
-	_action.name = "CueAction"
-	_action.position = Vector2(686, 414)
-	_action.size = Vector2(286, 58)
-	_action.pressed.connect(_submit)
-	_root.add_child(_action)
-	_link_focus()
+		index += 1
 
 
-func _build_card(parent: HBoxContainer, entry: Dictionary) -> void:
-	var card = Button.new()
-	card.name = "Model_" + str(entry.id)
-	card.custom_minimum_size = Vector2(300, 144)
-	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.toggle_mode = true
-	card.tooltip_text = str(entry.label) + ": " + str(entry.description)
-	card.add_theme_stylebox_override("normal", _card_style(false))
-	card.add_theme_stylebox_override("hover", _card_style(true))
-	card.add_theme_stylebox_override("pressed", _card_style(true))
-	card.pressed.connect(_select_model.bind(str(entry.id)))
-	parent.add_child(card)
-	var content = VBoxContainer.new()
-	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	card.add_child(content)
-	content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	content.offset_left = 14
-	content.offset_right = -14
-	content.offset_top = 10
-	content.offset_bottom = -10
-	content.add_theme_constant_override("separation", 2)
-	var label = _label(str(entry.label).to_upper(), 23, Color("fff1d2"))
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	content.add_child(label)
-	var preview = CuePreview.new()
-	preview.name = "CueArt"
-	preview.custom_minimum_size = Vector2(0, 58)
-	preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	content.add_child(preview)
-	preview.resized.connect(preview.queue_redraw)
-	var ownership = _label("", 18, GOLD)
-	ownership.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	content.add_child(ownership)
-	_cards[entry.id] = {"button": card, "preview": preview, "ownership": ownership, "entry": entry}
+func _build_equipped_case() -> void:
+	_equipped_case = Control.new()
+	_equipped_case.name = "ConfirmedCueCase"
+	_equipped_case.position = Vector2(650, 540)
+	_equipped_case.size = Vector2(220, 285)
+	_equipped_case.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_equipped_case.visible = false
+	_root.add_child(_equipped_case)
+	var art: Texture2D = CueShopArt.texture("cue_equipped_case")
+	var fitted = Rect2(28, 0, 164, 250)
+	var cue_center = 110.0
+	if art != null:
+		var factor = minf(220.0 / art.get_width(), 246.0 / art.get_height())
+		var extent = art.get_size() * factor
+		fitted = Rect2(Vector2((220.0 - extent.x) * 0.5, 8), extent)
+		# The opened lid occupies the left of the artwork; the felt channel
+		# is at 65% of the fitted silhouette, not the center of this panel.
+		cue_center = fitted.position.x + fitted.size.x * 0.65
+		var background = TextureRect.new()
+		background.texture = art
+		background.position = fitted.position
+		background.size = fitted.size
+		background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_equipped_case.add_child(background)
+	else:
+		var background = Panel.new()
+		background.position = Vector2(28, 0)
+		background.size = Vector2(164, 250)
+		background.add_theme_stylebox_override("panel", _card_style(false))
+		background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_equipped_case.add_child(background)
+	var heading = _label("EQUIPPED", 18, Color("fff1d2"))
+	heading.size = Vector2(220, 25)
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_outline(heading)
+	_equipped_case.add_child(heading)
+	_equipped_preview = CuePreview.new()
+	_equipped_preview.name = "ConfirmedCue"
+	_equipped_preview.position = Vector2(cue_center - 36, fitted.position.y + fitted.size.y * 0.09)
+	_equipped_preview.size = Vector2(72, fitted.size.y * 0.83)
+	_equipped_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_equipped_case.add_child(_equipped_preview)
+	_equipped_label = _label("House · Native", 17, Color("fff1d2"))
+	_equipped_label.position = Vector2(-10, 252)
+	_equipped_label.size = Vector2(240, 30)
+	_equipped_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_outline(_equipped_label)
+	_equipped_case.add_child(_equipped_label)
 
 
 func render(
@@ -305,34 +398,71 @@ func render(
 		return
 	_signature = signature.duplicate(true)
 	var identity_changed: bool = int(_player.get("id", 0)) != local_id
+	var equipment_changed: bool = (
+		not identity_changed
+		and _has_rendered
+		and (
+			_player.get("equipped", "house") != player.get("equipped", "house")
+			or _player.get("finish", "native") != player.get("finish", "native")
+		)
+	)
+	var rejected: bool = error != "" and error != _error
 	_player = player.duplicate(true)
 	_money = float(data.get("money", 0))
 	_pending = pending
 	_blocked = blocked
 	_error = error
 	if not _has_rendered or identity_changed:
+		_cancel_rack_animation()
 		_selected_model = str(player.get("equipped", "house"))
 		_selected_finish = str(player.get("finish", "native"))
 		_page = maxi(0, _entries.map(func(entry): return entry.id).find(_selected_model)) / 3
 		_update_page()
-		_link_focus()
 		_has_rendered = true
 	_refresh()
+	_refresh_equipped_case()
+	if _active and rejected:
+		_seller.say("That didn't go through. Give it another try.")
+	elif _active and equipment_changed:
+		_seller.say("All yours. Make it count.")
+
+
+func _refresh_equipped_case() -> void:
+	var model = str(_player.get("equipped", "house"))
+	var finish_id = str(_player.get("finish", "native"))
+	var signature = [model, finish_id]
+	if signature == _equipped_signature:
+		return
+	_equipped_signature = signature
+	var entry: Dictionary = _cards.get(model, _cards.house).entry
+	var finish = CueCatalog.style(finish_id)
+	_equipped_preview.update_cue(_textures.get(str(entry.asset)), finish, model)
+	_set_text(_equipped_label, "%s · %s" % [entry.label, finish.label])
+
+
+## Exposes the rendered case, never the local selection, for inspection.
+func confirmed_equipment() -> Dictionary:
+	return {
+		"model": _equipped_preview.model_id,
+		"finish": str(_equipped_preview.finish.get("id", "native")),
+		"texture": _equipped_preview.art,
+		"tint": _equipped_preview.finish.get("modulate", Color.WHITE),
+		"label": _equipped_label.text,
+	}
 
 
 func _refresh() -> void:
+	var focused = get_viewport().gui_get_focus_owner()
 	var finish = CueCatalog.style(_selected_finish)
 	for id in _cards:
 		var card: Dictionary = _cards[id]
 		if card.button.button_pressed != (id == _selected_model):
 			card.button.set_pressed_no_signal(id == _selected_model)
-		var entry: Dictionary = card.entry
-		var filename = str(entry.get("asset", str(id) + ".png"))
-		card.preview.update_cue(_textures.get(filename), finish, id)
+		card.preview.update_cue(_textures.get(str(card.entry.asset)), finish, id)
 		var owned: bool = id in _player.get("owned", ["house"])
-		var label = "Equipped" if id == _player.get("equipped", "house") else "Owned · equip free"
+		var label = "Equipped" if id == _player.get("equipped", "house") else "Owned"
 		if not owned:
-			label = "%d€ · for this run" % int(entry.price)
+			label = "%d€" % int(card.entry.price)
 		_set_text(card.ownership, label)
 	for id in _swatches:
 		if _swatches[id].button_pressed != (id == _selected_finish):
@@ -340,45 +470,59 @@ func _refresh() -> void:
 		_set_text(_swatches[id], "✓" if id == _selected_finish else "")
 	var selected: Dictionary = _cards.get(_selected_model, _cards.house).entry
 	_set_text(_title, "%s cue" % selected.label)
-	_set_text(_description, str(selected.description))
+	var description = str(selected.description)
+	if float(selected.get("bonus_rate", 0.0)) > 0.0:
+		description = description.replace(CueModels.BONUS_LIMITS, "").strip_edges()
+		description += "\nFirst qualifying pot / shot.\n+4 / player / round, all cues."
+	_set_text(_description, description)
 	if _description.tooltip_text != str(selected.description):
 		_description.tooltip_text = str(selected.description)
 	_set_text(_wallet, "Shared money: %s€" % str(snappedf(_money, 0.01)))
-	_set_text(_finish_label, "Finish: " + str(finish.label))
+	_set_text(_finish_label, "Finish: %s · free" % str(finish.label))
 	var owned: bool = _selected_model in _player.get("owned", ["house"])
 	var equipped: bool = _selected_model == _player.get("equipped", "house")
 	var same_finish: bool = _selected_finish == _player.get("finish", "native")
-	var action_text = "Buy & equip · %d€" % int(selected.price)
+	var action_text = "Buy · %d€" % int(selected.price)
 	if owned:
-		action_text = "Equip cue · free"
+		action_text = "Equip · free"
 	if equipped:
-		action_text = "Equipped" if same_finish else "Apply finish · free"
+		action_text = "Equipped" if same_finish else "Use finish · free"
 	if _pending:
-		action_text = "Waiting for table…"
+		action_text = "Confirming…"
 	_set_text(_action, action_text)
-	var action_disabled: bool = (
+	_action.disabled = (
 		_pending
 		or _blocked
+		or _rack_transitioning
 		or (equipped and same_finish)
 		or (not owned and _money < float(selected.price))
 	)
-	if _action.disabled != action_disabled:
-		_action.disabled = action_disabled
-	var status = "Pick a cue, try a finish, then equip."
+	var status = "Choose a cue. Try a finish."
 	if _error != "":
 		status = _error
 	elif _pending:
-		status = "Confirming your choice. You can keep browsing."
+		status = "Waiting for the table. Keep browsing."
 	elif _blocked:
-		status = "Browsing only while the table finishes its action."
+		status = "Browse while the table finishes."
 	elif not owned and _money < float(selected.price):
-		status = "The table needs %d€ to buy this cue." % int(selected.price)
+		status = "The table needs %d€ for this cue." % int(selected.price)
 	elif equipped and same_finish:
-		status = "Your equipped cue. Ready for the next round."
+		status = "Ready for the next round."
 	_set_text(_status, status)
+	_update_focus_access()
+	_link_focus()
+	if (
+		_active
+		and focused != null
+		and is_ancestor_of(focused)
+		and (focused.focus_mode == Control.FOCUS_NONE or not focused.is_visible_in_tree())
+	):
+		focus_default()
 
 
 func _select_model(id: String) -> void:
+	if _rack_transitioning or not _cards.has(id) or not _cards[id].button.visible:
+		return
 	_selected_model = id
 	_refresh()
 	_play_button_sound()
@@ -391,7 +535,7 @@ func _select_finish(id: String) -> void:
 
 
 func _submit() -> void:
-	if _action.disabled:
+	if not _active or _action.disabled or _rack_transitioning:
 		return
 	var action = "cue_buy"
 	if _selected_model in _player.get("owned", ["house"]):
@@ -401,61 +545,139 @@ func _submit() -> void:
 	action_requested.emit(action, _selected_model, _selected_finish)
 
 
+func _close() -> void:
+	settle_rack()
+	close_requested.emit()
+
+
 func focus_default() -> void:
-	if _built and is_visible_in_tree():
-		_cards.get(_selected_model, _cards.house).button.grab_focus()
+	if _built and _active and is_visible_in_tree():
+		if _rack_transitioning:
+			_next_page.grab_focus()
+		else:
+			_cards.get(_selected_model, _cards[_entries[_page * 3].id]).button.grab_focus()
 
 
 func set_active(active: bool) -> void:
-	# The rack stays visible in the scrolling world; keyboard input belongs only
-	# to the currently visited counter, never merely to an offscreen visible node.
 	if _active == active:
 		return
 	_active = active
 	set_process_unhandled_input(active)
-	_update_focus_access()
-	if active:
-		focus_default()
-	elif _built:
+	if not _built:
+		return
+	_seller.set_active(active)
+	_equipped_case.visible = active
+	if not active:
+		_cancel_rack_animation()
 		var focused = get_viewport().gui_get_focus_owner()
 		if focused != null and is_ancestor_of(focused):
 			focused.release_focus()
+	_update_focus_access()
+	_link_focus()
+	if active:
+		_refresh()
+		focus_default()
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _active and is_visible_in_tree() and event.is_action_pressed("ui_cancel"):
-		close_requested.emit()
+		_close()
 		get_viewport().set_input_as_handled()
 
 
-func _link_focus() -> void:
-	var models: Array = []
-	for card in _cards.values():
-		if card.button.visible:
-			models.append(card.button)
-	var finishes: Array = _swatches.values()
-	var controls: Array = [_previous_page, _next_page] + models + finishes + [_back, _action]
-	for index in controls.size():
-		var button: Control = controls[index]
-		button.focus_next = button.get_path_to(controls[(index + 1) % controls.size()])
-		button.focus_previous = button.get_path_to(controls[posmod(index - 1, controls.size())])
-	for index in models.size():
-		models[index].focus_neighbor_bottom = models[index].get_path_to(finishes[index * 3])
-	for index in finishes.size():
-		finishes[index].focus_neighbor_top = finishes[index].get_path_to(
-			models[mini(index / 3, models.size() - 1)]
-		)
-		finishes[index].focus_neighbor_bottom = finishes[index].get_path_to(
-			_back if index < 5 else _action
-		)
-
-
 func _change_page(direction: int) -> void:
+	if direction == 0 or not _built:
+		return
+	var focused = get_viewport().gui_get_focus_owner()
+	var card_had_focus = _restore_card_focus
+	for card in _cards.values():
+		card_had_focus = card_had_focus or card.button == focused
+	_cancel_rack_animation()
 	_page = posmod(_page + direction, maxi(1, ceili(float(_entries.size()) / 3.0)))
 	_selected_model = str(_entries[_page * 3].id)
-	_update_page()
-	_link_focus()
+	if not _active:
+		_update_page()
+		_refresh()
+		return
+	_restore_card_focus = card_had_focus
+	_rack_transitioning = true
 	_refresh()
+	if card_had_focus:
+		(_next_page if direction > 0 else _previous_page).grab_focus()
+	var generation = _rack_generation
+	_rack_tween = create_tween()
+	(
+		_rack_tween
+		. tween_property(_rack, "position:x", -signi(direction) * 30.0, 0.10)
+		. set_trans(Tween.TRANS_QUAD)
+		. set_ease(Tween.EASE_IN)
+	)
+	_rack_tween.parallel().tween_property(_rack, "modulate:a", 0.0, 0.10)
+	_rack_tween.tween_callback(_switch_rack_page.bind(direction, generation))
+	(
+		_rack_tween
+		. tween_property(_rack, "position:x", 0.0, 0.18)
+		. set_trans(Tween.TRANS_CUBIC)
+		. set_ease(Tween.EASE_OUT)
+	)
+	_rack_tween.parallel().tween_property(_rack, "modulate:a", 1.0, 0.14)
+	_rack_tween.finished.connect(_finish_rack_animation.bind(generation))
+
+
+func _switch_rack_page(direction: int, generation: int) -> void:
+	if generation != _rack_generation:
+		return
+	_update_page()
+	_rack.position.x = signi(direction) * 38.0
+	_rack.modulate.a = 0.0
+
+
+func _finish_rack_animation(generation: int) -> void:
+	if generation != _rack_generation:
+		return
+	_rack_tween = null
+	_rack_transitioning = false
+	_rack.position = Vector2.ZERO
+	_rack.modulate = Color.WHITE
+	_refresh()
+	if _restore_card_focus and _active:
+		focus_default()
+	_restore_card_focus = false
+
+
+func _cancel_rack_animation() -> void:
+	_rack_generation += 1
+	if _rack_tween != null and _rack_tween.is_valid():
+		_rack_tween.kill()
+	_rack_tween = null
+	_rack_transitioning = false
+	_restore_card_focus = false
+	if _rack != null:
+		_rack.position = Vector2.ZERO
+		_rack.modulate = Color.WHITE
+		_update_page()
+
+
+## Snap to the latest requested rack; also used by lifecycle/fixture inspection.
+func settle_rack() -> void:
+	var restore_focus = _restore_card_focus
+	_cancel_rack_animation()
+	if _built:
+		_refresh()
+		if restore_focus and _active:
+			focus_default()
+
+
+func _exit_tree() -> void:
+	# Descendants may already be leaving the tree. Cancel work without touching
+	# their presentation or focus during teardown.
+	_rack_generation += 1
+	if _rack_tween != null and _rack_tween.is_valid():
+		_rack_tween.kill()
+	_rack_tween = null
+	_rack_transitioning = false
+	if is_instance_valid(_seller):
+		_seller.set_active(false)
 
 
 func _update_page() -> void:
@@ -465,20 +687,59 @@ func _update_page() -> void:
 		var shown: bool = index / 3 == _page
 		if card.visible != shown:
 			card.visible = shown
-	_set_text(_page_label, "Rack %d / %d" % [_page + 1, pages])
+	_set_text(_page_label, "%d / %d" % [_page + 1, pages])
 	_previous_page.disabled = pages <= 1
 	_next_page.disabled = pages <= 1
+	_update_focus_access()
 
 
 func _update_focus_access() -> void:
 	if not _built:
 		return
-	var controls: Array = _cards.values().map(func(card): return card.button)
+	for card in _cards.values():
+		var enabled: bool = _active and card.button.visible and not _rack_transitioning
+		card.button.disabled = not enabled
+		_access(card.button, enabled)
+	for control in _swatches.values() + [_previous_page, _next_page, _back, _action]:
+		_access(control, _active and not control.disabled)
+
+
+func _access(control: Control, enabled: bool) -> void:
+	control.focus_mode = Control.FOCUS_ALL if enabled else Control.FOCUS_NONE
+	control.mouse_filter = Control.MOUSE_FILTER_STOP if enabled else Control.MOUSE_FILTER_IGNORE
+
+
+func _link_focus() -> void:
+	if not _built or not _active:
+		return
+	var controls: Array = [_previous_page, _next_page]
+	for card in _cards.values():
+		if card.button.visible and not card.button.disabled:
+			controls.append(card.button)
 	controls.append_array(_swatches.values())
-	controls.append_array([_previous_page, _next_page, _back, _action])
-	for control in controls:
-		control.focus_mode = Control.FOCUS_ALL if _active else Control.FOCUS_NONE
-		control.mouse_filter = Control.MOUSE_FILTER_STOP if _active else Control.MOUSE_FILTER_IGNORE
+	if not _action.disabled:
+		controls.append(_action)
+	controls.append(_back)
+	for index in controls.size():
+		var button: Control = controls[index]
+		var next: NodePath = button.get_path_to(controls[(index + 1) % controls.size()])
+		var previous: NodePath = button.get_path_to(controls[posmod(index - 1, controls.size())])
+		button.focus_next = next
+		button.focus_previous = previous
+		button.focus_neighbor_right = next
+		button.focus_neighbor_left = previous
+		button.focus_neighbor_bottom = next
+		button.focus_neighbor_top = previous
+
+
+func _arrow_button(right: bool, tooltip: String) -> Button:
+	var button = _button("", PURPLE)
+	button.icon = _textures.get("arrow_right" if right else "arrow")
+	button.expand_icon = true
+	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	button.add_theme_constant_override("icon_max_width", 26)
+	button.tooltip_text = tooltip
+	return button
 
 
 func _play_button_sound() -> void:
@@ -507,6 +768,11 @@ func _label(text: String, font_size: int, color: Color = INK) -> Label:
 	return label
 
 
+func _outline(label: Label) -> void:
+	label.add_theme_color_override("font_outline_color", INK)
+	label.add_theme_constant_override("outline_size", 3)
+
+
 func _button(text: String, color: Color) -> Button:
 	var button = Button.new()
 	button.text = text
@@ -524,7 +790,7 @@ func _button(text: String, color: Color) -> Button:
 			fill = color.darkened(0.12)
 		elif state == "disabled":
 			fill = color.lerp(Color("746d61"), 0.65)
-		var style = _flat(fill, Color("2a1c18"), 3, 8)
+		var style = _flat(fill, Color("2a1c18"), 3, 5)
 		style.shadow_color = Color(0, 0, 0, 0.65)
 		style.shadow_size = 2
 		style.shadow_offset = Vector2(0, 4 if state != "pressed" else 1)
@@ -548,11 +814,7 @@ func _flat(fill: Color, border: Color, width: int, radius: int) -> StyleBoxFlat:
 
 func _paper_style() -> StyleBox:
 	if not _styles.has("paper"):
-		var style = _flat(PAPER, Color("744b32"), 3, 8)
-		style.content_margin_left = 16
-		style.content_margin_right = 16
-		style.content_margin_top = 8
-		style.content_margin_bottom = 8
+		var style = _flat(PAPER, Color("744b32"), 3, 5)
 		style.shadow_size = 3
 		style.shadow_color = Color(0, 0, 0, 0.35)
 		style.shadow_offset = Vector2(0, 3)
@@ -562,27 +824,27 @@ func _paper_style() -> StyleBox:
 
 func _wood_style() -> StyleBox:
 	if not _styles.has("wood"):
-		_styles.wood = _flat(WOOD, INK, 3, 7)
+		_styles.wood = _flat(WOOD, INK, 3, 5)
 	return _styles.wood
 
 
 func _card_style(selected: bool) -> StyleBox:
 	var key = "card_selected" if selected else "card"
 	if not _styles.has(key):
-		var fill = Color("644630") if selected else Color("453529")
-		_styles[key] = _flat(fill, GOLD if selected else Color("9a7350"), 3, 7)
+		var fill = Color("493725") if selected else Color("302921")
+		_styles[key] = _flat(fill, GOLD if selected else Color("95633d"), 4 if selected else 3, 5)
 	return _styles[key]
 
 
 func _swatch_style(color: Color, selected: bool) -> StyleBox:
-	return _flat(color, INK if selected else Color("ae9370"), 4 if selected else 2, 5)
+	return _flat(color, Color("fff0a3") if selected else INK, 3, 4)
 
 
 func _focus_style() -> StyleBox:
-	var style = _flat(Color.TRANSPARENT, Color("fff3a3"), 3, 6)
+	var style = _flat(Color.TRANSPARENT, Color("fff3a3"), 3, 5)
 	style.draw_center = false
-	style.expand_margin_left = 3
-	style.expand_margin_top = 3
-	style.expand_margin_right = 3
-	style.expand_margin_bottom = 3
+	style.expand_margin_left = 2
+	style.expand_margin_top = 2
+	style.expand_margin_right = 2
+	style.expand_margin_bottom = 2
 	return style

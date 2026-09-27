@@ -4,6 +4,8 @@ extends RefCounted
 ## Real native shop + retained cue UI, deterministic transport, isolated test saves.
 const CueModels = preload("../mod/cue_models.gd")
 const CuePrefs = preload("../mod/cue_prefs.gd")
+const CueCatalog = preload("../mod/cue_catalog.gd")
+const CueVisuals = preload("../mod/cue_visuals.gd")
 const SYNC_FIELDS = [
 	"_state",
 	"_authoritative_state",
@@ -80,16 +82,29 @@ func run_host(mod: Node, capture: Callable, check: Callable) -> void:
 	check.call(sync.current_section() == "cues", "cue shop: navigation advertises the cue section")
 	var before = mod.cue_inventory.snapshot()
 	var wallet: float = native.player_info.money
+	var confirmed: Dictionary = view.confirmed_equipment()
+	_check_confirmed(
+		view,
+		mod.cue_inventory.model_for(1),
+		mod.cue_inventory.finish_for(1),
+		"host opens with authoritative equipment",
+		check
+	)
 	view._select_model("finesse")
 	view._select_finish("gold")
 	check.call(
 		mod.cue_inventory.snapshot() == before and native.player_info.money == wallet,
 		"cue shop: previews never buy, equip, recolor, or spend"
 	)
+	check.call(
+		view.confirmed_equipment() == confirmed,
+		"cue shop: host model and finish previews preserve the displayed equipped cue"
+	)
 	var focused: Button = view._cards.finesse.button
 	focused.grab_focus()
 	sync.capture()
 	check.call(focused.has_focus(), "cue shop: authoritative refresh preserves local card focus")
+	_check_rack_motion(view, check)
 	await _check_pages(view, capture, check)
 	view._select_model("finesse")
 	view._select_finish("gold")
@@ -118,6 +133,7 @@ func run_host(mod: Node, capture: Callable, check: Callable) -> void:
 		mod.cue_inventory.finish_for(1) == "gold",
 		"cue shop: purchase applies the selected finish atomically"
 	)
+	_check_confirmed(view, "finesse", "gold", "host purchase updates the equipped display", check)
 	check.call(
 		is_equal_approx(native.player_info.money, wallet - float(CueModels.entry("finesse").price)),
 		"cue shop: native shared wallet debits the catalog price once"
@@ -134,7 +150,12 @@ func run_host(mod: Node, capture: Callable, check: Callable) -> void:
 		"cue-shop-host-equipped",
 		"Purchased Finesse cue · Gold finish · confirmed shared-money debit."
 	)
+	var retained_nodes: Array = _node_ids(view)
+	view._change_page(1)
+	var leaving_tween: Tween = view._rack_tween
+	check.call(view._rack_transitioning, "cue shop: leave fixture starts during rack movement")
 	check.call(sync.show_section("snacks"), "cue shop: Back returns to the snack counter")
+	_check_inactive(view, leaving_tween, check)
 	await _settle(mod)
 	check.call(
 		sync.current_section() == "snacks" and not view._active,
@@ -144,6 +165,15 @@ func run_host(mod: Node, capture: Callable, check: Callable) -> void:
 		is_equal_approx(native.target_camera_x, -native.tapas_bar.position.x),
 		"cue shop: Back restores the native snack camera target"
 	)
+	check.call(sync.show_section("cues"), "cue shop: the retained counter can reopen")
+	await _settle(mod)
+	check.call(
+		_node_ids(view) == retained_nodes, "cue shop: reopening retains all rack and seller nodes"
+	)
+	check.call(view._seller.is_processing(), "cue shop: Rook resumes only at the active counter")
+	_check_confirmed(view, "finesse", "gold", "reopening preserves confirmed equipment", check)
+	check.call(sync.show_section("snacks"), "cue shop: reopened counter releases navigation")
+	_check_inactive(view, view._rack_tween, check)
 	_restore(mod, saved, wire)
 
 
@@ -180,8 +210,20 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 		_restore(mod, saved, wire)
 		return
 	var wallet: float = initial.money
+	var confirmed: Dictionary = view.confirmed_equipment()
+	_check_confirmed(
+		view,
+		mod.cue_inventory.model_for(2),
+		mod.cue_inventory.finish_for(2),
+		"guest opens with authoritative equipment",
+		check
+	)
 	view._select_model("finesse")
 	view._select_finish("gold")
+	check.call(
+		view.confirmed_equipment() == confirmed,
+		"cue shop: guest preview does not replace the displayed equipped cue"
+	)
 	view._action.pressed.emit()
 	if not check.call(
 		sync._pending and not wire.packets.is_empty(),
@@ -194,11 +236,20 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 		sync._state.money == wallet and mod.cue_inventory.model_for(2) == "house",
 		"cue shop: guest pending choice never predicts wallet or ownership"
 	)
+	check.call(
+		view.confirmed_equipment() == confirmed,
+		"cue shop: pending purchase leaves the displayed equipped cue unchanged"
+	)
 	view._change_page(1)
 	view._select_finish("rose")
 	check.call(
 		view._page == 1 and view._selected_finish == "rose" and sync._pending,
 		"cue shop: guest previews and paging remain responsive while pending"
+	)
+	view.settle_rack()
+	check.call(
+		view.confirmed_equipment() == confirmed,
+		"cue shop: browsing another rack while pending preserves the equipped display"
 	)
 	await capture.call(
 		"cue-shop-guest-pending",
@@ -206,6 +257,10 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 	)
 	sync.apply_result(false, "An old reply", request_id + 1, initial)
 	check.call(sync._pending, "cue shop: unrelated result IDs cannot unlock a pending purchase")
+	check.call(
+		view.confirmed_equipment() == confirmed,
+		"cue shop: unrelated reply cannot replace the equipped display"
+	)
 	sync.apply_result(false, "Not enough shared money for that cue.", request_id, initial)
 	check.call(
 		not sync._pending and sync._state.money == wallet,
@@ -214,6 +269,10 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 	check.call(
 		mod.cue_inventory.model_for(2) == "house" and view._selected_finish == "rose",
 		"cue shop: rejection preserves owned equipment and local preview"
+	)
+	check.call(
+		view.confirmed_equipment() == confirmed,
+		"cue shop: rejected purchase preserves the equipped portrait, finish, and label"
 	)
 	check.call(
 		not view._status.text.is_empty(), "cue shop: rejection has immediate visible feedback"
@@ -250,10 +309,16 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 		mod.cue_inventory.finish_for(2) == "gold" and sync._state.money == accepted.money,
 		"cue shop: accepted finish and wallet agree with host state"
 	)
+	_check_confirmed(
+		view, "finesse", "gold", "guest acceptance updates the equipped display", check
+	)
 	sync.apply_state(initial)
 	check.call(
 		sync._state.money == accepted.money and mod.cue_inventory.model_for(2) == "finesse",
 		"cue shop: reordered older state cannot undo a confirmed purchase"
+	)
+	_check_confirmed(
+		view, "finesse", "gold", "older state cannot rewind the equipped display", check
 	)
 	await capture.call(
 		"cue-shop-guest-equipped",
@@ -270,6 +335,9 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 	check.call(
 		view._player.equipped == "house" and view._player.finish == "rose",
 		"cue shop: standalone cue confirmation refreshes the open rack"
+	)
+	_check_confirmed(
+		view, "house", "rose", "new cue revision refreshes the equipped display", check
 	)
 	check.call(
 		view._selected_model == "finesse" and view._selected_finish == "gold",
@@ -289,8 +357,11 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 		),
 		"cue shop: stale nested cue revision cannot rewind rack or rollback state"
 	)
+	_check_confirmed(
+		view, "house", "rose", "stale nested cues cannot rewind the equipped display", check
+	)
 	check.call(
-		sync._state.money == delayed_shop.money and view._action.text == "Equip cue · free",
+		sync._state.money == delayed_shop.money and view._action.text == "Equip · free",
 		"cue shop: newer wallet reconciles while cue ownership and action stay current"
 	)
 	_restore(mod, saved, wire)
@@ -299,17 +370,23 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 func _check_pages(view, capture: Callable, check: Callable) -> void:
 	var identities: Dictionary = {}
 	for id in view._cards:
-		identities[id] = view._cards[id].button.get_instance_id()
+		identities[id] = [
+			view._cards[id].button.get_instance_id(), view._cards[id].preview.get_instance_id()
+		]
+	var retained_nodes: Array = _node_ids(view)
 	var seen: Dictionary = {}
 	var page_count = ceili(float(CueModels.ids().size()) / 3.0)
 	for page in page_count:
 		view._page = page
 		view._update_page()
+		view.settle_rack()
 		view._link_focus()
 		var visible = 0
+		var visible_ids: Array = []
 		for id in view._cards:
 			if view._cards[id].button.visible:
 				visible += 1
+				visible_ids.append(id)
 				seen[id] = true
 				view._select_model(id)
 		check.call(
@@ -322,9 +399,19 @@ func _check_pages(view, capture: Callable, check: Callable) -> void:
 				% (page + 1)
 			)
 		)
+		for id in visible_ids:
+			var portrait = view._cards[id].preview
+			check.call(
+				portrait.size.y > portrait.size.x and portrait.size.x > 0.0,
+				"cue shop: " + id + " uses a positive portrait art area"
+			)
+			check.call(
+				portrait.texture != null and portrait.texture == CueVisuals.texture(str(id)),
+				"cue shop: " + id + " portrait reuses its matching cached cue art"
+			)
 		check.call(
-			view._description.get_line_count() <= 3,
-			"cue shop: full effect description fits the three-line placard"
+			view._description.get_line_count() <= 6,
+			"cue shop: full effect description fits the six-line portrait-shop placard"
 		)
 		check.call(
 			view._description.get_global_rect().end.y < view._action.get_global_rect().position.y,
@@ -336,12 +423,146 @@ func _check_pages(view, capture: Callable, check: Callable) -> void:
 	)
 	for id in identities:
 		check.call(
-			view._cards[id].button.get_instance_id() == identities[id],
-			"cue shop: paging retains " + id + " card identity"
+			(
+				[
+					view._cards[id].button.get_instance_id(),
+					view._cards[id].preview.get_instance_id()
+				]
+				== identities[id]
+			),
+			"cue shop: paging retains " + id + " card and portrait identity"
 		)
+	check.call(
+		_node_ids(view) == retained_nodes, "cue shop: all catalog pages reuse the retained scene"
+	)
 	view._page = 0
 	view._update_page()
+	view.settle_rack()
 	view._link_focus()
+
+
+func _check_rack_motion(view, check: Callable) -> void:
+	# PERF-027/034: rapid local browsing replaces motion instead of queuing work.
+	# No frames or timer delays are needed: each retarget must cancel immediately.
+	view.settle_rack()
+	var retained_nodes: Array = _node_ids(view)
+	var initial_page: int = view._page
+	var initial_model: String = view._selected_model
+	var confirmed: Dictionary = view.confirmed_equipment()
+	var tweens: Array[Tween] = []
+	var page_count = ceili(float(CueModels.ids().size()) / 3.0)
+	var expected_page = initial_page
+	for direction in [1, 1, -1, 1, -1, -1, 1, 1]:
+		var previous: Tween = view._rack_tween
+		expected_page = posmod(expected_page + direction, page_count)
+		view._change_page(direction)
+		var current: Tween = view._rack_tween
+		if current != null:
+			tweens.append(current)
+		var running = 0
+		for tween in tweens:
+			if _tween_running(tween):
+				running += 1
+		check.call(
+			view._page == expected_page and view._rack_transitioning,
+			"cue shop: rapid rack input immediately retargets the requested page"
+		)
+		check.call(
+			running == 1 and (previous == null or not _tween_running(previous)),
+			"cue shop: rapid rack retarget retains only one running rack tween"
+		)
+		check.call(view._action.disabled, "cue shop: purchase is disabled while the rack moves")
+		var disabled_cards = true
+		for card in view._cards.values():
+			disabled_cards = disabled_cards and card.button.disabled
+		check.call(disabled_cards, "cue shop: cue cards cannot activate during a rack transition")
+		check.call(
+			not view._previous_page.disabled and not view._next_page.disabled,
+			"cue shop: rack arrows stay responsive while retargeting"
+		)
+		check.call(
+			_node_ids(view) == retained_nodes,
+			"cue shop: rack retargeting does not construct or discard nodes"
+		)
+		check.call(
+			view.confirmed_equipment() == confirmed,
+			"cue shop: animated rack previews leave the equipped display unchanged"
+		)
+	view.settle_rack()
+	check.call(
+		not view._rack_transitioning, "cue shop: settling completes the current rack transition"
+	)
+	var cards_unlocked = true
+	for card in view._cards.values():
+		if card.button.visible:
+			cards_unlocked = cards_unlocked and not card.button.disabled
+	check.call(cards_unlocked, "cue shop: settling restores interaction for the visible cue cards")
+	for tween in tweens:
+		check.call(not _tween_running(tween), "cue shop: settling leaves no rack animation backlog")
+	view._page = initial_page
+	view._selected_model = initial_model
+	view._update_page()
+	view.settle_rack()
+	view._link_focus()
+	view._refresh()
+
+
+func _check_confirmed(view, model: String, finish: String, label: String, check: Callable) -> void:
+	# Read the case's actual displayed art, tint and text, not inventory/_player.
+	# Otherwise a preview accidentally replacing the case would go undetected.
+	var displayed: Dictionary = view.confirmed_equipment()
+	var expected_texture: Texture2D = CueVisuals.texture(model)
+	var expected_finish: Dictionary = CueCatalog.style(finish)
+	var caption = str(displayed.get("label", "")).to_lower()
+	check.call(
+		displayed.get("model", "") == model and displayed.get("finish", "") == finish,
+		"cue shop: " + label + " identifies the confirmed model and finish"
+	)
+	check.call(
+		(
+			expected_texture != null
+			and displayed.get("texture") == expected_texture
+			and displayed.get("tint") == expected_finish.modulate
+		),
+		"cue shop: " + label + " renders the confirmed cached art and tint"
+	)
+	check.call(
+		(
+			str(CueModels.entry(model).label).to_lower() in caption
+			and str(expected_finish.label).to_lower() in caption
+		),
+		"cue shop: " + label + " names the confirmed cue and finish"
+	)
+
+
+func _check_inactive(view, leaving_tween: Tween, check: Callable) -> void:
+	check.call(
+		(
+			not view._rack_transitioning
+			and not _tween_running(view._rack_tween)
+			and not _tween_running(leaving_tween)
+		),
+		"cue shop: leaving cancels current rack motion without a queued transition"
+	)
+	check.call(
+		not view.is_processing() and not view._seller.is_processing(),
+		"cue shop: rack and seller do no process work away from the counter"
+	)
+	check.call(
+		not _tween_running(view._seller._speech_tween) and not view._seller._dialog.visible,
+		"cue shop: leaving stops seller speech and dismisses the dialogue"
+	)
+
+
+func _tween_running(tween: Tween) -> bool:
+	return tween != null and tween.is_valid() and tween.is_running()
+
+
+func _node_ids(root: Node) -> Array:
+	var result: Array = [root.get_instance_id()]
+	for child in root.get_children():
+		result.append_array(_node_ids(child))
+	return result
 
 
 func _command(sync, action: String, model: String, finish: String) -> Dictionary:
@@ -358,6 +579,7 @@ func _command(sync, action: String, model: String, finish: String) -> Dictionary
 func _reject(mod: Node, command: Dictionary, actor: int, label: String, check: Callable) -> void:
 	var before: Dictionary = mod.cue_inventory.snapshot()
 	var money: float = mod.shop_sync.native_shop().player_info.money
+	var confirmed: Dictionary = mod.shop_sync._cue_view.confirmed_equipment()
 	check.call(not mod.shop_sync.handle_request(command, actor), "cue shop: rejects " + label)
 	check.call(
 		(
@@ -365,6 +587,10 @@ func _reject(mod: Node, command: Dictionary, actor: int, label: String, check: C
 			and mod.shop_sync.native_shop().player_info.money == money
 		),
 		"cue shop: " + label + " preserves racks and money"
+	)
+	check.call(
+		mod.shop_sync._cue_view.confirmed_equipment() == confirmed,
+		"cue shop: " + label + " preserves the displayed equipped cue"
 	)
 
 

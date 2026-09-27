@@ -1,12 +1,14 @@
 # Cue Workshop
 
-Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. **Implemented with Windows native functional verification; performance and balance unmeasured.** Source v0.10.0 uses protocol 9 / UP9 rooms, so every player needs the same compatible build.
+Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. The cue mechanics and earlier shop layout have Windows native functional evidence. **The Rook seller, portrait rack animation, and equipped case are implemented with static checks only; current rendering, performance and balance remain unmeasured.** Source v0.10.0 uses protocol 9 / UP9 rooms, so every player needs the same compatible build.
 
 ## Location and interaction
 
-The workshop is the fourth counter, **to the right of snacks**, in the existing scrolling shop. It uses the native content slider, environment, inventory, Ready controls, and CRT treatment. A Cues arrow leads from snacks; Back returns there. A shortcut keeps cues reachable when snacks are locked.
+The workshop is the fourth counter, **to the right of snacks**, in the existing scrolling shop. Rook, a demon cue maker, stands behind its curved right-hand counter end. Snacks retain their existing merchant and background behind the straight front counter. Both share the native content slider, environment, inventory, Ready controls, and CRT treatment. Native purple icon-only arrows connect the counters; tooltips identify their destinations. A shortcut keeps cues reachable when snacks are locked.
 
-Fifteen distinct cue designs occupy five racks of three. Browse, preview, customize a finish, buy, and equip. Preview and paging respond locally while purchases await table-host confirmation. Rejections reconcile ownership and money and show their reason. Cards, focus, and art are retained across state updates.
+Fifteen distinct cue designs occupy five racks of three upright portrait cards. Next/previous rack changes use a 0.28-second slide/fade/settle. Rapid clicks replace the current transition; they do not queue animations. The rack and purchase action pause during that brief transition, while rack arrows remain responsive. Cards, focus, and cached artwork survive state updates.
+
+The selected cue's paper placard contains a compact purchase/equip control and the effect details. Browse, preview, and customize a finish locally while a purchase awaits table-host confirmation. Rejections reconcile ownership and money and show their reason. The felt-lined case beside the inventory displays only the player's confirmed cue and finish; browsing and pending/rejected purchases never replace it. Rook blinks, talks, idles, and responds to a click using the native merchants' presentation pattern. Seller motion and rack transitions stop when leaving the counter.
 
 ## Ownership and economy
 
@@ -62,6 +64,7 @@ Fifteen generated cue sprites are shipped under `mod/assets/cues/`; native files
 - [x] Native cue attachment/aim parity after current main-branch fixes; all fifteen textures, tip/shadow/fade preservation, House restoration, and equipped Bankshot capture.
 - [x] Native score/HUD callback boundary: fractional credit, per-shot cap, duplicate commit, post-pot ordering, and refusal to award against a still-living GAMEBALL source. Full physical special-ball pot scenarios remain part of live playtesting.
 - [ ] Repeat the final preservation audit with no concurrent use of the normal save profile.
+- [ ] Native verification of Rook cels/dialogue, portrait text fit, rapid rack navigation/focus, snack/cue counter composition, and the equipped case. New fixture assertions are present but have not been executed.
 - [ ] Live concurrent shoppers, delayed/reordered updates, sync-shop-off and winner-only behavior, disconnect/rematch.
 - [ ] Windows/macOS rendering plus measured responsiveness and balance.
 

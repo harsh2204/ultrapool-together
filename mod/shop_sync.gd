@@ -52,8 +52,10 @@ var _applied_nav: Dictionary = {}
 var _shared_sync_latched = true
 var _cue_view: Node2D
 var _cue_native: Node
-var _cue_link: Button
-var _cue_shortcut: Button
+var _cue_link: Control
+var _cue_shortcut: Control
+var _native_arrow_scene: PackedScene
+var _native_right_arrow: Texture2D
 var _cue_active = false
 var _cue_layout_key: Array = []
 var _cue_error = ""
@@ -1474,12 +1476,12 @@ func _ensure_cue_view() -> void:
 	_cue_view.action_requested.connect(_cue_action_requested)
 	_cue_view.close_requested.connect(_leave_cues)
 	_cue_view.set_active(false)
-	_cue_link = _cue_navigation_button("Cues  ›")
+	_cue_link = _cue_navigation_button()
 	_cue_link.name = "TogetherMoveToCues"
 	_view.camera.add_child(_cue_link)
 	_cue_link.pressed.connect(_open_cues)
 	# If snacks are still locked, the same fourth counter remains reachable.
-	_cue_shortcut = _cue_navigation_button("Cues  ›")
+	_cue_shortcut = _cue_navigation_button()
 	_cue_shortcut.name = "TogetherCuesShortcut"
 	_view.camera.add_child(_cue_shortcut)
 	_cue_shortcut.pressed.connect(_open_cues)
@@ -1489,19 +1491,29 @@ func _ensure_cue_view() -> void:
 	_update_cue_ui()
 
 
-func _cue_navigation_button(text: String) -> Button:
-	var button = Button.new()
-	button.text = text
-	button.size = Vector2(128, 58)
-	button.add_theme_font_size_override("font_size", 24)
-	var ui = get_node("/root/UIManager")
-	button.theme = ui.game_theme
-	var skin = _controller.get("skin")
-	if skin != null:
-		for state in ["normal", "hover", "pressed", "disabled"]:
-			var style = skin.button_style("dark", state, [12, 8, 12, 8])
-			if style != null:
-				button.add_theme_stylebox_override(state, style)
+func _cue_navigation_button() -> Control:
+	# PERF-026/034: retain two native controls, including their raised face/press
+	# animation. Native shop arrows hide the label and use the same square art.
+	# Resolve native assets once, only when a native shop exists; pure controller
+	# probes can still load this service without the game's resource pack.
+	if _native_arrow_scene == null:
+		_native_arrow_scene = load("res://ui/custom_ui/custom_button.tscn")
+		_native_right_arrow = load("res://ui/arrow_right.png")
+	var button = _native_arrow_scene.instantiate()
+	button.size = Vector2(56, 56)
+	button.color = Color(0.27450982, 0, 0.5647059, 1)
+	button.use_preset = false
+	button.align_to = 0
+	button.text = ""
+	button.icon = ""
+	button.tooltip_text = "Cue workshop"
+	button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.get_node("Button/Offset/Label").hide()
+	var arrow = button.get_node("Button/Offset/TextureRect")
+	arrow.texture = _native_right_arrow
+	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	arrow.show()
+	button.get_node("Button").tooltip_text = "Cue workshop"
 	return button
 
 
@@ -1518,11 +1530,14 @@ func _update_cue_layout() -> void:
 	_cue_layout_key = key
 	_cue_view.position = Vector2(separation * 2.0, 0)
 	_cue_link.visible = snacks_visible
-	_cue_link.position = Vector2(separation + 700, 420)
-	_cue_shortcut.position = Vector2(700, 420)
+	# Align with the native forward arrow, across the same front counter edge.
+	_cue_link.position = Vector2(separation + 546, 413)
+	_cue_shortcut.position = Vector2(546, 413)
 	_cue_shortcut.visible = not snacks_visible
-	# Extend existing tiled native art at a layout boundary, never duplicate its
-	# particles/lights/scripts. Save originals so ending the session is reversible.
+	# Snacks keep their existing background/Skelly, now behind the straight front
+	# counter. Only the curved right end moves to cues. Extend the existing tiled
+	# art at a layout boundary without duplicating particles/lights/scripts, and
+	# save native resize baselines so ending the session restores its layout.
 	var counter_size: float = ceilf(separation * 2.5 / 180.0) * 180.0
 	for name in [
 		"ShopCounterSection", "ShopCounterSectionBack", "ShopCounterLight", "Shade", "Shopbg"
@@ -1618,6 +1633,7 @@ func _update_cue_ui() -> void:
 		available,
 		native_section,
 		snacks_visible,
+		_view.is_visible_in_tree(),
 		_view.moving()
 	]
 	if key == _cue_ui_key:
@@ -1683,20 +1699,36 @@ func _cue_controls_available() -> bool:
 	)
 
 
-func _update_cue_link_input(button: Button, active: bool) -> void:
+func _update_cue_link_input(button: Control, active: bool) -> void:
 	if not is_instance_valid(button):
 		return
-	active = active and is_instance_valid(_view) and not _view.moving()
-	if button.disabled != (not active):
-		button.disabled = not active
+	active = (
+		active and button.is_visible_in_tree() and is_instance_valid(_view) and not _view.moving()
+	)
+	var disabled_changed: bool = button.disabled != (not active)
+	if disabled_changed:
+		button.set_disabled(not active)
+	# The native wrapper draws/animates the face; its child owns keyboard/mouse
+	# input. Gate both so a hidden counter cannot retain focus or consume a click.
+	var input: Button = button.get_node("Button")
+	if input.disabled != (not active):
+		input.disabled = not active
 	var focus = Control.FOCUS_ALL if active else Control.FOCUS_NONE
-	if button.focus_mode != focus:
-		if not active and button.has_focus():
-			button.release_focus()
-		button.focus_mode = focus
+	if input.focus_mode != focus:
+		if not active and input.has_focus():
+			input.release_focus()
+		input.focus_mode = focus
 	var filter = Control.MOUSE_FILTER_STOP if active else Control.MOUSE_FILTER_IGNORE
-	if button.mouse_filter != filter:
-		button.mouse_filter = filter
+	if input.mouse_filter != filter:
+		input.mouse_filter = filter
+	# Native CustomButton rewrites its face every frame. Settle it once when
+	# gated/offscreen, then suspend that work until this counter is interactive.
+	if not active and (disabled_changed or button.is_processing()):
+		button.tpress = 0.0
+		button.press = 0.0
+		button._process(1.0)
+	if button.is_processing() != active:
+		button.set_process(active)
 
 
 func _sync_cue_navigation() -> void:
