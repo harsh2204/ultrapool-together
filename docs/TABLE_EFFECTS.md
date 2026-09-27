@@ -65,3 +65,5 @@ First independent implementation step: define and test the descriptor/validation
 | Date / revision | Check and result | Limit |
 | --- | --- | --- |
 | 2026-09-27 / v0.9.2 (`6bd2b14`) | Static mod/native audit: ball/pocket capture and application exist; all six droplets, WORMHOLE child state and energy projectiles are absent. Basic guest FX is selective. | No complete native-effect parity or performance claim. Runtime hotfix verification is recorded separately in PERFORMANCE.md. |
+
+| 2026-09-27 / `96aee53`, Windows capture `20260927T081352Z-547cd002` | Actual native BLACK-HOLE spawn/capture, aliased identity, collapsed birth/growth, guest visuals with gameplay disabled, retained node, removal and resync passed. Corresponding host/guest screenshots reviewed; whole harness passed with preserved saves/files. | Direct spawn and one-process replay, not a physical pot or live transport. No missing floor, WORMHOLE, projectile or general-effect family was implemented or verified by these checks. GAP-007 remains open. |
