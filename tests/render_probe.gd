@@ -20,6 +20,7 @@ var screens: Array[Dictionary] = []
 var fixtures: RefCounted
 var round_flow: RefCounted
 var shop_input: Node
+var native_aim = preload("native_aim_fixture.gd").new()
 var fixture_config = {"deck": "1_CLASSIC", "difficulty": "diff_3", "seed": 24681}
 
 
@@ -131,6 +132,7 @@ func _run():
 	_check(not mod.run_controls._bindings.is_empty(), "native run exits route to lobby voting")
 	_check_run_config("host")
 	_check_balls(game.balls, "host")
+	await native_aim.check(mod, game, "host", _check)
 	await _capture("10-host-table", "Host table · the selected native Classic starting set")
 	await fixtures.capture_table_states(mod, _capture)
 	var snapshot = mod.table_sync.capture()
@@ -216,6 +218,7 @@ func _run():
 		if game.player_ball.has_method("_hide_cue_pivot"):
 			game.player_ball._hide_cue_pivot()
 	await _capture("30-guest-table", "Guest table · reconstructed from the host snapshot")
+	await native_aim.check(mod, game, "guest", _check)
 	await _capture_guest_aim(game)
 	await _capture_ball_previews(game)
 	await _capture_guest_shop(snapshot, shop_state)

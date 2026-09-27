@@ -19,19 +19,11 @@ func _process(delta):
 		if is_instance_valid(game) and not game.playing:
 			game.playing = true
 		_remote_aim_active = false
-		if preparing_shot:
-			super._process(delta)
-			_ensure_aim_chrome()
-			if shot is Vector2 and shot.is_finite() and shot.length() > 1.0:
-				_show_cue_aim(shot)
-		else:
-			# Same in_menu suppress the off-turn path uses — otherwise native leaves the
-			# packed rest shaft visible at the table's left edge (#18).
-			var was_in_menu: bool = game.in_menu
-			game.in_menu = true
-			super._process(delta)
-			game.in_menu = was_in_menu
-			_hide_cue_pivot()
+		# Native _process polls the initial click/controller aim and calls can_shoot().
+		# Keep the real menu state here or an idle player can never start aiming.
+		super._process(delta)
+		# Hide the idle rest pose without changing gameplay input eligibility.
+		_ensure_aim_chrome()
 		return
 	# Off-turn: cancel local input aim, then optionally mirror teammate presence aim (#18).
 	pause_cancel_shot()
