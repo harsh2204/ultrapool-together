@@ -52,6 +52,10 @@ func capture() -> Dictionary:
 		"score": game.score,
 		"required_score": game.get_required_score(),
 		"shots": game.get_shots_left(),
+		# Native ShotsInfo tracks round max + spent separately; remaining alone cannot
+		# rebuild the spent-pip panel on guests (#29).
+		"shots_max": _capture_shots_max(game),
+		"shots_used": _capture_shots_used(game),
 		"money": game.player_info.money,
 		"hp": game.player_info.hp,
 		"max_hp": game.get_max_hp(),
@@ -437,7 +441,7 @@ func _snapshot_problem(data: Dictionary) -> String:
 	for key in TABLE_FLAGS:
 		if typeof(data.get(key)) != TYPE_BOOL:
 			return "table flag " + key
-	for key in ["scene_id", "round", "rounds_played", "shots", "hp", "max_hp"]:
+	for key in ["scene_id", "round", "rounds_played", "shots", "shots_max", "shots_used", "hp", "max_hp"]:
 		if typeof(data.get(key)) != TYPE_INT:
 			return "int field " + key
 	if (
@@ -445,6 +449,10 @@ func _snapshot_problem(data: Dictionary) -> String:
 		or not _number(data.round, 0, 1000000)
 		or not _number(data.rounds_played, 0, 1000000)
 		or not _number(data.shots, 0, 20)
+		or not _number(data.shots_max, 0, 20)
+		or not _number(data.shots_used, 0, 20)
+		or data.shots_used > data.shots_max
+		or data.shots > data.shots_max
 		or not _number(data.hp, 0, 100)
 		or not _number(data.max_hp, 1, 100)
 	):
@@ -639,3 +647,20 @@ func _number(value, minimum: float, maximum: float) -> bool:
 		and value >= minimum
 		and value <= maximum
 	)
+
+
+func _capture_shots_max(game: Node) -> int:
+	var remaining: int = int(game.get_shots_left())
+	var info = game.table.shots_info if is_instance_valid(game.table) else null
+	var maximum: int = remaining
+	if is_instance_valid(info):
+		maximum = maxi(int(info.shots_max), remaining)
+	var used: int = _capture_shots_used(game)
+	return maxi(maximum, remaining + used)
+
+
+func _capture_shots_used(game: Node) -> int:
+	var info = game.table.shots_info if is_instance_valid(game.table) else null
+	if is_instance_valid(info):
+		return clampi(int(info.shots_used), 0, 20)
+	return 0

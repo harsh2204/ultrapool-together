@@ -1,5 +1,7 @@
 extends "res://ui/shop.gd"
 
+const BallLevelFx = preload("ball_level_fx.gd")
+
 var remote_items: Dictionary = {}
 var remote_slots: Dictionary = {}
 var _displayed: Dictionary = {}
@@ -208,6 +210,8 @@ func _sync_items(entries: Array):
 				body.get_node("%ScoreLabel").text = Global.format_number(
 					body.get_item().get_base_score(), 4, 0
 				)
+				# Packed Upgradebar defaults visible at level 1; gate on start_level (#32).
+				BallLevelFx.apply_upgrade_badge(body, int(entry.level))
 		remote_items[entry.key] = {"node": body, "state": entry.duplicate(true)}
 		previous.erase(entry.id)
 	# Unchanged offers keep their native rarity animation; only emptied slots

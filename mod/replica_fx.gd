@@ -63,12 +63,15 @@ func observe_ball(body: Node, state: Dictionary, created: bool) -> void:
 		_pulse_pocket(body)
 		_play("drop_ball")
 	_alive[id] = alive
-	var starred: bool = bool(state.item.get("star_power", false))
+	var starred: bool = bool(state.item.get("star_power", false)) and not bool(state.get("player", false))
 	var was_star: bool = bool(_star.get(id, false))
 	if starred and not was_star:
 		_pulse_spawn(body)
 		if body.has_method("set_star"):
 			body.set_star(true)
+	elif not starred and was_star and not bool(state.get("player", false)):
+		if body.has_method("set_star"):
+			body.set_star(false)
 	_star[id] = starred
 
 

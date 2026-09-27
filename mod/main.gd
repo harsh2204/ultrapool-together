@@ -16,6 +16,8 @@ const HUD_TINTS = {
 const CrtStack = preload("crt_stack.gd")
 const UiNav = preload("ui_nav.gd")
 const CuePrefs = preload("cue_prefs.gd")
+const HudPrefs = preload("hud_prefs.gd")
+const TurnBanner = preload("turn_banner.gd")
 
 var transport: Node
 var adapter: Node
@@ -37,6 +39,7 @@ var panel: Control
 var turn_label: Label
 var score_label: Label
 var pass_button: Button
+var turn_banner: Control
 var _hud_layer: CanvasLayer
 var _queued_ui_nav: Dictionary = {}
 var _applied_ui_nav: Dictionary = {}
@@ -214,6 +217,8 @@ func _build_ui():
 	score_label = Label.new()
 	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dock.add_child(score_label)
+	turn_banner = TurnBanner.new()
+	ui_root.add_child(turn_banner)
 	panel = load(base.path_join("lobby_scene.tscn")).instantiate()
 	panel.skin = skin
 	ui_root.add_child(panel)
@@ -258,6 +263,9 @@ func _build_ui():
 	)
 	panel.cue_requested.connect(
 		func(cue_id): _lobby_request({"action": "cue", "cue": cue_id})
+	)
+	panel.turn_banner_requested.connect(
+		func(enabled): turn_banner.set_prefs_enabled(HudPrefs.set_turn_banner_enabled(enabled))
 	)
 	panel.watch_requested.connect(_watch_table)
 	panel.return_vote_requested.connect(
@@ -748,6 +756,8 @@ func _end_table():
 	adapter.end_session()
 	_queued_ui_nav.clear()
 	_applied_ui_nav.clear()
+	if turn_banner != null:
+		turn_banner.clear()
 	table_sync.end_guest()
 	run_setup.cancel()
 	shot_pending = false
@@ -1277,6 +1287,7 @@ func _update_hud():
 	var score_text = ""
 	if not active:
 		_set_hud_text(turn_text, score_text)
+		_update_turn_banner()
 		return
 	if finished:
 		turn_text = _result_text()
@@ -1320,6 +1331,34 @@ func _update_hud():
 		)
 
 	_set_hud_text(turn_text, score_text)
+	_update_turn_banner()
+
+
+func _update_turn_banner() -> void:
+	if turn_banner == null:
+		return
+	var watching = is_spectating()
+	var popup_open = _native_ui != null and _native_ui.is_popup_open()
+	var in_shop: bool = bool(latest_state.get("in_shop", false))
+	var show: bool = (
+		active
+		and not watching
+		and not popup_open
+		and not finished
+		and not in_shop
+		and bool(latest_state.get("table_active", false))
+		and turn_owner != 0
+		and not shot_pending
+		and awaiting_shot_turn < 0
+	)
+	var text := ""
+	if show:
+		text = (
+			"Your turn"
+			if turn_owner == transport.local_id()
+			else "%s's turn" % _player_name(turn_owner)
+		)
+	turn_banner.present(turn_owner, text, player_color(turn_owner), show)
 
 
 func _set_hud_text(turn_text: String, score_text: String):
