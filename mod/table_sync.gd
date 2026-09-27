@@ -108,7 +108,9 @@ func capture() -> Dictionary:
 				"passive": body.is_passive
 			}
 		)
-	var fixed_pockets = game.table.get_node("Pockets").get_children()
+	# Match replica_game.base_pockets = table.get_pockets() so base_index never
+	# points past the guest pocket list (get_children can differ; see #17 get_child OOB).
+	var fixed_pockets = game.table.get_pockets()
 	for pocket in game.pockets:
 		data.pockets.append(
 			{
@@ -125,6 +127,41 @@ func capture() -> Dictionary:
 			}
 		)
 	return data
+
+
+## True while an authoritative mid-round body is still initializing and would be
+## omitted from capture(). Hosts hold publish until this clears (PERF-008 barrier).
+func spawn_barrier_active() -> bool:
+	var game = get_node("/root/Global").gameManager
+	if not is_instance_valid(game) or not is_instance_valid(game.table):
+		return false
+	var bodies = game.balls.duplicate()
+	if is_instance_valid(game.player_ball) and not bodies.has(game.player_ball):
+		bodies.append(game.player_ball)
+	for body in bodies:
+		if not is_instance_valid(body):
+			continue
+		if body.is_inside_tree() and (body.ball_item == null or not body.inited):
+			return true
+		if not body.is_inside_tree() and body.ball_item != null:
+			return true
+	return false
+
+
+func ball_ids(data: Dictionary) -> Dictionary:
+	var ids: Dictionary = {}
+	if not data.get("balls") is Array:
+		return ids
+	for body in data.balls:
+		if body is Dictionary and typeof(body.get("id")) == TYPE_INT:
+			ids[body.id] = true
+	return ids
+
+
+## Human-readable reject cause for guest diagnostics. Empty means valid.
+## Keep network validation strict; call this only when logging a rejection (#17).
+func snapshot_problem(data: Dictionary) -> String:
+	return _snapshot_problem(data)
 
 
 func begin_guest(config: Dictionary = {}) -> bool:
@@ -385,20 +422,24 @@ func _suspend(node: Node) -> void:
 
 
 func _valid_snapshot(data: Dictionary) -> bool:
+	return _snapshot_problem(data) == ""
+
+
+func _snapshot_problem(data: Dictionary) -> String:
 	if typeof(data.get("available")) != TYPE_BOOL:
-		return false
+		return "available type"
 	if not data.available:
-		return data.size() == 1
+		return "" if data.size() == 1 else "unavailable payload size"
 	if not RoundPresentation.valid(data.get("results")):
-		return false
+		return "results"
 	if not PlayerInventory.valid(data.get("inventory"), get_node("/root/BallDatabase")):
-		return false
+		return _inventory_problem(data.get("inventory"))
 	for key in TABLE_FLAGS:
 		if typeof(data.get(key)) != TYPE_BOOL:
-			return false
+			return "table flag " + key
 	for key in ["scene_id", "round", "rounds_played", "shots", "hp", "max_hp"]:
 		if typeof(data.get(key)) != TYPE_INT:
-			return false
+			return "int field " + key
 	if (
 		data.scene_id <= 0
 		or not _number(data.round, 0, 1000000)
@@ -407,65 +448,109 @@ func _valid_snapshot(data: Dictionary) -> bool:
 		or not _number(data.hp, 0, 100)
 		or not _number(data.max_hp, 1, 100)
 	):
-		return false
+		return "table number range"
 	for key in ["score", "required_score", "money"]:
 		if not _number(data.get(key), -1.0e18, 1.0e18):
-			return false
+			return "score field " + key
 	if not _vector(data.get("table_position"), 100000.0):
-		return false
-	if (
-		not data.get("balls") is Array
-		or data.balls.size() > MAX_BALLS
-		or not data.get("pockets") is Array
-		or data.pockets.size() > 16
-	):
-		return false
+		return "table_position"
+	if not data.get("balls") is Array:
+		return "balls type"
+	if data.balls.size() > MAX_BALLS:
+		return "balls count %d" % data.balls.size()
+	if not data.get("pockets") is Array:
+		return "pockets type"
+	if data.pockets.size() > 16:
+		return "pockets count %d" % data.pockets.size()
 	var ids: Dictionary = {}
 	var cue_count = 0
 	for body in data.balls:
-		if not body is Dictionary or not _valid_ball(body) or ids.has(body.id):
-			return false
+		if not body is Dictionary:
+			return "ball type"
+		var ball_problem = _ball_problem(body)
+		if ball_problem != "":
+			return ball_problem
+		if ids.has(body.id):
+			return "duplicate ball id %d" % body.id
 		ids[body.id] = true
 		cue_count += int(body.player)
 	if cue_count > 1:
-		return false
+		return "multiple cue balls"
 	var pocket_ids: Dictionary = {}
 	var base_indices: Dictionary = {}
 	var holes = 0
 	for pocket in data.pockets:
-		if not pocket is Dictionary or not _valid_pocket(pocket) or pocket_ids.has(pocket.id):
-			return false
+		if not pocket is Dictionary:
+			return "pocket type"
+		var pocket_problem = _pocket_problem(pocket)
+		if pocket_problem != "":
+			return pocket_problem
+		if pocket_ids.has(pocket.id):
+			return "duplicate pocket id %d" % pocket.id
 		pocket_ids[pocket.id] = true
 		if pocket.base_index < 0:
 			holes += 1
 		elif base_indices.has(pocket.base_index):
-			return false
+			return "duplicate base_index %d" % pocket.base_index
 		else:
 			base_indices[pocket.base_index] = true
-	if holes > 10 or base_indices.size() != 6:
-		return false
-	return true
+	if holes > 10:
+		return "holes %d" % holes
+	if base_indices.size() != 6:
+		return "base pockets %d (need 6)" % base_indices.size()
+	return ""
+
+
+func _inventory_problem(data) -> String:
+	if not data is Dictionary:
+		return "inventory type"
+	var database = get_node("/root/BallDatabase")
+	for key in ["snacks", "cocktails"]:
+		if not data.get(key) is int or data[key] < 0 or data[key] > 1000000:
+			return "inventory " + key
+	for group in PlayerInventory.SLOT_LIMITS:
+		if (
+			not data.get(group) is Array
+			or data[group].size() < PlayerInventory.SLOT_MINIMUMS[group]
+			or data[group].size() > PlayerInventory.SLOT_LIMITS[group]
+		):
+			return "inventory " + group + " size"
+		var resources: Dictionary = (
+			database.id_to_passive if group == "passives" else database.id_to_ball
+		)
+		for item in data[group]:
+			if item == null:
+				continue
+			if not item is Dictionary or not PlayerInventory._valid_item(item, resources):
+				return "inventory " + group + " item"
+			if group == "cubes" and resources[item.data].from_set != &"NEGATIVE":
+				return "inventory cubes non-NEGATIVE " + str(item.data)
+	return "inventory"
 
 
 func _valid_pocket(pocket: Dictionary) -> bool:
+	return _pocket_problem(pocket) == ""
+
+
+func _pocket_problem(pocket: Dictionary) -> String:
 	if (
 		typeof(pocket.get("id")) != TYPE_INT
 		or pocket.id <= 0
 		or typeof(pocket.get("base_index")) != TYPE_INT
 		or not _number(pocket.base_index, -1, 5)
 	):
-		return false
+		return "pocket id/base_index"
 	for key in ["closed", "shielded", "has_held_balls"]:
 		if typeof(pocket.get(key)) != TYPE_BOOL:
-			return false
+			return "pocket flag " + key
 	for key in ["position", "scale"]:
 		if (
 			typeof(pocket.get(key)) != TYPE_VECTOR2
 			or not pocket[key].is_finite()
 			or pocket[key].length() > 100000.0
 		):
-			return false
-	return (
+			return "pocket " + key
+	if not (
 		pocket.scale.x >= 0
 		and pocket.scale.y >= 0
 		and pocket.scale.x <= 16
@@ -473,31 +558,37 @@ func _valid_pocket(pocket: Dictionary) -> bool:
 		and _number(pocket.get("rotation"), -1.0e6, 1.0e6)
 		and _number(pocket.get("multiplier"), -1.0e12, 1.0e12)
 		and _number(pocket.get("score"), -1.0e18, 1.0e18)
-	)
+	):
+		return "pocket metrics"
+	return ""
 
 
 func _valid_ball(body: Dictionary) -> bool:
+	return _ball_problem(body) == ""
+
+
+func _ball_problem(body: Dictionary) -> String:
 	if typeof(body.get("id")) != TYPE_INT or body.id <= 0:
-		return false
+		return "ball id"
 	for key in BALL_FLAGS:
 		if typeof(body.get(key)) != TYPE_BOOL:
-			return false
+			return "ball flag " + key
 	for key in ["position", "visual_scale", "velocity"]:
 		if (
 			typeof(body.get(key)) != TYPE_VECTOR2
 			or not body[key].is_finite()
 			or body[key].length() > 100000.0
 		):
-			return false
+			return "ball " + key
 	if not _vector(body.get("force"), 1.0e7):
-		return false
+		return "ball force"
 	if (
 		body.visual_scale.x < 0.0
 		or body.visual_scale.y < 0.0
 		or body.visual_scale.x > 16.0
 		or body.visual_scale.y > 16.0
 	):
-		return false
+		return "ball visual_scale"
 	if (
 		typeof(body.get("spin")) != TYPE_VECTOR3
 		or not body.spin.is_finite()
@@ -509,35 +600,32 @@ func _valid_ball(body: Dictionary) -> bool:
 		or not _number(body.get("linear_damp"), 0.0, 10000.0)
 		or not _number(body.get("angular_damp"), 0.0, 10000.0)
 	):
-		return false
+		return "ball physics"
 	if typeof(body.get("color")) != TYPE_COLOR:
-		return false
+		return "ball color"
 	for component in [body.color.r, body.color.g, body.color.b, body.color.a]:
 		if not _number(component, 0, 16):
-			return false
+			return "ball color component"
 	if not body.get("item") is Dictionary:
-		return false
+		return "ball item type"
 	var item: Dictionary = body.item
 	var resources: Dictionary = get_node("/root/BallDatabase").id_to_ball
-	if (
-		typeof(item.get("data")) != TYPE_STRING
-		or not resources.has(item.data)
-		or typeof(item.get("mixed")) != TYPE_STRING
-		or (item.mixed != "" and not resources.has(item.mixed))
-	):
-		return false
+	if typeof(item.get("data")) != TYPE_STRING or not resources.has(item.data):
+		return "ball item data " + str(item.get("data"))
+	if typeof(item.get("mixed")) != TYPE_STRING or (item.mixed != "" and not resources.has(item.mixed)):
+		return "ball item mixed " + str(item.get("mixed"))
 	if body.player != (item.data == "PLAYER"):
-		return false
+		return "ball cue role mismatch id=%d" % body.id
 	for key in ITEM_NUMBERS:
 		if (
 			typeof(item.get(key)) != TYPE_INT
 			or not _number(item[key], ITEM_NUMBERS[key][0], ITEM_NUMBERS[key][1])
 		):
-			return false
+			return "ball item " + key
 	for key in ITEM_FLAGS:
 		if typeof(item.get(key)) != TYPE_BOOL:
-			return false
-	return true
+			return "ball item flag " + key
+	return ""
 
 
 func _vector(value, maximum: float) -> bool:

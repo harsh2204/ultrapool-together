@@ -113,11 +113,17 @@ func _run() -> void:
 			}
 		)
 	_check(sync._valid_snapshot(state), "native cue snapshot accepted")
+	_check(sync.snapshot_problem(state) == "", "valid snapshot has empty problem")
 	_check_inventory(sync, state)
 	for invalid_result in [{}, {"phase": "unknown"}, {"phase": "payout", "won": "true"}]:
 		var bad_result = state.duplicate(true)
 		bad_result.results = invalid_result
 		_check(not sync._valid_snapshot(bad_result), "invalid round presentation rejected")
+		_check(
+			sync.snapshot_problem(bad_result).begins_with("results")
+			or sync.snapshot_problem(bad_result) == "results",
+			"invalid results expose a reject reason"
+		)
 	var nonfinite_result = state.duplicate(true)
 	nonfinite_result.results.score = NAN
 	_check(not sync._valid_snapshot(nonfinite_result), "nonfinite payout score rejected")
@@ -126,6 +132,19 @@ func _run() -> void:
 	var invalid = state.duplicate(true)
 	invalid.balls[0].item.data = "res://injected.gd"
 	_check(not sync._valid_snapshot(invalid), "network resource paths rejected")
+	_check(
+		sync.snapshot_problem(invalid).contains("ball item data"),
+		"unknown ball item reports item data reason"
+	)
+	invalid = state.duplicate(true)
+	invalid.pockets.pop_back()
+	_check(not sync._valid_snapshot(invalid), "incomplete base pockets rejected")
+	_check(
+		sync.snapshot_problem(invalid).contains("base pockets"),
+		"incomplete pockets report base pocket count"
+	)
+	_check(sync.ball_ids(state).has(1), "ball_ids indexes cue identity")
+	_check(not sync.spawn_barrier_active(), "spawn barrier idle without a live host table")
 	invalid = state.duplicate(true)
 	invalid.balls[0].position = Vector2(NAN, 0)
 	_check(not sync._valid_snapshot(invalid), "nonfinite position rejected")

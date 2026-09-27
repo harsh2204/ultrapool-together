@@ -19,6 +19,11 @@ static func capture(info: Node) -> Dictionary:
 			if item == null:
 				slots.append(null)
 				continue
+			# Trusted host boundary: only NEGATIVE-set cubes are wire-valid. Omit others
+			# as empty slots so guests never soft-reject the whole table snapshot (#15/#17).
+			if group == "cubes" and item.data.from_set != &"NEGATIVE":
+				slots.append(null)
+				continue
 			var entry = {
 				"data": str(item.data.id),
 				"mixed": str(item.mixed_data.id) if item.mixed_data != null else ""

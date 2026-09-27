@@ -2,6 +2,7 @@ extends "res://Game.gd"
 
 const PlayerInventory = preload("player_inventory_sync.gd")
 const TableSync = preload("table_sync.gd")
+const ReplicaFx = preload("replica_fx.gd")
 
 var remote_ready = false
 var remote_shots = 0
@@ -17,6 +18,7 @@ var _inventory_state: Dictionary = {}
 var _hud_state: Dictionary = {}
 var _pocket_states: Array = []
 var _ball_bases: Dictionary = {}
+var _fx = ReplicaFx.new()
 
 
 func prepare_scene() -> void:
@@ -77,12 +79,14 @@ func _ready() -> void:
 	_enable_potted_rail(table.get_graveyard())
 	table.hide_end_round()
 	table.get_graveyard()._process(0.0)
-	playing = false
+	# Enable native aim chrome (cue / prediction / reticle) on the local guest turn.
+	# Host Game sets this during play; keeping it false suppresses shoot_ui (#18).
+	playing = true
 	balls_spawned = true
 
 
 func _exit_tree() -> void:
-	pass
+	_fx.clear()
 
 
 func _process(_delta: float) -> void:
@@ -149,6 +153,8 @@ func apply_table(data: Dictionary) -> void:
 	in_shop = data.in_shop
 	round_ended = data.round_ended
 	game_ended = data.game_over
+	# Keep native PlayerBall aim/cue/reticle eligible outside shop/menu (#18).
+	playing = not data.in_shop and not data.in_menu and not data.game_over
 	var result: Dictionary = data.results
 	round_won = result.won
 	score_this_round = result.score
@@ -166,6 +172,7 @@ func apply_table(data: Dictionary) -> void:
 	if _inventory_state != data.inventory:
 		PlayerInventory.apply(player_info, data.inventory, BallDatabase)
 		_inventory_state = data.inventory.duplicate(true)
+		_refresh_inventory_visuals()
 	if table.global_position != data.table_position:
 		table.global_position = data.table_position
 		_pocket_states.clear()
@@ -177,18 +184,25 @@ func apply_table(data: Dictionary) -> void:
 	var locale_changed: bool = _hud_state.get("locale") != TranslationServer.get_locale()
 	_update_hud(data, locale_changed)
 	_update_pockets(data.pockets, locale_changed)
+	_fx.begin_apply()
+	_fx.observe_round(table, data.rounds_played, data.in_shop)
+	_update_aim_reminder(data.ready and playing)
 	var present: Dictionary = {}
 	active_balls.clear()
 	active_balls_include_untargetable.clear()
 	for state in data.balls:
 		var id: int = state.id
 		present[id] = true
-		if not replicas.has(id):
+		var created: bool = not replicas.has(id)
+		if created:
 			_create_ball(state)
 		var body = replicas[id]
+		_fx.observe_ball(body, state, created)
 		var item_changed: bool = body.get_meta("remote_item") != state.item
 		if item_changed:
 			_set_item(body, state.item)
+		# Local-predictive aim: do not snap the cue while the guest is drawing (#18).
+		var aiming_local: bool = state.player and bool(body.get("preparing_shot"))
 		var simulate: bool = (
 			state.alive
 			and state.spawned
@@ -199,17 +213,20 @@ func apply_table(data: Dictionary) -> void:
 		)
 		var error: Vector2 = state.position - body.global_position
 		var spin_changed = false
-		if data.ready or not simulate or error.length() > body.get_radius() * 8.0:
-			if body.global_position != state.position:
-				body.global_position = state.position
-			if body.rotation != state.rotation:
-				body.rotation = state.rotation
-			if body.transform3d.rotation != state.spin:
-				body.transform3d.rotation = state.spin
-				spin_changed = true
-			corrections.erase(id)
-		elif error != Vector2.ZERO:
-			corrections[id] = error
+		if not aiming_local:
+			if data.ready or not simulate or error.length() > body.get_radius() * 8.0:
+				if body.global_position != state.position:
+					body.global_position = state.position
+				if body.rotation != state.rotation:
+					body.rotation = state.rotation
+				if body.transform3d.rotation != state.spin:
+					body.transform3d.rotation = state.spin
+					spin_changed = true
+				corrections.erase(id)
+			elif error != Vector2.ZERO:
+				corrections[id] = error
+			else:
+				corrections.erase(id)
 		else:
 			corrections.erase(id)
 		# Compare live values: moving replicas predict between snapshots and must still
@@ -218,19 +235,21 @@ func apply_table(data: Dictionary) -> void:
 			body.freeze = not simulate
 		if body.collision_shape.disabled != (not simulate):
 			body.collision_shape.disabled = not simulate
-		if body.linear_velocity != state.velocity:
-			body.linear_velocity = state.velocity
-		if body.angular_velocity != state.angular_velocity:
-			body.angular_velocity = state.angular_velocity
+		if not aiming_local:
+			if body.linear_velocity != state.velocity:
+				body.linear_velocity = state.velocity
+			if body.angular_velocity != state.angular_velocity:
+				body.angular_velocity = state.angular_velocity
 		if body.linear_damp != state.linear_damp:
 			body.linear_damp = state.linear_damp
 		if body.angular_damp != state.angular_damp:
 			body.angular_damp = state.angular_damp
-		var force: Vector2 = state.force if simulate else Vector2.ZERO
+		var force: Vector2 = state.force if simulate and not aiming_local else Vector2.ZERO
 		if body.constant_force != force:
 			body.constant_force = force
 		if (
 			simulate
+			and not aiming_local
 			and body.sleeping
 			and (
 				state.velocity != Vector2.ZERO
@@ -265,6 +284,7 @@ func apply_table(data: Dictionary) -> void:
 			if body.is_targetable():
 				active_balls.append(body)
 			active_balls_include_untargetable.append(body)
+	_fx.finish_apply(present)
 	_sync_potted_rail(data.balls)
 	for id in replicas.keys():
 		if not present.has(id):
@@ -316,6 +336,14 @@ func _update_pockets(states: Array, locale_changed: bool = false) -> void:
 		var created: bool = not pocket_replicas.has(id)
 		if created:
 			if state.base_index >= 0:
+				if state.base_index >= base_pockets.size():
+					push_warning(
+						(
+							"Together: pocket base_index %d out of range (%d); skipping"
+							% [state.base_index, base_pockets.size()]
+						)
+					)
+					continue
 				pocket_replicas[id] = base_pockets[state.base_index]
 			else:
 				var hole = hole_scene.instantiate()
@@ -432,6 +460,26 @@ func _update_shots(count: int) -> void:
 		info.pips_holder.add_child(pip)
 		info.shot_pips.append(pip)
 	info.update_visuals(true)
+
+
+func _refresh_inventory_visuals() -> void:
+	# Cubes/build live on PlayerInfo; nudge native UI after authoritative apply (#15).
+	if player_info.has_method("update_cubes"):
+		player_info.update_cubes()
+	if player_info.has_method("update_build"):
+		player_info.update_build()
+	if player_info.has_method("refresh"):
+		player_info.refresh()
+
+
+func _update_aim_reminder(show_aim: bool) -> void:
+	if not is_instance_valid(table):
+		return
+	var reminder = table.get_node_or_null("%AimReminder")
+	if reminder == null:
+		reminder = table.find_child("AimReminder", true, false)
+	if reminder is CanvasItem:
+		reminder.visible = show_aim
 
 
 func _disable_gameplay(node: Node) -> void:
