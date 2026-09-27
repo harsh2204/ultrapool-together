@@ -5,7 +5,8 @@ extends RefCounted
 ##
 ## Important (#22): never rely on tinting the PlayerBall/Ball root modulate — replica
 ## apply_table writes body.modulate from state every snapshot and would wipe it. Tint
-## only cue child nodes. Re-apply when child modulate diverges even if meta matches.
+## only the cue art, never the native fade pivot. Preserve live animation alpha.
+## Re-apply when child RGB diverges even if meta matches (PERF-027).
 
 const DEFAULT_ID = "native"
 const MAX_ID_LENGTH = 32
@@ -95,7 +96,6 @@ const CUES = [
 ]
 
 const _CHILD_NAMES = [
-	"CuePivot",
 	"Cue",
 	"cue",
 	"CueStick",
@@ -104,7 +104,6 @@ const _CHILD_NAMES = [
 	"CueVisual",
 	"CueSprite",
 	"cue_sprite",
-	"CueShadow",
 ]
 
 
@@ -194,18 +193,17 @@ static func _is_ball_root(node: Node) -> bool:
 static func _cue_targets(cue_node: Node) -> Array:
 	var found: Array = []
 	var seen: Dictionary = {}
+	# CuePivot owns the native idle/aim fade; tinting it makes an idle cue opaque
+	# and multiplies the Cue child's finish a second time. Shadows stay native too.
+	var native_cue = cue_node.get_node_or_null("CuePivot/Cue")
+	if native_cue != null:
+		seen[native_cue] = true
+		found.append(native_cue)
 	for child_name in _CHILD_NAMES:
 		var child = cue_node.get_node_or_null(child_name)
 		if child != null and not seen.has(child):
 			seen[child] = true
 			found.append(child)
-			# Cue sprite lives under CuePivot on the native player ball.
-			if child_name == "CuePivot":
-				for nested_name in ["Cue", "CueShadow"]:
-					var nested = child.get_node_or_null(nested_name)
-					if nested != null and not seen.has(nested):
-						seen[nested] = true
-						found.append(nested)
 	for child in cue_node.get_children():
 		if child is CanvasItem and _looks_like_cue(child.name) and not seen.has(child):
 			seen[child] = true
@@ -225,16 +223,22 @@ static func _targets_match(targets: Array, entry: Dictionary) -> bool:
 			var base: Color = canvas.get_meta(
 				"together_cue_base_modulate", expected
 			)
-			if canvas.modulate != base:
+			if not _same_rgb(canvas.modulate, base):
 				return false
-		elif canvas.modulate != expected:
+		elif not _same_rgb(canvas.modulate, expected):
 			return false
 	return true
 
 
 static func _looks_like_cue(node_name: StringName) -> bool:
 	var lower = String(node_name).to_lower()
+	if "pivot" in lower or "shadow" in lower:
+		return false
 	return "cue" in lower or "stick" in lower
+
+
+static func _same_rgb(left: Color, right: Color) -> bool:
+	return left.r == right.r and left.g == right.g and left.b == right.b
 
 
 static func _tint_canvas(node: Node, entry: Dictionary) -> void:
@@ -243,22 +247,11 @@ static func _tint_canvas(node: Node, entry: Dictionary) -> void:
 	var canvas := node as CanvasItem
 	if not canvas.has_meta("together_cue_base_modulate"):
 		canvas.set_meta("together_cue_base_modulate", canvas.modulate)
-	if not canvas.has_meta("together_cue_base_self_modulate"):
-		canvas.set_meta("together_cue_base_self_modulate", canvas.self_modulate)
 	var base_modulate: Color = canvas.get_meta("together_cue_base_modulate")
-	var base_self: Color = canvas.get_meta("together_cue_base_self_modulate")
-	if entry.id == DEFAULT_ID:
-		if canvas.modulate != base_modulate:
-			canvas.modulate = base_modulate
-		if canvas.self_modulate != base_self:
-			canvas.self_modulate = base_self
-	else:
-		var tint: Color = entry.modulate
-		if canvas.modulate != tint:
-			canvas.modulate = tint
-		# Keep self_modulate at base so nested sprites do not double-tint.
-		if canvas.self_modulate != base_self:
-			canvas.self_modulate = base_self
+	var tint: Color = base_modulate if entry.id == DEFAULT_ID else entry.modulate
+	tint.a = canvas.modulate.a
+	if canvas.modulate != tint:
+		canvas.modulate = tint
 	if node is Line2D:
 		var line := node as Line2D
 		if not line.has_meta("together_cue_base_line_color"):

@@ -185,6 +185,7 @@ func _run() -> void:
 	hole.base_index = -1
 	with_hole.pockets.append(hole)
 	_check(sync._valid_snapshot(with_hole), "native dynamic hole accepted")
+	_check_pocket_capture(sync, state)
 	invalid = with_hole.duplicate(true)
 	invalid.pockets[6].scale = Vector2(INF, 1)
 	_check(not sync._valid_snapshot(invalid), "nonfinite hole geometry rejected")
@@ -217,6 +218,121 @@ func _run() -> void:
 	completed.emit()
 	if not embedded:
 		get_tree().quit(1 if failed else 0)
+
+
+class _PocketCaptureStub:
+	extends Node2D
+	var multiplier = 2.0
+	var extra_score = 0
+	var closed = false
+	var shielded = false
+	var held_balls: Array = []
+
+	func get_multiplier() -> float:
+		return multiplier
+
+
+class _PocketTableStub:
+	extends Node2D
+	var pockets: Array = []
+
+	func get_pockets() -> Array:
+		return pockets
+
+
+class _PocketGameStub:
+	extends Node
+	var table: Node2D
+	var pockets: Array = []
+
+
+func _check_pocket_capture(sync: Node, state: Dictionary) -> void:
+	var game = _PocketGameStub.new()
+	game.table = _PocketTableStub.new()
+	game.add_child(game.table)
+	var pocket_parent = Node2D.new()
+	pocket_parent.name = "Pockets"
+	game.table.add_child(pocket_parent)
+	for index in 6:
+		var pocket = _PocketCaptureStub.new()
+		pocket_parent.add_child(pocket)
+		game.table.pockets.append(pocket)
+	# Native Game aliases this array; a shallow/deep duplicate would miss the bug.
+	game.pockets = game.table.get_pockets()
+	add_child(game)
+	var original = sync._capture_pockets(game)
+	for index in 6:
+		_check(original[index].base_index == index, "base pocket retains native scene order")
+	var decoration = Node2D.new()
+	pocket_parent.add_child(decoration)
+	_check(
+		sync._capture_pockets(game) == original,
+		"unregistered scene child cannot shift the base pocket map"
+	)
+	var holes: Array = []
+	for index in 10:
+		var hole = _PocketCaptureStub.new()
+		game.add_child(hole)
+		hole.position = Vector2(120 + index * 10, 240)
+		hole.scale = Vector2.ZERO if index == 0 else Vector2.ONE
+		hole.multiplier = 4.0
+		hole.extra_score = 17
+		hole.shielded = true
+		hole.held_balls.append(null)
+		game.pockets.append(hole)
+		holes.append(hole)
+		if index == 0:
+			_check(
+				game.table.get_pockets().size() == 7,
+				"blackhole fixture reproduces native table/game pocket Array alias"
+			)
+			var first_hole = state.duplicate(true)
+			first_hole.pockets = sync._capture_pockets(game)
+			_check(
+				first_hole.pockets[6].base_index == -1 and sync.valid_capture(first_hole),
+				"first blackhole captures as a valid dynamic pocket instead of base index six"
+			)
+	var expanded = state.duplicate(true)
+	expanded.pockets = sync._capture_pockets(game)
+	_check(sync.valid_capture(expanded), "all ten native blackholes preserve snapshot validity")
+	_check(
+		expanded.pockets.slice(0, 6) == original,
+		"blackhole spawn never changes existing base pocket identities or state"
+	)
+	var layout = sync.pocket_ids(expanded)
+	for index in 10:
+		var captured = expanded.pockets[index + 6]
+		var hole = holes[index]
+		_check(
+			(
+				captured.id == hole.get_instance_id()
+				and captured.base_index == -1
+				and layout[captured.id] == -1
+				and captured.position == hole.global_position
+				and captured.scale == hole.scale
+				and captured.multiplier == 4.0
+				and captured.score == 17
+				and captured.shielded
+				and captured.has_held_balls
+			),
+			"blackhole retains authoritative identity, pose and pocket effects"
+		)
+	for hole in holes:
+		game.pockets.erase(hole)
+		hole.free()
+	_check(
+		sync._capture_pockets(game) == original and game.table.get_pockets().size() == 6,
+		"native round cleanup returns capture to the six original pockets"
+	)
+	var remapped = state.duplicate(true)
+	remapped.pockets = original.duplicate(true)
+	remapped.pockets[0].base_index = 1
+	remapped.pockets[1].base_index = 0
+	_check(
+		sync.pocket_ids(remapped) != sync.pocket_ids({"pockets": original}),
+		"pocket topology identifies base role changes as well as new ids"
+	)
+	game.free()
 
 
 class _ResultsStub:

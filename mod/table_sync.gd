@@ -112,11 +112,23 @@ func capture() -> Dictionary:
 				"passive": body.is_passive
 			}
 		)
-	# Match replica_game.base_pockets = table.get_pockets() so base_index never
-	# points past the guest pocket list (get_children can differ; see #17 get_child OOB).
-	var fixed_pockets = game.table.get_pockets()
+	data.pockets = _capture_pockets(game)
+	return data
+
+
+func _capture_pockets(game: Node) -> Array:
+	# Native Game aliases pockets/base_pockets to table.get_pockets(). BLACK-HOLE
+	# appends to that same Array, so its index is 6+ despite being a dynamic hole.
+	# Preserve the native order, but identify fixed pockets by scene ownership.
+	# PERF-008/014: six fixed identities stay valid without weakening wire bounds.
+	var fixed_pockets: Array = []
+	var pocket_parent = game.table.get_node("Pockets")
+	for pocket in game.table.get_pockets():
+		if is_instance_valid(pocket) and pocket.get_parent() == pocket_parent:
+			fixed_pockets.append(pocket)
+	var states: Array = []
 	for pocket in game.pockets:
-		data.pockets.append(
+		states.append(
 			{
 				"id": pocket.get_instance_id(),
 				"base_index": fixed_pockets.find(pocket),
@@ -130,7 +142,7 @@ func capture() -> Dictionary:
 				"has_held_balls": not pocket.held_balls.is_empty()
 			}
 		)
-	return data
+	return states
 
 
 ## True while an authoritative mid-round body is still initializing and would be
@@ -159,6 +171,20 @@ func ball_ids(data: Dictionary) -> Dictionary:
 	for body in data.balls:
 		if body is Dictionary and typeof(body.get("id")) == TYPE_INT:
 			ids[body.id] = true
+	return ids
+
+
+func pocket_ids(data: Dictionary) -> Dictionary:
+	var ids: Dictionary = {}
+	if not data.get("pockets") is Array:
+		return ids
+	for pocket in data.pockets:
+		if (
+			pocket is Dictionary
+			and typeof(pocket.get("id")) == TYPE_INT
+			and typeof(pocket.get("base_index")) == TYPE_INT
+		):
+			ids[pocket.id] = pocket.base_index
 	return ids
 
 
