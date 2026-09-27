@@ -1,0 +1,32 @@
+{
+  "started_at": "2026-09-27T12:09:09.1680448Z",
+  "finished_at": "2026-09-27T12:10:54.1646871Z",
+  "status": "passed",
+  "renderer": "gl_compatibility",
+  "audio_driver": "Dummy",
+  "muted": true,
+  "resolution": "1280x720",
+  "max_fps": 30,
+  "timeout_seconds": 180,
+  "exit_code": 0,
+  "timed_out": false,
+  "process_stopped": true,
+  "probe_passed": true,
+  "script_errors": [],
+  "saves_unchanged": true,
+  "game_files_unchanged": true,
+  "source_commit": "d3e203a18e83f5e3d8158313faa6d7599d3de158",
+  "run_id": "20260927T120908Z-cue-balance-collection",
+  "harness_checks": 2797,
+  "failed_checks": 0,
+  "native_screenshots": 90,
+  "animation_frames": 96,
+  "observed": {
+    "blink": true,
+    "idle": true,
+    "nudge": true,
+    "rack": true,
+    "talk": true
+  },
+  "limitations": "Fixture UI callbacks in one native process. Not human play, live networking, physical pot coverage for every cue, or a foreground performance benchmark. Existing engine shutdown resource warnings remain."
+}
