@@ -202,6 +202,9 @@ func begin_guest(config: Dictionary = {}) -> bool:
 	_suspend(current_scene)
 	_suspend(get_node("/root/UIManager"))
 	_resume_display(get_node("/root/UIManager"))
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio != null:
+		audio.process_mode = Node.PROCESS_MODE_ALWAYS
 	_results = RoundPresentation.new()
 	add_child(_results)
 	_results.setup()
