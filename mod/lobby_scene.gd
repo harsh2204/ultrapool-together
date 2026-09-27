@@ -549,18 +549,22 @@ func _toggle_mod_options() -> void:
 
 
 func _place_mod_options() -> void:
+	# Position in lobby-local coordinates. ModOptions is an embedded Panel (#19),
+	# not a Window — global/screen coords would place it off the CRT layer.
 	var button: Control = %ModOptionsButton
+	var options: Control = %ModOptions
 	var origin = button.get_global_rect()
+	var local_origin = origin.position - global_position
 	var width = maxi(320, int(origin.size.x))
 	var height = 440
-	%ModOptions.size = Vector2(width, height)
-	var x = int(origin.position.x)
-	var y = int(origin.position.y + origin.size.y + 4)
+	options.size = Vector2(width, height)
+	var x = int(local_origin.x)
+	var y = int(local_origin.y + origin.size.y + 4)
 	if x + width > int(size.x):
 		x = maxi(8, int(size.x) - width - 8)
 	if y + height > int(size.y):
-		y = maxi(8, int(origin.position.y) - height - 4)
-	%ModOptions.position = Vector2(x, y)
+		y = maxi(8, int(local_origin.y) - height - 4)
+	options.position = Vector2(x, y)
 
 
 func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> void:
@@ -940,6 +944,8 @@ func _apply_theme():
 	palette.set_color("font_color", "PopupMenu", INK)
 	palette.set_color("font_hover_color", "PopupMenu", Color.WHITE)
 	palette.set_color("font_disabled_color", "PopupMenu", MUTED)
+	# Embedded ModOptions Panel (#19) — same chalkboard language as PopupMenu.
+	palette.set_stylebox("panel", "Panel", _box(Color("102b30"), Color("36535a"), 1))
 	theme = palette
 	if _skinned():
 		_apply_skin(palette)
@@ -950,6 +956,7 @@ func _apply_theme():
 		button.add_theme_color_override("font_color", Color("08241f"))
 		button.add_theme_color_override("font_hover_color", Color("08241f"))
 	%Bench.add_theme_stylebox_override("panel", _box(Color("171f25"), Color("544a33"), 1))
+	%ModOptions.add_theme_stylebox_override("panel", _box(Color("102b30"), Color("36535a"), 1))
 
 
 func _skinned() -> bool:
@@ -981,6 +988,7 @@ func _apply_skin(palette: Theme) -> void:
 	palette.set_stylebox("grabber_pressed", "VScrollBar", _chalk_bar(Color.WHITE))
 	palette.set_stylebox("panel", "PopupMenu", skin.style("panel_chalk", [18, 14, 18, 14]))
 	palette.set_stylebox("hover", "PopupMenu", skin.style("slot_chalk", [8, 4, 8, 4]))
+	palette.set_stylebox("panel", "Panel", skin.style("panel_chalk", [18, 14, 18, 14]))
 	for button in [%Host, %Ready, %Start]:
 		for state in ["normal", "hover", "pressed", "disabled"]:
 			button.add_theme_stylebox_override(
@@ -989,6 +997,7 @@ func _apply_skin(palette: Theme) -> void:
 		button.add_theme_color_override("font_color", Color.WHITE)
 		button.add_theme_color_override("font_hover_color", Color.WHITE)
 	%Bench.add_theme_stylebox_override("panel", skin.style("panel_chalk", TABLE_CARD_CONTENT))
+	%ModOptions.add_theme_stylebox_override("panel", skin.style("panel_chalk", [18, 14, 18, 14]))
 	var icons = {
 		%Copy: "icon_copy",
 		%Invite: "icon_invite",

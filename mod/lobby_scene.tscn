@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="lobby_scene.gd" id="1_lobby"]
+[ext_resource type="Script" path="mod_options_panel.gd" id="2_mod_options"]
 
 [node name="TogetherLobby" type="Control"]
 layout_mode = 3
@@ -396,12 +397,19 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Cancel vote"
 
-[node name="ModOptions" type="PopupPanel" parent="."]
+[node name="ModOptions" type="Panel" parent="."]
 unique_name_in_owner = true
-title = "Ultrapool Together"
-unresizable = true
+visible = false
+custom_minimum_size = Vector2(320, 200)
+script = ExtResource("2_mod_options")
 
 [node name="ModOptionsBody" type="MarginContainer" parent="ModOptions"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 theme_override_constants/margin_left = 16
 theme_override_constants/margin_top = 12
 theme_override_constants/margin_right = 16
@@ -409,6 +417,7 @@ theme_override_constants/margin_bottom = 12
 
 [node name="ModOptionsColumn" type="VBoxContainer" parent="ModOptions/ModOptionsBody"]
 unique_name_in_owner = true
+layout_mode = 2
 theme_override_constants/separation = 10
 
 [node name="ModOptionsTitle" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsColumn"]

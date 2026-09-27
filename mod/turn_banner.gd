@@ -2,6 +2,7 @@ extends Control
 ## Host-authoritative turn owner banner for all clients (#30).
 ## Change-driven: only mutates nodes when owner/name/color/visibility inputs change.
 ## Cleared by the controller on disconnect, scene change, and rematch.
+## Centered at top via CenterContainer — size flags are ignored on a plain Control parent.
 
 const HudPrefs = preload("hud_prefs.gd")
 
@@ -21,20 +22,21 @@ func _ready() -> void:
 	offset_top = 56
 	offset_bottom = 104
 	grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_panel = PanelContainer.new()
-	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	add_child(_panel)
+	# CenterContainer fills the top strip so the banner sits top-center (#30).
 	var center = CenterContainer.new()
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_panel.add_child(center)
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(center)
+	_panel = PanelContainer.new()
+	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.add_child(_panel)
 	var margin = MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	margin.add_theme_constant_override("margin_left", 18)
 	margin.add_theme_constant_override("margin_right", 18)
 	margin.add_theme_constant_override("margin_top", 6)
 	margin.add_theme_constant_override("margin_bottom", 6)
-	center.add_child(margin)
+	_panel.add_child(margin)
 	_label = Label.new()
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
