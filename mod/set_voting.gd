@@ -102,7 +102,10 @@ func _candidate_sets(shop, game) -> Array[String]:
 	var pool: Array[String] = []
 	for set_id in database.id_to_set.keys():
 		var id = str(set_id)
-		if id.is_empty() or id == deck_set or id == "DAILY" or id == "TOGETHER":
+		if id.is_empty() or id == deck_set:
+			continue
+		# Same exclusion as lobby starting-set select: native base sets only.
+		if not SetRegistry.is_native_lobby_set(id):
 			continue
 		if id in SetRegistry.shop_only_set_ids():
 			continue
@@ -114,7 +117,12 @@ func _candidate_sets(shop, game) -> Array[String]:
 	if pool.size() < 2:
 		for offered in shop.sets_offered:
 			var id = str(offered)
-			if id.is_empty() or id == deck_set or pool.has(id):
+			if (
+				id.is_empty()
+				or id == deck_set
+				or pool.has(id)
+				or not SetRegistry.is_native_lobby_set(id)
+			):
 				continue
 			pool.append(id)
 	if pool.size() < 2:

@@ -1,6 +1,7 @@
 extends Node
 
 const DifficultyCatalog = preload("difficulty_catalog.gd")
+const SetRegistry = preload("sets/registry.gd")
 
 var _starting = false
 var _original_deck: Resource
@@ -31,8 +32,10 @@ func available_choices() -> Dictionary:
 	DifficultyCatalog.register(database, ui.decks_menu if ui != null else null)
 	var result = {"deck": [], "difficulty": []}
 	for resource in database.id_to_deck.values():
-		if str(resource.id) != "DAILY" and _available_to_host(resource):
-			result.deck.append({"id": str(resource.id), "label": tr(str(resource.name))})
+		var deck_id = str(resource.id)
+		# Lobby starting-set select: eight native base decks only (no DAILY/TOGETHER/expansions).
+		if SetRegistry.is_native_lobby_deck(deck_id) and _available_to_host(resource):
+			result.deck.append({"id": deck_id, "label": tr(str(resource.name))})
 	for resource in database.id_to_difficulty.values():
 		if _available_to_host(resource):
 			result.difficulty.append({"id": str(resource.id), "label": tr(str(resource.name))})
@@ -84,6 +87,7 @@ func validate_config(config: Dictionary) -> bool:
 	if (
 		not database.id_to_deck.has(config.deck)
 		or not database.id_to_difficulty.has(config.difficulty)
+		or not SetRegistry.is_native_lobby_deck(str(config.deck))
 	):
 		return false
 	var deck = database.id_to_deck[config.deck]

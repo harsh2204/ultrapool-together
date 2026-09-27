@@ -181,6 +181,7 @@ func _initialize() -> void:
 	_check_return_votes(model_script)
 	_check_run_votes(model_script)
 	_check_clone_rounds_gate(model_script)
+	_check_expansion_master(model_script)
 	print("LOBBY_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
@@ -434,6 +435,36 @@ func _check_clone_rounds_gate(model_script) -> void:
 	)
 	_check(not lobby.clone_rounds, "leaving Together All Nighter clears clone rounds")
 	_check(not lobby.set_clone_rounds(20, true), "guest cannot change clone rounds")
+
+
+func _check_expansion_master(model_script) -> void:
+	var lobby = model_script.new()
+	lobby.setup(10, "Host")
+	lobby.add_player(20, "Partner")
+	_configure(lobby)
+	_check(not lobby.expansion_sets_enabled, "expansion master defaults off")
+	_check(not lobby.effective_expansion_sets().PHASES, "effective flags start off")
+	_check(
+		not lobby.set_expansion_set(10, "PHASES", true),
+		"per-set enable rejected while master is off"
+	)
+	_check(lobby.set_expansion_sets_enabled(10, true), "host can enable expansion master")
+	_check(lobby.expansion_sets_enabled, "master stays on after host toggle")
+	_check(lobby.set_expansion_set(10, "PHASES", true), "host can enable a set when master is on")
+	_check(lobby.effective_expansion_sets().PHASES, "effective flags follow per-set when master on")
+	_check(lobby.snapshot().expansion_sets.PHASES, "snapshot keeps raw per-set when master on")
+	_check(lobby.set_expansion_sets_enabled(10, false), "host can turn master off")
+	_check(
+		not lobby.effective_expansion_sets().PHASES,
+		"master-off forces effective PHASES inactive despite stale flag"
+	)
+	_check(
+		lobby.expansion_sets.PHASES,
+		"raw per-set flag is preserved while master is off"
+	)
+	_check(not lobby.set_expansion_sets_enabled(20, true), "guest cannot change expansion master")
+	_check(lobby.set_expansion_sets_enabled(10, true), "host can restore master")
+	_check(lobby.effective_expansion_sets().PHASES, "restored master reactivates preserved set")
 
 
 func _find(lobby, id: int) -> Dictionary:

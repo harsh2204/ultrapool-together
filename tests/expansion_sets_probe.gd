@@ -95,6 +95,21 @@ func _registry(script: Script) -> void:
 	_check(script.SET_IDS.size() == 6, "six expansion set ids")
 	_check(not script.any_enabled(script.default_flags()), "defaults are off")
 	_check("PHASES" in script.shop_only_set_ids(), "phases excluded from vote pool")
+	_check(script.is_native_lobby_deck("1_CLASSIC"), "classic deck is native lobby")
+	_check(script.is_native_lobby_set("GACHA"), "gacha set is native lobby")
+	_check(not script.is_native_lobby_deck("DAILY"), "daily excluded from lobby select")
+	_check(not script.is_native_lobby_deck("TOGETHER"), "together excluded from lobby select")
+	_check(not script.is_native_lobby_set("PHASES"), "expansion set excluded from lobby select")
+	var stale = script.normalize_flags({"PHASES": true, "MORPH": true})
+	_check(script.any_enabled(stale), "stale per-set flags can be on")
+	_check(
+		not script.any_enabled(script.effective_flags(false, stale)),
+		"master-off forces every expansion inactive"
+	)
+	_check(
+		script.any_enabled(script.effective_flags(true, stale)),
+		"master-on restores per-set activation"
+	)
 
 
 func _check(condition: bool, label: String) -> void:

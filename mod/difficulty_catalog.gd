@@ -3,6 +3,7 @@ extends RefCounted
 ## Registers the Together single-table All Nighter difficulty by cloning native
 ## `diff_6` (All Nighter / `6_all_nighter.tres`) and forces one table in the lobby.
 
+const SetRegistry = preload("sets/registry.gd")
 const NATIVE_ALL_NIGHTER_ID = "diff_6"
 const TOGETHER_ALL_NIGHTER_ID = "diff_together_nighter"
 const TOGETHER_ALL_NIGHTER_TITLE = "All Nighter (One Table)"
@@ -43,9 +44,12 @@ static func choosable_decks(database) -> Array:
 	if database == null:
 		return entries
 	for deck in database.id_to_deck.values():
-		if deck == null or not deck.can_be_chosen or str(deck.id) == "DAILY":
+		if deck == null or not deck.can_be_chosen:
 			continue
-		entries.append({"id": str(deck.id), "label": _resource_label(deck, str(deck.id))})
+		var deck_id = str(deck.id)
+		if not SetRegistry.is_native_lobby_deck(deck_id):
+			continue
+		entries.append({"id": deck_id, "label": _resource_label(deck, deck_id)})
 	entries.sort_custom(func(a, b): return a.label < b.label)
 	return entries
 
