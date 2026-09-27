@@ -2,6 +2,7 @@ extends RefCounted
 
 const CueCatalog = preload("../mod/cue_catalog.gd")
 
+var _pointer_viewport: SubViewport
 
 class AimPresence:
 	extends Node
@@ -67,6 +68,29 @@ func check(mod: Node, game: Node, role: String, record: Callable) -> void:
 	settings.shoot_confirmation = false
 	game.in_menu = false
 	ball.pause_cancel_shot()
+	# Window mouse queries read the desktop pointer even after push_input().
+	# Use the same isolated SubViewport pointer seam as shop_input_fixture, while
+	# keeping the real native cue ball, world and inherited input/process methods.
+	var original_parent: Node = ball.get_parent()
+	var original_index: int = ball.get_index()
+	var original_transform: Transform2D = ball.transform
+	var original_viewport: Viewport = ball.get_viewport()
+	var resize_connections: Array = []
+	for connection in original_viewport.size_changed.get_connections():
+		var target_node = connection.callable.get_object()
+		if target_node == ball or (target_node is Node and ball.is_ancestor_of(target_node)):
+			resize_connections.append(connection)
+	_pointer_viewport = SubViewport.new()
+	_pointer_viewport.size = mod.get_viewport().get_visible_rect().size
+	_pointer_viewport.world_2d = ball.get_world_2d()
+	mod.add_child(_pointer_viewport)
+	_pointer_viewport.canvas_transform = mod.get_viewport().get_canvas_transform()
+	_reparent_ball(mod, ball, _pointer_viewport)
+	# Native CustomButton disconnects on exit but connects only on first ready.
+	# Transfer those existing bindings, just as the shop input fixture does.
+	for connection in resize_connections:
+		if not _pointer_viewport.size_changed.is_connected(connection.callable):
+			_pointer_viewport.size_changed.connect(connection.callable, connection.flags)
 	var start: Vector2 = ball.get_global_transform_with_canvas().origin
 	var target = start - Vector2(120, 0)
 	await _button(mod, start, false)
@@ -93,6 +117,10 @@ func check(mod: Node, game: Node, role: String, record: Callable) -> void:
 	await mod.get_tree().process_frame
 	_motion(mod, target)
 	ball._process(1.0 / 30.0)
+	record.call(
+		_pointer_viewport.get_mouse_position().is_equal_approx(target),
+		role + " mouse aim: injected pointer reaches native viewport polling"
+	)
 	record.call(
 		ball.shot is Vector2 and ball.shot.length() > 50.0 and pivot.visible,
 		role + " mouse aim: held pointer motion charges and reveals cue"
@@ -169,11 +197,32 @@ func check(mod: Node, game: Node, role: String, record: Callable) -> void:
 	settings.shot_mode = saved.shot_mode
 	settings.shoot_confirmation = saved.confirmation
 	input_manager._set_mode(saved.input_mode)
+	_reparent_ball(mod, ball, original_parent)
+	original_parent.move_child(ball, original_index)
+	ball.transform = original_transform
+	for connection in resize_connections:
+		if not original_viewport.size_changed.is_connected(connection.callable):
+			original_viewport.size_changed.connect(connection.callable, connection.flags)
+	_pointer_viewport.queue_free()
+	_pointer_viewport = null
 	ball.set_process(saved.process)
 	mod.adapter.set_process(saved.adapter_process)
 	sink.free()
 	presence.free()
 	identity.free()
+
+
+func _reparent_ball(mod: Node, ball: Node, parent: Node) -> void:
+	# This is an already-hooked player crossing fixture viewports. Reparenting does
+	# not emit ready again, so do not add a second pending ready hook to the adapter.
+	var added: Signal = mod.get_tree().node_added
+	var callback: Callable = mod.adapter._node_added
+	var connected = added.is_connected(callback)
+	if connected:
+		added.disconnect(callback)
+	ball.reparent(parent, true)
+	if connected:
+		added.connect(callback)
 
 
 func _button(mod: Node, position: Vector2, pressed: bool) -> void:
@@ -186,12 +235,13 @@ func _button(mod: Node, position: Vector2, pressed: bool) -> void:
 	event.pressed = pressed
 	Input.parse_input_event(event)
 	Input.flush_buffered_events()
-	mod.get_viewport().push_input(event, true)
+	_pointer_viewport.push_input(event, true)
 
 
-func _motion(mod: Node, position: Vector2) -> void:
+func _motion(_mod: Node, position: Vector2) -> void:
 	var event = InputEventMouseMotion.new()
 	event.position = position
 	event.global_position = position
+	event.relative = position - _pointer_viewport.get_mouse_position()
 	event.button_mask = MOUSE_BUTTON_MASK_LEFT
-	mod.get_viewport().push_input(event, true)
+	_pointer_viewport.push_input(event, true)

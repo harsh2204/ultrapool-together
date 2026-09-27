@@ -63,7 +63,7 @@ This source build is experimental; live Steam sessions, latency, and concurrent 
 - Standard runs only; daily challenges are unsupported.
 - Start a new run when upgrading from a version with custom multiplayer balls. Those unfinished runs are unsupported; their save files are preserved.
 - New players join between matches. A table host disconnecting ends that table; the room host leaving closes the lobby. Host migration is unsupported.
-- Some transient effects and table-host audio are not mirrored. Local ball simulation uses corrections from the table host.
+- Floor effects (including oil and fire), wormhole suction visuals, energy projectiles, and some transient effects/audio are not mirrored. Burning-ball state and dynamic blackhole pockets are represented separately. See the [client/spectator effect tracker](docs/TABLE_EFFECTS.md). Local ball simulation uses corrections from the table host.
 - A Steam game update may require a compatible mod update and reinstall.
 
 ## Uninstall
@@ -71,6 +71,8 @@ This source build is experimental; live Steam sessions, latency, and concurrent 
 Run `Uninstall.ps1` on Windows or `Uninstall.command` on macOS from the installed mod folder. Saves and files not owned by the installer are preserved.
 
 ## Development
+
+Start with the [repository development skill](https://github.com/harsh2204/ultrapool-together/blob/main/.agents/skills/ultrapool-development/SKILL.md) for the native/mod code map, main game loop, shop/snack bar/mixer contracts, regression lessons, validation requirements, and a template for adding shop characters or content. It is also linked from [AGENTS.md](https://github.com/harsh2204/ultrapool-together/blob/main/AGENTS.md) for future contributors and agents.
 
 Run `Build-Package.ps1` on Windows or `python3 Build-Package.py` on macOS to create the same installation ZIP for both platforms. See [tests/README.md](tests/README.md) for test setup and coverage. Game binaries and assets are supplied by each player's installed copy.
 

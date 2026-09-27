@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ultrapool development"
+  short_description: "Navigate, change, and verify multiplayer safely"
+  default_prompt: "Use $ultrapool-development to plan and verify this gameplay or shop change."

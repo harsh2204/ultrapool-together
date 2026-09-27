@@ -1,5 +1,10 @@
 # Agent rules
 
+## Repository development guide
+
+- For gameplay, replication, input, shop/snack bar/mixer, or new content work, use the [Ultrapool development skill](.agents/skills/ultrapool-development/SKILL.md). It maps native and mod ownership, recent regression lessons, meaningful test seams, and a shop character/item change template.
+- Check the [table-effect coverage matrix](docs/TABLE_EFFECTS.md) before claiming a native effect is visible to guests or spectators. Track missing families and verification separately from fixes to snapshot delivery.
+
 ## Runtime boundaries
 
 - Do not launch Ultrapool, Godot, GDRE, graphics benchmarks, or runtime probes without explicit user authorization for that test. This includes `--headless` and concurrent game instances. Apply these restrictions to delegated work.
