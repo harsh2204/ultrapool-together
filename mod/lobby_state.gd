@@ -26,6 +26,8 @@ var _run_options: Dictionary = {}
 var _run_defaults: Dictionary = {}
 var _run_catalog_revision = 0
 var _frozen_selection: Dictionary = {}
+# Started tables keep their authority here; epochs fence a replaced leader's traffic.
+var _table_leaders: Dictionary = {}
 
 
 func setup(id: int, player_name: String) -> bool:
@@ -57,6 +59,7 @@ func clear() -> void:
 	_run_defaults.clear()
 	_run_catalog_revision = 0
 	_frozen_selection.clear()
+	_table_leaders.clear()
 	_clear_return_vote()
 
 
@@ -367,9 +370,36 @@ func start(sender: int) -> bool:
 	if not can_start():
 		return _reject("Every player must choose a seat and ready up, with someone at each table.")
 	_frozen_selection = resolved_run_selection()
+	_table_leaders.clear()
+	for table in range(table_count):
+		_table_leaders[table] = {"id": _first_seated(table), "epoch": 1}
 	started = true
 	_changed()
 	return true
+
+
+func promote_leader(sender: int, table: int, successor: int) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the room host can hand over a table.")
+	if not started or not _table_leaders.has(table):
+		return _reject("There is no active table to hand over.")
+	var leader: Dictionary = _table_leaders[table]
+	if leader.id == successor:
+		last_error = ""
+		return true
+	if _players.has(leader.id) and _players[leader.id].connected:
+		return _reject("The table host is still connected.")
+	var player: Dictionary = _players.get(successor, {})
+	if player.is_empty() or player.table != table or not player.connected:
+		return _reject("Choose a connected player seated at that table.")
+	leader.id = successor
+	leader.epoch += 1
+	_changed()
+	return true
+
+
+func leader_epoch(table: int) -> int:
+	return _table_leaders.get(table, {}).get("epoch", 0)
 
 
 func request_return(sender: int) -> bool:
@@ -408,6 +438,7 @@ func reset_lobby(sender: int, match_complete: bool = false) -> bool:
 		return _reject("Everyone still connected must approve ending the match.")
 	started = false
 	_frozen_selection.clear()
+	_table_leaders.clear()
 	_clear_return_vote()
 	for id in _players.keys():
 		if not _players[id].connected:
@@ -415,6 +446,155 @@ func reset_lobby(sender: int, match_complete: bool = false) -> bool:
 	_fit_tables()
 	_changed(true)
 	return true
+
+
+# Rebuilds the room on a promoted host from the previous host's last published snapshot.
+# Everyone else counts as disconnected until they reconnect to the new host.
+func restore(state: Dictionary, new_host: int) -> bool:
+	if not _valid_restore(state, new_host):
+		return _reject("The previous room state could not be restored.")
+	clear()
+	host_id = new_host
+	table_count = state.table_count
+	shot_budget = state.shot_budget
+	match_mode = state.match_mode
+	clone_rounds = state.get("clone_rounds") == true
+	multiplayer_balls = state.get("multiplayer_balls") == true
+	if state.get("expansion_sets") is Dictionary:
+		expansion_sets = ExpansionRegistry.normalize_flags(state.expansion_sets)
+	revision = state.revision
+	ready_generation = state.ready_generation
+	started = state.started
+	for entry in state.players:
+		var player = _player(entry.id, entry.name)
+		player.table = entry.table
+		player.slot = entry.slot
+		player.connected = entry.id == new_host
+		if entry.get("run_votes") is Dictionary:
+			for field in RUN_FIELDS:
+				if entry.run_votes.get(field) is String:
+					player.run_votes[field] = entry.run_votes[field]
+		_players[entry.id] = player
+	var votes: Dictionary = state.run_vote
+	for field in ["deck", "difficulty"]:
+		_run_options[field] = votes.options[field].duplicate(true)
+	_run_options.match_mode = MATCH_MODES.duplicate(true)
+	_run_defaults = votes.selected.duplicate(true)
+	_run_catalog_revision = votes.catalog_revision
+	if started:
+		_frozen_selection = votes.selected.duplicate(true)
+		for entry in state.table_leaders:
+			_table_leaders[entry.table] = {"id": entry.id, "epoch": entry.epoch}
+	_changed(true)
+	return true
+
+
+func prune_disconnected() -> bool:
+	if started:
+		return false
+	var removed = false
+	for id in _players.keys():
+		if not _players[id].connected:
+			_players.erase(id)
+			removed = true
+	if removed:
+		_fit_tables()
+		_changed(true)
+	return removed
+
+
+func _valid_restore(state: Dictionary, new_host: int) -> bool:
+	if not _valid_restore_settings(state):
+		return false
+	var ids = _restore_player_ids(state.players, state.table_count)
+	if not ids.has(new_host) or not _valid_restore_votes(state.get("run_vote")):
+		return false
+	return not state.started or _valid_restore_leaders(state.get("table_leaders"), state, ids)
+
+
+func _valid_restore_settings(state: Dictionary) -> bool:
+	var players = state.get("players")
+	return (
+		players is Array
+		and not players.is_empty()
+		and players.size() <= CAPACITY
+		and state.get("table_count") is int
+		and state.table_count >= 1
+		and state.table_count <= CAPACITY
+		and state.get("shot_budget") is int
+		and state.shot_budget >= 1
+		and state.shot_budget <= 20
+		and state.get("match_mode") in ["race", "score"]
+		and state.get("started") is bool
+		and state.get("revision") is int
+		and state.get("ready_generation") is int
+	)
+
+
+# Returns the valid player IDs, or an empty set when any seat or identity is malformed.
+func _restore_player_ids(players: Array, count: int) -> Dictionary:
+	var seats: Dictionary = {}
+	var ids: Dictionary = {}
+	for entry in players:
+		if (
+			not entry is Dictionary
+			or not entry.get("id") is int
+			or entry.id <= 0
+			or ids.has(entry.id)
+			or not entry.get("name") is String
+			or not entry.get("table") is int
+			or not entry.get("slot") is int
+			or entry.table < -1
+			or entry.table >= count
+			or entry.slot < -1
+			or entry.slot >= CAPACITY
+			or (entry.table >= 0 and seats.has([entry.table, entry.slot]))
+		):
+			return {}
+		ids[entry.id] = true
+		if entry.table >= 0:
+			seats[[entry.table, entry.slot]] = true
+	return ids
+
+
+func _valid_restore_votes(votes) -> bool:
+	if (
+		not votes is Dictionary
+		or not votes.get("catalog_revision") is int
+		or not votes.get("options") is Dictionary
+		or not votes.get("selected") is Dictionary
+	):
+		return false
+	for field in ["deck", "difficulty"]:
+		var entries = votes.options.get(field)
+		if (
+			not entries is Array
+			or entries.is_empty()
+			or entries.size() > 64
+			or not votes.selected.get(field) is String
+			or not entries.all(
+				func(entry): return entry is Dictionary and entry.get("id") is String
+			)
+		):
+			return false
+	return true
+
+
+func _valid_restore_leaders(leaders, state: Dictionary, ids: Dictionary) -> bool:
+	if not leaders is Array or leaders.size() != state.table_count:
+		return false
+	return leaders.all(
+		func(entry):
+			return (
+				entry is Dictionary
+				and entry.get("table") is int
+				and entry.table >= 0
+				and entry.table < state.table_count
+				and ids.has(entry.get("id"))
+				and entry.get("epoch") is int
+				and entry.epoch >= 1
+			)
+	)
 
 
 func snapshot() -> Dictionary:
@@ -440,7 +620,8 @@ func snapshot() -> Dictionary:
 		"capacity": CAPACITY,
 		"started": started,
 		"can_start": can_start(),
-		"players": players
+		"players": players,
+		"table_leaders": _table_leader_snapshot()
 	}
 
 
@@ -456,8 +637,28 @@ func members_for_table(table: int) -> Array:
 
 
 func leader_for_table(table: int) -> int:
+	if started and _table_leaders.has(table):
+		return _table_leaders[table].id
+	return _first_seated(table)
+
+
+func _first_seated(table: int) -> int:
 	var members = members_for_table(table)
 	return members[0].id if not members.is_empty() else 0
+
+
+func _table_leader_snapshot() -> Array:
+	var leaders: Array = []
+	for table in range(table_count):
+		if _table_leaders.has(table):
+			leaders.append(
+				{
+					"table": table,
+					"id": _table_leaders[table].id,
+					"epoch": _table_leaders[table].epoch
+				}
+			)
+	return leaders
 
 
 func _player(id: int, player_name: String) -> Dictionary:

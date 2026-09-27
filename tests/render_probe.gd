@@ -1,5 +1,7 @@
 extends Node
 
+const RunCheckpoint = preload("../mod/run_checkpoint.gd")
+
 
 class RunEndFixture:
 	extends RefCounted
@@ -21,6 +23,7 @@ var fixtures: RefCounted
 var round_flow: RefCounted
 var shop_input: Node
 var fixture_config = {"deck": "1_CLASSIC", "difficulty": "diff_3", "seed": 24681}
+var native_checkpoint: Dictionary = {}
 
 
 func _ready():
@@ -90,6 +93,9 @@ func _run():
 		"router_probe",
 		"controller_probe",
 		"transport_budget_probe",
+		"transport_reconnect_probe",
+		"recovery_probe",
+		"session_sim_probe",
 		"shop_layout_probe"
 	]:
 		_run_model_probe(probe)
@@ -150,6 +156,7 @@ func _run():
 		await get_tree().create_timer(0.5).timeout
 		_check_shop()
 		shop_state = mod.shop_sync.capture().duplicate(true)
+		_check_native_checkpoint()
 		var shop_report = FileAccess.open(output.path_join("shop-state.json"), FileAccess.WRITE)
 		shop_report.store_string(JSON.stringify(shop_state, "\t"))
 		shop_report.close()
@@ -166,6 +173,9 @@ func _run():
 	mod.active = false
 	mod.run_setup.return_menu()
 	if not _check(await _wait(mod.run_setup.at_main_menu), "returned to menu"):
+		_finish()
+		return
+	if not await _check_native_resume():
 		_finish()
 		return
 	mod._local_id = 2
@@ -190,6 +200,79 @@ func _run():
 	for result in fixtures.checks:
 		_check(result.passed, result.name)
 	_finish()
+
+
+func _check_native_checkpoint():
+	var database = get_node("/root/BallDatabase")
+	native_checkpoint = RunCheckpoint.capture(get_node("/root/SaveManager").get_run_state())
+	if not _check(not native_checkpoint.is_empty(), "native shop produces a run checkpoint"):
+		return
+	_check(RunCheckpoint.valid(native_checkpoint, database), "native run checkpoint validates")
+	var wire: Dictionary = bytes_to_var(var_to_bytes(native_checkpoint))
+	_check(RunCheckpoint.valid(wire, database), "checkpoint survives network encoding")
+	var rebuilt = RunCheckpoint.capture(RunCheckpoint.to_run_state(wire, database))
+	_check(
+		_differences(native_checkpoint, rebuilt).is_empty(),
+		"rebuilt run state matches its checkpoint %s" % [_differences(native_checkpoint, rebuilt)]
+	)
+	_check(
+		(
+			native_checkpoint.money == 92
+			and native_checkpoint.shop_balls.any(func(i): return i != null)
+		),
+		"checkpoint records the shop wallet and native offers"
+	)
+
+
+# Resumes the captured shop through the native RunState path, as a rejoining leader does.
+func _check_native_resume() -> bool:
+	if native_checkpoint.is_empty():
+		return _check(false, "resume fixture has a checkpoint")
+	var database = get_node("/root/BallDatabase")
+	var state = RunCheckpoint.to_run_state(native_checkpoint, database)
+	var wrong_seed: Dictionary = fixture_config.duplicate()
+	wrong_seed.seed += 1
+	_check(
+		mod.run_setup.start(wrong_seed, null, state) == ERR_INVALID_DATA,
+		"checkpoint from another run configuration is refused"
+	)
+	if not _check(
+		mod.run_setup.start(fixture_config, null, state) == OK, "checkpoint resume starts"
+	):
+		return false
+	var resumed_shop = func():
+		var game = get_node("/root/Global").gameManager
+		return (
+			is_instance_valid(game)
+			and game.in_shop
+			and is_instance_valid(game.shop)
+			and game.shop.is_open
+			and game.shop.introt <= 0
+		)
+	if not _check(await _wait(resumed_shop), "resumed run opens directly in its saved shop"):
+		return false
+	await get_tree().create_timer(0.5).timeout
+	var game = get_node("/root/Global").gameManager
+	var restored = RunCheckpoint.capture(get_node("/root/SaveManager").get_run_state())
+	var differences = _differences(native_checkpoint, restored, ["game_time"])
+	_check(differences.is_empty(), "resumed shop matches the checkpoint %s" % [differences])
+	_check(not game.balls_spawned, "resuming does not replay the interrupted round")
+	await _capture(
+		"25-resumed-shop", "Recovered table · the native shop restored from a checkpoint"
+	)
+	mod.run_setup.return_menu()
+	return _check(await _wait(mod.run_setup.at_main_menu), "returned to menu after resume")
+
+
+func _differences(expected: Dictionary, actual: Dictionary, ignored: Array = []) -> Array:
+	var keys: Array = []
+	for key in expected:
+		if key not in ignored and actual.get(key) != expected[key]:
+			keys.append(key)
+	for key in actual:
+		if key not in ignored and not expected.has(key):
+			keys.append(key)
+	return keys
 
 
 func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):

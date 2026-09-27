@@ -180,6 +180,8 @@ func _initialize() -> void:
 	_check(_find(uneven, 40).connected, "membership helper cannot mutate the authoritative roster")
 	_check_return_votes(model_script)
 	_check_run_votes(model_script)
+	_check_table_leaders(model_script)
+	_check_restore(model_script)
 	print("LOBBY_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
@@ -393,6 +395,169 @@ func _check_run_votes(model_script) -> void:
 		"old generation cannot vote after refresh"
 	)
 	_check(lobby.snapshot().run_vote.counts.deck.is_empty(), "new catalog requires fresh ballots")
+
+
+func _check_table_leaders(model_script) -> void:
+	var lobby = model_script.new()
+	lobby.setup(10, "Host")
+	_configure(lobby)
+	for id in [20, 30, 40]:
+		lobby.add_player(id, "Player %d" % id)
+	lobby.set_table_count(10, 2)
+	lobby.choose_slot(20, 1, 0)
+	lobby.choose_slot(30, 1, 1)
+	lobby.choose_slot(40, 0, 1)
+	_check(
+		lobby.snapshot().table_leaders.is_empty(), "pre-match lobby publishes no table authority"
+	)
+	_ready_all(lobby)
+	lobby.start(10)
+	_check(
+		(
+			lobby.snapshot().table_leaders
+			== [{"table": 0, "id": 10, "epoch": 1}, {"table": 1, "id": 20, "epoch": 1}]
+		),
+		"match start records each table's first-seat leader at epoch one"
+	)
+	_check(not lobby.promote_leader(10, 1, 30), "connected leader cannot be replaced")
+	lobby.remove_player(20)
+	_check(not lobby.promote_leader(30, 1, 30), "only the room host can hand over a table")
+	_check(not lobby.promote_leader(10, 1, 999), "unknown successor is rejected")
+	_check(not lobby.promote_leader(10, 1, 40), "successor must sit at the handed-over table")
+	_check(not lobby.promote_leader(10, 2, 30), "nonexistent table cannot be handed over")
+	var revision: int = lobby.revision
+	_check(lobby.promote_leader(10, 1, 30), "connected teammate replaces a disconnected leader")
+	_check(
+		lobby.leader_for_table(1) == 30 and lobby.leader_epoch(1) == 2,
+		"handover advances the table epoch"
+	)
+	_check(lobby.revision > revision, "handover publishes a new lobby revision")
+	_check(
+		_find(lobby, 30).leader and not _find(lobby, 20).leader,
+		"snapshot badges the promoted leader"
+	)
+	_check(
+		lobby.promote_leader(10, 1, 30) and lobby.leader_epoch(1) == 2,
+		"repeated handover to the same leader keeps its epoch"
+	)
+	lobby.add_player(20, "Player 20")
+	_check(
+		lobby.leader_for_table(1) == 30 and not lobby.promote_leader(10, 1, 20),
+		"returning former leader cannot reclaim a connected successor's table"
+	)
+	lobby.remove_player(30)
+	_check(lobby.promote_leader(10, 1, 20), "former leader can take back an abandoned table")
+	_check(lobby.leader_epoch(1) == 3, "every handover receives a fresh epoch")
+	_check(lobby.leader_epoch(0) == 1, "handover leaves other tables' epochs unchanged")
+	var copied: Dictionary = lobby.snapshot()
+	copied.table_leaders[1].id = 40
+	_check(lobby.leader_for_table(1) == 20, "snapshot cannot mutate table authority")
+	lobby.request_return(10)
+	for id in [20, 40]:
+		lobby.set_return_ready(id, true)
+	lobby.reset_lobby(10)
+	_check(
+		lobby.snapshot().table_leaders.is_empty() and lobby.leader_epoch(1) == 0,
+		"reopened lobby discards match authority"
+	)
+	_check(lobby.leader_for_table(1) == 20, "reopened lobby previews the first occupied seat")
+
+
+func _check_restore(model_script) -> void:
+	var lobby = model_script.new()
+	lobby.setup(10, "Host")
+	_configure(lobby)
+	for id in [20, 30, 40]:
+		lobby.add_player(id, "Player %d" % id)
+	lobby.set_table_count(10, 2)
+	lobby.set_shot_budget(10, 9)
+	lobby.set_match_mode(10, "score")
+	for seat in [[20, 1, 0], [30, 1, 1], [40, 0, 1]]:
+		lobby.choose_slot(seat[0], seat[1], seat[2])
+	lobby.set_run_vote(30, "deck", "1_CLASSIC", lobby.snapshot().run_vote.catalog_revision)
+	_ready_all(lobby)
+	lobby.start(10)
+	lobby.remove_player(20)
+	lobby.promote_leader(10, 1, 30)
+	var state: Dictionary = lobby.snapshot()
+	var promoted = model_script.new()
+	_check(not promoted.restore(state, 999), "restore requires the new host to be in the room")
+	_check(promoted.restore(state, 30), "seated player restores the room it was in")
+	_check(promoted.host_id == 30 and promoted.started, "restored room keeps its match running")
+	_check(
+		promoted.leader_for_table(1) == 30 and promoted.leader_epoch(1) == 2,
+		"restored room keeps table leaders and epochs"
+	)
+	_check(
+		promoted.resolved_run_selection() == lobby.resolved_run_selection(),
+		"restored room keeps the frozen run choices"
+	)
+	_check(
+		promoted.shot_budget == 9 and promoted.match_mode == "score",
+		"restored room keeps match settings"
+	)
+	_check(
+		_find(promoted, 30).connected and not _find(promoted, 10).connected,
+		"only the new host is connected until others reconnect"
+	)
+	_check(
+		not _find(promoted, 40).connected and _find(promoted, 40).table == 0,
+		"everyone else keeps their seat while reconnecting"
+	)
+	_check(promoted.revision > state.revision, "restored room publishes a newer revision")
+	_check(
+		not promoted.snapshot().return_vote.active and not promoted.can_start(),
+		"restored room starts without stale votes or readiness"
+	)
+	_check(
+		promoted.add_player(40, "Player 40") and _find(promoted, 40).connected,
+		"reconnecting player returns to its seat"
+	)
+	_check(not promoted.promote_leader(10, 0, 40), "departed host no longer has authority")
+	_check(
+		promoted.promote_leader(30, 0, 40) and promoted.leader_for_table(0) == 40,
+		"new host can hand over the departed host's table"
+	)
+	var broken: Array = []
+	var duplicate_seat: Dictionary = state.duplicate(true)
+	for player in duplicate_seat.players:
+		if player.id == 40:
+			player.table = 1
+			player.slot = 0
+	broken.append(["duplicate seats", duplicate_seat])
+	var missing_leader: Dictionary = state.duplicate(true)
+	missing_leader.table_leaders.pop_back()
+	broken.append(["missing table leader", missing_leader])
+	var unknown_leader: Dictionary = state.duplicate(true)
+	unknown_leader.table_leaders[0].id = 999
+	broken.append(["unknown table leader", unknown_leader])
+	var empty_catalog: Dictionary = state.duplicate(true)
+	empty_catalog.run_vote.options.deck = []
+	broken.append(["empty catalog", empty_catalog])
+	var excess_tables: Dictionary = state.duplicate(true)
+	excess_tables.table_count = 9
+	broken.append(["too many tables", excess_tables])
+	for entry in broken:
+		_check(not model_script.new().restore(entry[1], 30), "restore rejects " + entry[0])
+	var waiting = model_script.new()
+	waiting.setup(10, "Host")
+	_configure(waiting)
+	for id in [20, 30]:
+		waiting.add_player(id, "Player %d" % id)
+		waiting.choose_slot(id, 0, id / 10 - 1)
+	_ready_all(waiting)
+	var reopened = model_script.new()
+	_check(reopened.restore(waiting.snapshot(), 20), "pre-match room can be restored")
+	_check(
+		not reopened.started and not _find(reopened, 20).ready,
+		"pre-match restore keeps the lobby open and clears readiness"
+	)
+	_check(reopened.prune_disconnected(), "pre-match restore prunes absent players")
+	_check(
+		reopened.snapshot().players.size() == 1 and not reopened.prune_disconnected(),
+		"pruning keeps connected players and is idempotent"
+	)
+	_check(not promoted.prune_disconnected(), "started matches keep absent players' seats")
 
 
 func _find(lobby, id: int) -> Dictionary:

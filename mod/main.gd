@@ -22,6 +22,7 @@ var presence: Node
 var run_setup: Node
 var spectator: Node
 var run_controls: Node
+var recovery: Node
 var multiplayer_balls: Node
 var expansion_balls: Node
 var set_voting: Node
@@ -88,6 +89,15 @@ var _watch_states: Dictionary = {}
 var _watched_snapshot = -1
 var _starting_players: Array = []
 var _native_ui: Node
+var _link_lost = false
+var _rejoin_pending = false
+var _pending_resume: Dictionary = {}
+var _rejoining = false
+var _waiting_for = 0
+var _waiting_successor = 0
+var _waiting_deadline = 0
+var _lobby_received_at = 0
+var _prune_at = 0
 ## Guest soft-reject window for transient bad table/shot snapshots.
 var bad_snapshot_grace_msec = 3000
 var _bad_snapshot_started_msec = -1
@@ -107,6 +117,7 @@ func _ready():
 	run_setup = load(base.path_join("run_setup.gd")).new()
 	spectator = load(base.path_join("table_spectator.gd")).new()
 	run_controls = load(base.path_join("run_controls.gd")).new()
+	recovery = load(base.path_join("table_recovery.gd")).new()
 	multiplayer_balls = load(base.path_join("multiplayer_balls.gd")).new()
 	expansion_balls = load(base.path_join("expansion_balls.gd")).new()
 	set_voting = load(base.path_join("set_voting.gd")).new()
@@ -122,9 +133,11 @@ func _ready():
 		expansion_balls,
 		spectator,
 		run_controls,
-		set_voting
+		set_voting,
+		recovery
 	]:
 		add_child(service)
+	recovery.setup(get_node("/root/BallDatabase"))
 	_build_ui()
 	spectator.setup(self)
 	spectator.watch_changed.connect(_watch_changed)
@@ -140,13 +153,7 @@ func _ready():
 		return
 	presence.setup(self, transport, shop_sync)
 	shop_sync.request.connect(_shop_request)
-	transport.connected.connect(_connected)
-	transport.peer_joined.connect(_peer_joined)
-	transport.peer_left.connect(_peer_left)
-	transport.disconnected.connect(_disconnected)
-	transport.received.connect(_received)
-	transport.status_changed.connect(_status)
-	transport.room_ready.connect(_room_ready)
+	_connect_transport()
 	var DifficultyCatalog = load(base.path_join("difficulty_catalog.gd"))
 	var ui = get_node_or_null("/root/UIManager")
 	DifficultyCatalog.register(
@@ -158,6 +165,34 @@ func _ready():
 		return
 	transport.listen_for_invites()
 	print("[Together] Ready v", VERSION)
+
+
+func _connect_transport():
+	transport.connected.connect(_connected)
+	transport.peer_joined.connect(_peer_joined)
+	transport.peer_left.connect(_peer_left)
+	transport.disconnected.connect(_disconnected)
+	transport.received.connect(_received)
+	transport.status_changed.connect(_status)
+	transport.room_ready.connect(_room_ready)
+	transport.host_lost.connect(_host_lost)
+	transport.reconnected.connect(_reconnected)
+	transport.host_changed.connect(_host_changed)
+	transport.host_promoted.connect(_host_promoted)
+
+
+func _popup_open() -> bool:
+	return _native_ui != null and _native_ui.is_popup_open()
+
+
+# The native game cannot start a run while paused, transitioning, or showing a popup.
+func _native_blocked() -> bool:
+	return (
+		not is_inside_tree()
+		or get_node("/root/Global").transitioning
+		or get_tree().paused
+		or _popup_open()
+	)
 
 
 func _build_ui():
@@ -203,6 +238,7 @@ func _build_ui():
 	ui_root.add_child(panel)
 	panel.host_requested.connect(_host)
 	panel.join_requested.connect(_join)
+	panel.rejoin_requested.connect(_rejoin_requested)
 	panel.friends_requested.connect(func(): panel.set_friends(transport.online_friends()))
 	panel.invite_requested.connect(func(id): transport.invite_friend(id))
 	panel.slot_requested.connect(
@@ -233,9 +269,8 @@ func _build_ui():
 		func(enabled): _lobby_request({"action": "multiplayer_balls", "enabled": enabled})
 	)
 	panel.expansion_set_requested.connect(
-		func(set_id, enabled): _lobby_request(
-			{"action": "expansion_set", "set": set_id, "enabled": enabled}
-		)
+		func(set_id, enabled):
+			_lobby_request({"action": "expansion_set", "set": set_id, "enabled": enabled})
 	)
 	panel.watch_requested.connect(_watch_table)
 	panel.return_vote_requested.connect(
@@ -299,12 +334,7 @@ func _toggle_panel():
 func _set_panel(value: bool):
 	if value and is_spectating():
 		spectator.close()
-	if (
-		value
-		and not active
-		and run_setup.at_main_menu()
-		and get_node("/root/UIManager").is_popup_open()
-	):
+	if value and not active and run_setup.at_main_menu() and _popup_open():
 		_status("Close the game's popup before opening the lobby.")
 		return
 	panel.visible = value
@@ -316,7 +346,12 @@ func _set_panel(value: bool):
 
 
 func _suspend_menu():
-	if active or is_instance_valid(_suspended_menu) or not run_setup.at_main_menu():
+	if (
+		active
+		or not is_inside_tree()
+		or is_instance_valid(_suspended_menu)
+		or not run_setup.at_main_menu()
+	):
 		return
 	_suspended_menu = get_tree().current_scene
 	_menu_process_mode = _suspended_menu.process_mode
@@ -350,7 +385,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.8 or v0.9 and a new UP8 room code.")
+		_status("Could not join. Everyone needs this mod version and a UP9 room code.")
 	_render_lobby()
 
 
@@ -370,6 +405,8 @@ func _room_ready():
 
 func _connected():
 	_local_id = transport.local_id()
+	_rejoining = false
+	recovery.forget()
 	if not run_setup.at_main_menu():
 		_leave()
 		_status("Return to the main menu before joining a lobby.")
@@ -392,9 +429,20 @@ func _peer_joined(id: int):
 		transport.send_to(id, {"kind": "room_reject", "reason": lobby_model.last_error})
 		transport.disconnect_peer(id, lobby_model.last_error)
 		return
+	var message = {"kind": "match_start", "match": match_id, "config": run_config, "late": true}
+	var table = _model_table(id)
+	if lobby_model.started and table >= 0 and lobby_model.leader_for_table(table) == id:
+		var summary = _summary(table)
+		if not summary.is_empty() and not summary.finished:
+			recovery.leader_returned(table)
+			message["resume"] = recovery.resume_for(table, summary, _score_match())
+			_clear_waiting(summary)
+			summary.status = "Resuming · %s reconnected" % _transport_name(id)
+	if lobby_model.started:
+		_refresh_waiting()
 	_broadcast_lobby()
 	if lobby_model.started:
-		transport.send_to(id, {"kind": "match_start", "match": match_id, "config": run_config})
+		transport.send_to(id, message)
 
 
 func _peer_left(id: int, reason: String):
@@ -406,15 +454,83 @@ func _peer_left(id: int, reason: String):
 	_starting_players.erase(id)
 	if lobby_model.started:
 		for summary in table_summaries:
-			if summary.leader_id == id:
-				summary.closed = true
-				if not summary.finished:
-					summary.finished = true
-					summary.status = "Table host disconnected"
+			if lobby_model.leader_for_table(summary.table) == id and not summary.finished:
+				recovery.leader_left(summary.table, id, Time.get_ticks_msec())
+		_refresh_waiting()
 	_broadcast_lobby()
 	if lobby_model.can_return():
 		_reset_match(transport.local_id())
 	_status(_player_name(id) + " disconnected. " + reason)
+
+
+func _model_table(id: int) -> int:
+	for player in lobby_model.snapshot().players:
+		if player.id == id:
+			return player.table
+	return -1
+
+
+func _summary(table: int) -> Dictionary:
+	for summary in table_summaries:
+		if summary.table == table:
+			return summary
+	return {}
+
+
+func _clear_waiting(summary: Dictionary) -> void:
+	for key in ["waiting_for", "takeover_by", "takeover_ms"]:
+		summary.erase(key)
+
+
+# Publishes who each paused table is waiting for and who would take it over.
+func _refresh_waiting() -> void:
+	var roster: Dictionary = lobby_model.snapshot()
+	var now = Time.get_ticks_msec()
+	for summary in table_summaries:
+		if summary.finished or not recovery.is_waiting(summary.table):
+			continue
+		var leader: int = lobby_model.leader_for_table(summary.table)
+		var successor: int = recovery.successor_for(roster, summary.table, leader)
+		summary.waiting_for = leader
+		summary.takeover_by = successor
+		summary.takeover_ms = recovery.takeover_in_ms(summary.table, now) if successor != 0 else -1
+		summary.status = (
+			(
+				"Waiting for %s · %s takes over shortly"
+				% [_player_name(leader), _player_name(successor)]
+			)
+			if successor != 0
+			else "Paused · waiting for %s to reconnect" % _player_name(leader)
+		)
+
+
+func _hand_over(table: int, successor: int) -> void:
+	if not lobby_model.promote_leader(transport.local_id(), table, successor):
+		if lobby_model.last_error == "The table host is still connected.":
+			recovery.leader_returned(table)
+		return
+	var previous: int = recovery.lost_leader(table)
+	recovery.leader_returned(table)
+	var summary = _summary(table)
+	var resume = recovery.resume_for(table, summary, _score_match())
+	_clear_waiting(summary)
+	summary.leader_id = successor
+	summary.status = (
+		"Resuming · %s took over from %s" % [_player_name(successor), _player_name(previous)]
+	)
+	_refresh_waiting()
+	_broadcast_lobby()
+	var message = {
+		"kind": "takeover",
+		"match": match_id,
+		"table": table,
+		"epoch": lobby_model.leader_epoch(table),
+		"resume": resume
+	}
+	if successor == transport.local_id():
+		_receive_takeover(message)
+	else:
+		transport.send_to(successor, message)
 
 
 func _ready_requested(value: bool):
@@ -514,12 +630,15 @@ func _broadcast_lobby():
 	lobby = lobby_model.snapshot()
 	lobby.table_summaries = table_summaries.duplicate(true)
 	lobby.match = match_id
+	if lobby_model.started:
+		lobby.elapsed_ms = maxi(0, Time.get_ticks_msec() - _match_started_at)
 	transport.send({"kind": "lobby_state", "lobby": lobby})
 	_roster_changed()
 
 
 func _render_lobby():
 	panel.set_connection(transport.room_code, transport.session_open(), transport.invite_ready())
+	panel.set_rejoin("" if transport.session_open() else recovery.remembered_room())
 	var view = lobby.duplicate(true)
 	view.watched_table = spectator.watched_table if is_spectating() else table_id
 	panel.render(view, transport.local_id(), transport.is_host)
@@ -548,6 +667,7 @@ func _start_match(sender: int):
 	_watchers.clear()
 	_watch_snapshots.clear()
 	_watch_states.clear()
+	recovery.clear()
 	_starting_players = lobby_model.snapshot().players.map(func(player): return player.id)
 	table_summaries.clear()
 	for table in range(lobby_model.table_count):
@@ -561,6 +681,7 @@ func _start_match(sender: int):
 				"bounty_bonus": 0.0,
 				"shots_used": 0,
 				"shot_budget": lobby_model.shot_budget,
+				"pending": false,
 				"finished": false,
 				"run_won": false,
 				"round": 1,
@@ -575,22 +696,31 @@ func _start_match(sender: int):
 	_begin_table(run_config)
 
 
-func _begin_table(config: Dictionary):
+# Late starts (rejoins, takeovers, demotions) fail locally instead of ending the match.
+func _begin_table(config: Dictionary, resume: Dictionary = {}, late: bool = false):
 	if active or not lobby.get("started", false):
 		return
+	var fail: Callable = _begin_failed if late else _match_failed
 	var assigned_table = player_table(transport.local_id())
 	if _table_abandoned(assigned_table):
 		_status("Your table host disconnected. Wait for the host to reopen the lobby.")
 		_set_panel(true)
 		return
+	for summary in lobby.get("table_summaries", []):
+		if summary.table == assigned_table and summary.finished:
+			_status("Your table has finished. Open the lobby for standings.")
+			_set_panel(true)
+			return
+	if not resume.is_empty() and not recovery.valid_resume(resume):
+		resume = {}
 	if not run_setup.validate_config(config):
-		_match_failed("The selected starting set or difficulty is unavailable on this game build.")
+		fail.call("The selected starting set or difficulty is unavailable on this game build.")
 		return
 	if not run_setup.at_main_menu():
-		_match_failed("A player could not start a fresh run. Everyone must be at the main menu.")
+		fail.call("A player could not start a fresh run. Everyone must be at the main menu.")
 		return
-	if get_tree().paused or get_node("/root/UIManager").is_popup_open():
-		_match_failed("Close the game's popup before starting the match.")
+	if _native_blocked():
+		fail.call("Close the game's popup before starting the match.")
 		return
 	table_id = player_table(transport.local_id())
 	table_leader_id = _leader(table_id)
@@ -619,6 +749,18 @@ func _begin_table(config: Dictionary):
 	_snapshot_idle_time = 0.0
 	_clear_bad_snapshot_streak()
 	presence.clear()
+	_waiting_for = 0
+	_waiting_successor = 0
+	_waiting_deadline = 0
+	var run_state: RunState = null
+	if is_table_host() and not resume.is_empty():
+		total_score = float(resume.total_score)
+		used_shots = resume.used_shots
+		finished = _score_match() and used_shots >= lobby.shot_budget
+		if finished:
+			finish_reason = "Finished"
+		if not resume.checkpoint.is_empty():
+			run_state = recovery.run_state_from(resume.checkpoint)
 	active = true
 	if bool(lobby.get("multiplayer_balls", config.get("multiplayer_balls", false))):
 		multiplayer_balls.begin_session()
@@ -628,7 +770,7 @@ func _begin_table(config: Dictionary):
 	var expansion_flags = lobby.get("expansion_sets", config.get("expansion_sets", {}))
 	expansion_balls.begin_session(expansion_flags)
 	if not is_table_host() and not table_sync.begin_guest(config):
-		_match_failed("Could not create the table view. Return to the main menu and try again.")
+		fail.call("Could not create the table view. Return to the main menu and try again.")
 		return
 	adapter.begin_session(self)
 	shop_sync.begin_session(self)
@@ -638,13 +780,14 @@ func _begin_table(config: Dictionary):
 	_begin_clone_round()
 	run_controls.begin_session()
 	if is_table_host():
+		recovery.reset_leader()
 		var catalog = (
 			multiplayer_balls.catalog
 			if bool(lobby.get("multiplayer_balls", config.get("multiplayer_balls", false)))
 			else null
 		)
-		if run_setup.start(config, catalog) != OK:
-			_match_failed("Could not start the table's run.")
+		if run_setup.start(config, catalog, run_state) != OK:
+			fail.call("Could not start the table's run.")
 			return
 	else:
 		_table_send({"kind": "sync_request"})
@@ -652,7 +795,61 @@ func _begin_table(config: Dictionary):
 		_starting_players.erase(transport.local_id())
 	else:
 		transport.send({"kind": "match_ready", "match": match_id})
-	_status("Table %d · Take turns and shop together." % (table_id + 1))
+	recovery.remember(transport.room_code)
+	if run_state != null:
+		_status(
+			(
+				"Table %d · Resumed from the Round %d shop."
+				% [table_id + 1, run_state.level_number + 1]
+			)
+		)
+	elif is_table_host() and not resume.is_empty():
+		_status("Table %d · No saved shop yet; restarted from the first round." % (table_id + 1))
+	else:
+		_status("Table %d · Take turns and shop together." % (table_id + 1))
+
+
+func _begin_failed(reason: String):
+	if active:
+		_end_table()
+	_status(reason)
+	_set_panel(true)
+
+
+# Starts the local table once the native menu is ready for another run.
+func _queue_begin(resume: Dictionary) -> void:
+	_rejoin_pending = true
+	_pending_resume = resume
+
+
+func _process_pending_begin() -> void:
+	if not _rejoin_pending or active or _returning_to_menu:
+		return
+	if not lobby.get("started", false):
+		_rejoin_pending = false
+		return
+	if not run_setup.at_main_menu() or _native_blocked():
+		return
+	_rejoin_pending = false
+	var resume: Dictionary = _pending_resume
+	_pending_resume = {}
+	_begin_table(run_config, resume, true)
+
+
+func _receive_takeover(message: Dictionary) -> void:
+	if (
+		message.get("match") != match_id
+		or not lobby.get("started", false)
+		or message.get("table") != player_table(_local_id)
+		or message.get("epoch") != _leader_epoch(message.table)
+		or _leader(message.table) != _local_id
+		or not recovery.valid_resume(message.get("resume"))
+	):
+		return
+	if active:
+		_end_table()
+	_status("You are now hosting Table %d. Restoring its last shop..." % (message.table + 1))
+	_queue_begin(message.resume)
 
 
 func _match_failed(reason: String):
@@ -672,6 +869,8 @@ func _reset_match(sender: int, failed_start = false):
 	match_id += 1
 	table_summaries.clear()
 	run_config.clear()
+	recovery.clear()
+	recovery.forget()
 	transport.send({"kind": "match_stop", "match": match_id})
 	_end_table()
 	_broadcast_lobby()
@@ -723,6 +922,7 @@ func _leave_requested():
 
 
 func _leave():
+	recovery.forget()
 	transport.close()
 	_disconnected("Left the lobby.")
 
@@ -735,8 +935,88 @@ func _disconnected(reason: String):
 	lobby.clear()
 	run_config.clear()
 	table_summaries.clear()
+	recovery.clear()
+	_link_lost = false
+	_rejoin_pending = false
+	_prune_at = 0
+	if _rejoining:
+		_rejoining = false
+		recovery.forget()
+		reason = "That match is no longer available."
 	_status(reason)
 	_set_panel(true)
+
+
+func _rejoin_requested():
+	var room: String = recovery.remembered_room()
+	if room.is_empty() or transport.session_open():
+		return
+	_rejoining = true
+	_join(room)
+	if not transport.session_open():
+		_rejoining = false
+
+
+func _host_lost(_reason: String):
+	_link_lost = true
+	_status("Connection to the room host was lost. Reconnecting...")
+
+
+func _reconnected():
+	_link_lost = false
+	_status("Reconnected to the room.")
+	if not active:
+		return
+	if is_table_host():
+		# Republish everything the room may have missed while the link was down.
+		recovery.reset_leader()
+		_last_phase.clear()
+		last_shop_state.clear()
+	else:
+		_table_send({"kind": "sync_request"})
+	if is_spectating():
+		_watch_changed(spectator.watched_table)
+
+
+func _host_changed(_host: int, previous: int):
+	_link_lost = true
+	_status("%s left the room. Connecting to the new host..." % _player_name(previous))
+
+
+func _host_promoted(previous: int):
+	var departed = _player_name(previous)
+	if lobby.is_empty() or not lobby_model.restore(lobby, _local_id):
+		_leave()
+		_status("The room host left before the room could be handed over.")
+		return
+	_link_lost = false
+	var now = Time.get_ticks_msec()
+	table_summaries = lobby.get("table_summaries", []).duplicate(true)
+	_watchers.clear()
+	_watch_snapshots.clear()
+	_watch_states.clear()
+	_starting_players.clear()
+	_prune_at = 0
+	if lobby_model.started:
+		var elapsed: int = lobby.get("elapsed_ms", 0)
+		_match_started_at = now - elapsed - (now - _lobby_received_at)
+		_finish_count = 0
+		for summary in table_summaries:
+			_finish_count = maxi(_finish_count, summary.get("finish_order", 0))
+			var leader: int = lobby_model.leader_for_table(summary.table)
+			if not summary.finished and leader != _local_id:
+				recovery.leader_left(summary.table, leader, now)
+		_refresh_waiting()
+	else:
+		_prune_at = now + transport.RECONNECT_WINDOW_MS
+	_broadcast_lobby()
+	if active and is_table_host():
+		recovery.reset_leader()
+		_last_phase.clear()
+		last_shop_state.clear()
+	if is_spectating():
+		_watch_changed(spectator.watched_table)
+	_status("%s left. You are hosting the room now." % departed)
 
 
 func _status(value: String):
@@ -885,8 +1165,18 @@ func _members(table: int, connected_only: bool = true) -> Array:
 
 
 func _leader(table: int) -> int:
+	for entry in lobby.get("table_leaders", []):
+		if entry.table == table:
+			return entry.id
 	var members = _members(table, false)
 	return members[0].id if not members.is_empty() else 0
+
+
+func _leader_epoch(table: int) -> int:
+	for entry in lobby.get("table_leaders", []):
+		if entry.table == table:
+			return entry.epoch
+	return 0
 
 
 func _player_name(id: int) -> String:
@@ -907,6 +1197,16 @@ func _next_player() -> int:
 
 
 func _roster_changed():
+	if active and lobby.get("started", false):
+		var leader = _leader(table_id)
+		if leader != table_leader_id:
+			if is_table_host():
+				_end_table()
+				_status("A teammate took over your table while you were away. Rejoining it.")
+				_queue_begin({})
+			elif leader != _local_id:
+				_follow_leader(leader)
+		_track_waiting()
 	if active:
 		if is_spectating() and _table_abandoned(spectator.watched_table):
 			spectator.close()
@@ -927,11 +1227,91 @@ func _roster_changed():
 		_render_lobby()
 
 
+func _tick_recovery(now: int) -> void:
+	if not transport.is_host:
+		return
+	if lobby.get("started", false):
+		for due in recovery.due_takeovers(lobby, now):
+			_hand_over(due.table, due.successor)
+	elif _prune_at != 0 and now >= _prune_at:
+		_prune_at = 0
+		if lobby_model.prune_disconnected():
+			_broadcast_lobby()
+
+
+func _share_checkpoint(table: int, epoch: int, payload: Dictionary) -> void:
+	var message = {
+		"kind": "checkpoint_copy",
+		"match": match_id,
+		"table": table,
+		"epoch": epoch,
+		"payload": payload
+	}
+	for player in lobby.get("players", []):
+		if player.connected and player.table != table and player.id != transport.local_id():
+			transport.send_to(player.id, message)
+
+
+func _follow_leader(leader: int) -> void:
+	table_leader_id = leader
+	last_guest_snapshot = 0
+	last_started_turn = -1
+	awaiting_shot_turn = -1
+	_guest_phase.clear()
+	latest_state.clear()
+	_status("%s is now hosting Table %d." % [_player_name(leader), table_id + 1])
+	_table_send({"kind": "sync_request"})
+
+
+func _track_waiting() -> void:
+	var summary: Dictionary = {}
+	for entry in lobby.get("table_summaries", []):
+		if entry.table == table_id:
+			summary = entry
+	var waiting = [summary.get("waiting_for", 0), summary.get("takeover_by", 0)]
+	if waiting == [_waiting_for, _waiting_successor]:
+		return
+	_waiting_for = waiting[0]
+	_waiting_successor = waiting[1]
+	var remaining: int = summary.get("takeover_ms", -1)
+	_waiting_deadline = Time.get_ticks_msec() + remaining if remaining >= 0 else 0
+
+
+func table_paused() -> bool:
+	return (
+		active and not finished and (_link_lost or (not is_table_host() and not _leader_online()))
+	)
+
+
+func _leader_online() -> bool:
+	for player in lobby.get("players", []):
+		if player.id == table_leader_id:
+			return player.connected
+	return false
+
+
+func pause_reason() -> String:
+	if _link_lost:
+		return "Reconnecting to the room host."
+	var away = _player_name(table_leader_id)
+	if _waiting_successor == 0 or _waiting_deadline == 0:
+		return "Waiting for %s to reconnect." % away
+	var seconds = ceili(maxf(0.0, _waiting_deadline - Time.get_ticks_msec()) / 1000.0)
+	var successor = (
+		"you take"
+		if _waiting_successor == _local_id
+		else "%s takes" % [_player_name(_waiting_successor)]
+	)
+	return "Waiting for %s · %s over in %d s." % [away, successor, seconds]
+
+
 func _process(delta):
 	if _returning_to_menu:
 		_restore_menu()
 		if run_setup.return_menu() == OK:
 			_returning_to_menu = false
+	_process_pending_begin()
+	_tick_recovery(Time.get_ticks_msec())
 	if panel.visible:
 		_suspend_menu()
 	presence.tick(delta, active and not is_spectating(), can_control())
@@ -968,6 +1348,8 @@ func _process(delta):
 		if state_time >= 0.15:
 			state_time = 0.0
 			_publish_state()
+			if state.in_shop and not finished and not _link_lost:
+				_publish_checkpoint()
 		snapshot_time += delta
 		var snapshot_interval = SHOP_SNAPSHOT_INTERVAL if state.in_shop else SNAPSHOT_INTERVAL
 		if snapshot_time >= snapshot_interval:
@@ -1066,6 +1448,7 @@ func _turn_ready() -> bool:
 		or turn_owner != transport.local_id()
 		or shot_pending
 		or finished
+		or table_paused()
 	):
 		return false
 	if shop_sync.is_open():
@@ -1217,6 +1600,8 @@ func _update_hud():
 		return
 	if finished:
 		turn_text = _result_text()
+	elif table_paused():
+		turn_text = pause_reason()
 	elif shot_pending or awaiting_shot_turn >= 0:
 		turn_text = "Shot in play"
 	elif latest_state.get("in_shop", false):
@@ -1317,9 +1702,8 @@ func _publish_state(
 			"bounty_shot": multiplayer_balls.bounty_shot(),
 			"multiplayer_balls": multiplayer_balls.capture(),
 			"expansion_balls": expansion_balls.capture(),
-			"clone_round": CloneRound.snapshot(
-				_clone_instances, _clone_active, _clone_winner, _clone_shop_armed
-			),
+			"clone_round":
+			CloneRound.snapshot(_clone_instances, _clone_active, _clone_winner, _clone_shop_armed),
 			"finished": finished,
 			"finish_reason": finish_reason
 		},
@@ -1376,6 +1760,18 @@ func _publish_state(
 		_table_send({"kind": "shop_state", "shop": shop_state}, target)
 
 
+func _publish_checkpoint():
+	if not active or not is_table_host():
+		return
+	var checkpoint = recovery.leader_checkpoint(
+		last_shop_state,
+		Time.get_ticks_msec(),
+		func(): return get_node("/root/SaveManager").get_run_state()
+	)
+	if not checkpoint.is_empty():
+		_table_send(checkpoint)
+
+
 func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary = {}):
 	if not active or not is_table_host() or not adapter.game_data().available:
 		return
@@ -1400,6 +1796,7 @@ func _table_send(payload: Dictionary, target: int = 0, reliable: bool = true):
 		"kind": "table",
 		"match": match_id,
 		"table": table_id,
+		"epoch": _leader_epoch(table_id),
 		"payload": payload,
 		"reliable": reliable
 	}
@@ -1424,11 +1821,16 @@ func _route_table(actor: int, envelope: Dictionary):
 		if not _valid_state(payload, routed.table):
 			return
 		_record_summary(routed.table, payload)
+	elif payload.kind == "checkpoint":
+		if not recovery.store(routed.table, routed.epoch, payload):
+			return
+		_share_checkpoint(routed.table, routed.epoch, payload)
 	_forward_watchers(routed.table, payload)
 	var message = {
 		"kind": "table",
 		"match": match_id,
 		"table": routed.table,
+		"epoch": routed.epoch,
 		"actor": actor,
 		"payload": payload
 	}
@@ -1449,6 +1851,7 @@ func _record_summary(table: int, state: Dictionary):
 		"bounty_bonus": 0.0,
 		"shots_used": state.used_shots,
 		"shot_budget": lobby.shot_budget,
+		"pending": state.pending,
 		"finished": state.finished,
 		"run_won": state.run_won,
 		"round": state.round,
@@ -1526,7 +1929,17 @@ func _received(sender: int, message: Dictionary):
 		"lobby_state":
 			if message.get("lobby") is Dictionary:
 				lobby = message.lobby
+				_lobby_received_at = Time.get_ticks_msec()
 				_roster_changed()
+		"checkpoint_copy":
+			if (
+				message.get("match") == match_id
+				and message.get("table") is int
+				and message.table >= 0
+				and message.table < lobby.get("table_count", 0)
+				and message.get("epoch") is int
+			):
+				recovery.store(message.table, message.epoch, message.get("payload"))
 		"lobby_error":
 			if message.get("reason") is String:
 				_status(message.reason)
@@ -1539,12 +1952,24 @@ func _received(sender: int, message: Dictionary):
 				and message.match >= match_id
 				and message.get("config") is Dictionary
 			):
+				if message.match > match_id:
+					recovery.clear()
 				match_id = message.match
 				run_config = message.config
-				_begin_table(run_config)
+				if message.get("late") != true:
+					_begin_table(run_config)
+				elif not active:
+					var resume = message.get("resume")
+					_queue_begin(resume if resume is Dictionary else {})
+		"takeover":
+			if message.get("resume") is Dictionary:
+				_receive_takeover(message)
 		"match_stop":
 			if message.get("match") is int and message.match > match_id:
 				match_id = message.match
+				_rejoin_pending = false
+				recovery.clear()
+				recovery.forget()
 				_end_table()
 				_set_panel(true)
 		"table":
@@ -1552,6 +1977,7 @@ func _received(sender: int, message: Dictionary):
 				active
 				and message.get("match") == match_id
 				and message.get("table") == table_id
+				and message.get("epoch") == _leader_epoch(table_id)
 				and message.get("actor") is int
 				and message.get("payload") is Dictionary
 			):
@@ -1614,6 +2040,8 @@ func _received_table(actor: int, message: Dictionary):
 	elif kind == "shop_state" and message.get("shop") is Dictionary:
 		if not shop_sync.apply_state(message.shop):
 			_bad_table("shop")
+	elif kind == "checkpoint":
+		recovery.store(table_id, _leader_epoch(table_id), message)
 	elif (
 		kind == "shot_start"
 		and message.get("turn") is int
@@ -1735,10 +2163,13 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 	for key in ["round", "shots_left", "used_shots", "run_goal_rounds"]:
 		if not message.get(key) is int or message[key] < 0:
 			return false
-	if message.has("bounty_shot") and (
-		not message.get("bounty_shot") is int
-		or message.bounty_shot < 0
-		or message.bounty_shot > message.used_shots
+	if (
+		message.has("bounty_shot")
+		and (
+			not message.get("bounty_shot") is int
+			or message.bounty_shot < 0
+			or message.bounty_shot > message.used_shots
+		)
 	):
 		return false
 	if (

@@ -33,7 +33,7 @@ Use `--destination "/path/to/UltrapoolTogether"` for a different mod folder, or 
 4. The host chooses the number of tables. Vote for a **Starting set** using the shop's set cards and choose **Difficulty** from the buttons beside them. Player initials show live votes; hover for full names. A chalk check marks your vote, and a gold gem marks the current result. With multiple tables, everyone can also vote for **Race** or **Score PvP**.
 5. Join a table and select **Ready up**. The host selects **Start match** once everyone is ready and every table has a player.
 
-Everyone must use v0.8 or v0.9 and a **UP8** room code. Changing seats, settings, or a vote clears readiness. Each connected player has one vote per choice; **No preference** abstains. The most votes wins, with ties resolved in the displayed option order. Without votes, the host's initial native selection applies. Choices use the host's unlocked standard sets and difficulties; every table receives the same frozen result and seed.
+Everyone must use the same mod version and a **UP9** room code; older UP8 codes are from an incompatible version. Changing seats, settings, or a vote clears readiness. Each connected player has one vote per choice; **No preference** abstains. The most votes wins, with ties resolved in the displayed option order. Without votes, the host's initial native selection applies. Choices use the host's unlocked standard sets and difficulties; every table receives the same frozen result and seed.
 
 ## Match rules
 
@@ -58,7 +58,7 @@ This source build is experimental; live Steam sessions, latency, and concurrent 
 
 - Standard runs only; daily challenges are unsupported.
 - Start a new run when upgrading from a version with custom multiplayer balls. Those unfinished runs are unsupported; their save files are preserved.
-- New players join between matches. A table host disconnecting ends that table; the room host leaving closes the lobby. Host migration is unsupported.
+- New players join between matches. If a table host disconnects or crashes, the table pauses. After 15 seconds, a connected teammate takes over. With no teammate, the table waits for its player to return. The table resumes from the start of the shop it was last in. Score PvP keeps shots already taken and their points. Reconnect with **Rejoin match** in the lobby, a Steam invite, or the room code. If the room host leaves, Steam's next room owner takes over the room, and every table keeps its progress; the room code stays the same. The match ends only when everyone has left.
 - Some transient effects and table-host audio are not mirrored. Local ball simulation uses corrections from the table host.
 - A Steam game update may require a compatible mod update and reinstall.
 

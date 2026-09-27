@@ -17,6 +17,12 @@ func _initialize() -> void:
 			{"id": 30, "table": 1, "slot": 2, "connected": true},
 			{"id": 40, "table": 1, "slot": 3, "connected": true},
 			{"id": 50, "table": 2, "slot": 0, "connected": true}
+		],
+		"table_leaders":
+		[
+			{"table": 0, "id": 10, "epoch": 1},
+			{"table": 1, "id": 30, "epoch": 1},
+			{"table": 2, "id": 50, "epoch": 1}
 		]
 	}
 	var message = _message(0, "shot")
@@ -38,13 +44,13 @@ func _initialize() -> void:
 	for kind in ["shot", "pass", "shop_request", "sync_request"]:
 		_check(
 			router.route(roster, 40, _message(1, kind)).recipients == [30],
-			"request finds first occupied seat even when slot zero is empty"
+			"request reaches the recorded leader even when slot zero is empty"
 		)
 	_check(
 		router.route(roster, 40, _message(1, "ball_call")).is_empty(),
 		"removed custom-ball requests cannot enter gameplay routing"
 	)
-	for kind in ["state", "snapshot", "shot_start", "shop_state"]:
+	for kind in ["state", "snapshot", "shot_start", "shop_state", "checkpoint"]:
 		_check(
 			router.route(roster, 20, _message(0, kind)).is_empty(),
 			"nonleader cannot publish table authority"
@@ -160,14 +166,71 @@ func _initialize() -> void:
 		router.route(invalid, 10, _message(0, "state")).is_empty(),
 		"ambiguous leader seats rejected"
 	)
+	_check_leader_epochs(router, roster)
 	print("ROUTER_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
 	quit(0 if failures.is_empty() else 1)
 
 
-func _message(table: int, kind: String) -> Dictionary:
-	return {"kind": "table", "table": table, "payload": {"kind": kind}}
+func _check_leader_epochs(router, roster: Dictionary) -> void:
+	var promoted = roster.duplicate(true)
+	promoted.players[0].connected = false
+	promoted.players.append({"id": 60, "table": 0, "slot": 2, "connected": true})
+	promoted.table_leaders[0] = {"table": 0, "id": 20, "epoch": 2}
+	_check(
+		router.route(promoted, 60, _message(0, "shot")).recipients == [20],
+		"requests reach the promoted leader"
+	)
+	var routed = router.route(promoted, 20, _message(0, "state", 2))
+	_check(
+		routed.get("recipients") == [60] and routed.get("epoch") == 2,
+		"promoted leader publishes under its new epoch"
+	)
+	_check(
+		router.route(promoted, 20, _message(0, "state")).is_empty(),
+		"promoted leader cannot publish under a stale epoch"
+	)
+	var unfenced = _message(0, "state")
+	unfenced.erase("epoch")
+	_check(router.route(promoted, 20, unfenced).is_empty(), "leader authority requires an epoch")
+	promoted.players[0].connected = true
+	for epoch in [1, 2]:
+		_check(
+			router.route(promoted, 10, _message(0, "snapshot", epoch)).is_empty(),
+			"replaced leader cannot publish after reconnecting"
+		)
+	_check(
+		router.route(promoted, 10, _message(0, "shot")).recipients == [20],
+		"reconnected former leader submits requests to its successor"
+	)
+	var invalid = roster.duplicate(true)
+	invalid.erase("table_leaders")
+	_check(
+		router.route(invalid, 20, _message(0, "shot")).is_empty(),
+		"started roster without table authority rejected"
+	)
+	invalid = roster.duplicate(true)
+	invalid.table_leaders.append({"table": 0, "id": 20, "epoch": 1})
+	_check(
+		router.route(invalid, 20, _message(0, "shot")).is_empty(),
+		"duplicate table authority rejected"
+	)
+	invalid = roster.duplicate(true)
+	invalid.table_leaders[0].id = 30
+	_check(
+		router.route(invalid, 20, _message(0, "shot")).is_empty(),
+		"leader seated at another table rejected"
+	)
+	invalid = roster.duplicate(true)
+	invalid.table_leaders[0].epoch = 0
+	_check(
+		router.route(invalid, 10, _message(0, "state", 0)).is_empty(), "nonpositive epoch rejected"
+	)
+
+
+func _message(table: int, kind: String, epoch: int = 1) -> Dictionary:
+	return {"kind": "table", "table": table, "epoch": epoch, "payload": {"kind": kind}}
 
 
 func _check(condition: bool, description: String) -> void:

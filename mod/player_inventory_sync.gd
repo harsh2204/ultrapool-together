@@ -16,20 +16,21 @@ static func capture(info: Node) -> Dictionary:
 	for group in SLOT_LIMITS:
 		var slots: Array = []
 		for item in info.get(group):
-			if item == null:
-				slots.append(null)
-				continue
-			var entry = {
-				"data": str(item.data.id),
-				"mixed": str(item.mixed_data.id) if item.mixed_data != null else ""
-			}
-			for key in NUMBERS:
-				entry[key] = item.get(key)
-			for key in FLAGS:
-				entry[key] = item.get(key)
-			slots.append(entry)
+			slots.append(capture_item(item) if item != null else null)
 		result[group] = slots
 	return result
+
+
+static func capture_item(item: BallItem) -> Dictionary:
+	var entry = {
+		"data": str(item.data.id),
+		"mixed": str(item.mixed_data.id) if item.mixed_data != null else ""
+	}
+	for key in NUMBERS:
+		entry[key] = item.get(key)
+	for key in FLAGS:
+		entry[key] = item.get(key)
+	return entry
 
 
 static func valid(data, database: Node) -> bool:
@@ -51,7 +52,7 @@ static func valid(data, database: Node) -> bool:
 		for item in data[group]:
 			if item == null:
 				continue
-			if not item is Dictionary or not _valid_item(item, resources):
+			if not item is Dictionary or not valid_item(item, resources):
 				return false
 			if group == "cubes" and resources[item.data].from_set != &"NEGATIVE":
 				return false
@@ -67,22 +68,23 @@ static func apply(info: Node, data: Dictionary, database: Node) -> void:
 			database.id_to_passive if group == "passives" else database.id_to_ball
 		)
 		for entry in data[group]:
-			if entry == null:
-				slots.append(null)
-				continue
-			var item = BallItem.new()
-			item.data = resources[entry.data]
-			if entry.mixed != "":
-				item.mixed_data = resources[entry.mixed]
-			for key in NUMBERS:
-				item.set(key, entry[key])
-			for key in FLAGS:
-				item.set(key, entry[key])
-			slots.append(item)
+			slots.append(build_item(entry, resources) if entry != null else null)
 		info.set(group, slots)
 
 
-static func _valid_item(item: Dictionary, resources: Dictionary) -> bool:
+static func build_item(entry: Dictionary, resources: Dictionary) -> BallItem:
+	var item = BallItem.new()
+	item.data = resources[entry.data]
+	if entry.mixed != "":
+		item.mixed_data = resources[entry.mixed]
+	for key in NUMBERS:
+		item.set(key, entry[key])
+	for key in FLAGS:
+		item.set(key, entry[key])
+	return item
+
+
+static func valid_item(item: Dictionary, resources: Dictionary) -> bool:
 	if (
 		not item.get("data") is String
 		or not resources.has(item.data)
