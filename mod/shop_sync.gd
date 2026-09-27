@@ -4,6 +4,7 @@ signal request(message: Dictionary)
 
 const GROUPS = ["offer", "build", "snack", "passive", "mix"]
 const MAX_SLOTS = 64
+const PAUSED_SUFFIX = " Shopping is paused."
 
 var last_error = ""
 var _controller: Node
@@ -649,6 +650,7 @@ func _interaction_blocked() -> bool:
 		or _pending
 		or _state.busy
 		or _controller.finished
+		or _controller.table_paused()
 		or _controller.panel.visible
 		or _view.moving()
 		or _controller.is_spectating()
@@ -917,7 +919,13 @@ func _submit_item(action: String, source: String, target = ""):
 
 
 func _submit(message: Dictionary):
-	if not is_open() or _pending or _controller.panel.visible or _controller.finished:
+	if (
+		not is_open()
+		or _pending
+		or _controller.panel.visible
+		or _controller.finished
+		or _controller.table_paused()
+	):
 		return
 	if _controller.is_spectating() or get_node("/root/UIManager").is_popup_open():
 		return
@@ -948,6 +956,14 @@ func _update_actions():
 	if _controller.finished:
 		_notice.text = "This table has finished. Scores and purchases are locked."
 		_notice.show()
+	elif _controller.table_paused():
+		var paused_text: String = _controller.pause_reason() + PAUSED_SUFFIX
+		if _notice.text != paused_text or not _notice.visible:
+			_notice.text = paused_text
+			_notice.show()
+	elif _notice.text.ends_with(PAUSED_SUFFIX):
+		_notice.hide()
+		_notice.text = ""
 	# A pending acknowledgement can span many frames. Cancel the native drag once
 	# when interaction becomes blocked, preserving local camera/hover frame time.
 	if blocked and not _actions_blocked:

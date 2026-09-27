@@ -7,6 +7,8 @@ signal disconnected(reason: String)
 signal received(sender: int, message: Dictionary)
 signal status_changed(text: String)
 signal room_ready
+signal host_lost(reason: String)
+signal reconnected
 
 const PROTOCOL := 8
 const MAX_PLAYERS := 8
@@ -21,6 +23,9 @@ const LOBBY_MEMBER_GONE := 2 | 4 | 8 | 16
 const HANDSHAKE_TIMEOUT_MS := 15000
 const PEER_TIMEOUT_MS := 20000
 const HEARTBEAT_MS := 2000
+# A guest keeps its Steam room membership while retrying a lost host link.
+const RECONNECT_WINDOW_MS := 60000
+const RECONNECT_RETRY_MS := 3000
 # Budgets cover decoding and synchronous received handlers, not just socket reads.
 # Whole messages cannot be preempted: one packet/handler can exceed these limits.
 const RECEIVE_BUDGET_USEC := 2000
@@ -64,6 +69,8 @@ var _receive_bytes := 0
 var _receive_usec := 0
 var _receive_max_handler_usec := 0
 var _receive_budget_reached := false
+var _reconnect_deadline := 0
+var _reconnect_at := 0
 
 
 func _ready() -> void:
@@ -322,6 +329,8 @@ func close() -> void:
 	_host_id = 0
 	_steam_reliable_received = 0
 	_joinable = true
+	_reconnect_deadline = 0
+	_reconnect_at = 0
 	is_host = false
 	room_code = ""
 	_closing = false
@@ -432,18 +441,45 @@ func _process(_delta: float) -> void:
 	elif _mode == "steam":
 		_drain_received_packets()
 	var now := Time.get_ticks_msec()
+	_retry_host(now)
 	for id in _peers.keys():
 		if not _peers.has(id):
 			continue
 		var peer: Dictionary = _peers[id]
 		if not peer.ready:
 			if now >= peer.deadline:
-				_drop_peer(id, "Connection timed out. Try joining again.")
+				_drop_peer(id, "Connection timed out. Try joining again.", true)
 		elif now - peer.last_received > PEER_TIMEOUT_MS:
-			_drop_peer(id, "Connection lost. You can join again.")
+			_drop_peer(id, "Connection lost. You can join again.", true)
 		elif now - peer.last_heartbeat >= HEARTBEAT_MS:
 			peer.last_heartbeat = now
 			_send_wire(id, {"kind": "ping"})
+
+
+func _retry_host(now: int) -> void:
+	if _reconnect_deadline == 0 or is_host or _mode != "steam":
+		return
+	if now >= _reconnect_deadline:
+		_fail_room("Could not reconnect to the host. Rejoin the match from the lobby.")
+	elif not _peers.has(_host_id) and now >= _reconnect_at:
+		if int(_steam.call("getLobbyOwner", _lobby_id)) != _host_id:
+			_fail_room("The host left the room.")
+			return
+		_reconnect_at = now + RECONNECT_RETRY_MS
+		_add_peer(_host_id)
+		_send_hello()
+
+
+func _can_reconnect(id: int, was_ready: bool) -> bool:
+	return (
+		not is_host
+		and not _closing
+		and _mode == "steam"
+		and _lobby_id != 0
+		and id == _host_id
+		and (was_ready or _reconnect_deadline != 0)
+		and int(_steam.call("getLobbyOwner", _lobby_id)) == _host_id
+	)
 
 
 func _receive_budget_available(started_usec: int) -> bool:
@@ -646,7 +682,9 @@ func _on_steam_request(id: int) -> void:
 
 func _on_steam_failed(_reason: int, id: int, _state: int, _debug: String) -> void:
 	if _mode == "steam" and _peers.has(id):
-		_drop_peer(id, "Steam could not connect. Check that all players are online and try again.")
+		_drop_peer(
+			id, "Steam could not connect. Check that all players are online and try again.", true
+		)
 
 
 func _send_hello() -> void:
@@ -689,7 +727,7 @@ func _send_wire(id: int, message: Dictionary, transient := false) -> void:
 		var channel := STEAM_TRANSIENT_CHANNEL if transient else STEAM_CHANNEL
 		var result: int = _steam.call("sendMessageToUser", id, packet, flags, channel)
 		if result != 1 and not transient and not _closing:
-			_drop_peer(id, "Steam send failed (%d). You can join again." % result)
+			_drop_peer(id, "Steam send failed (%d). You can join again." % result, true)
 
 
 func _receive_wire(sender: int, packet: PackedByteArray, transient := false) -> void:
@@ -823,6 +861,10 @@ func _mark_ready(id: int) -> void:
 	_update_joinable()
 	if is_host:
 		_publish_members()
+	elif _reconnect_deadline != 0:
+		_reconnect_deadline = 0
+		_reconnect_at = 0
+		reconnected.emit()
 	else:
 		connected.emit()
 	if not _peers.has(id):
@@ -866,12 +908,21 @@ func _close_channels(id: int) -> void:
 		_steam.call("closeChannelWithUser", id, STEAM_TRANSIENT_CHANNEL)
 
 
-func _drop_peer(id: int, reason: String) -> void:
+func _drop_peer(id: int, reason: String, recoverable := false) -> void:
 	if not _peers.has(id):
 		return
 	var was_ready: bool = _peers[id].ready
+	var retry := recoverable and _can_reconnect(id, was_ready)
 	_peers.erase(id)
 	_close_channels(id)
+	if retry:
+		var now := Time.get_ticks_msec()
+		_reconnect_at = now + RECONNECT_RETRY_MS
+		if _reconnect_deadline == 0:
+			_reconnect_deadline = now + RECONNECT_WINDOW_MS
+			status_changed.emit("Connection to the host was lost. Reconnecting...")
+			host_lost.emit(reason)
+		return
 	if is_host:
 		if _mode == "lan" and _enet != null:
 			_enet.disconnect_peer(id)

@@ -181,7 +181,7 @@ class RunStub:
 	func ready_for_input() -> bool:
 		return true
 
-	func start(_config: Dictionary) -> Error:
+	func start(_config: Dictionary, _run_state = null) -> Error:
 		starts += 1
 		return OK
 
@@ -199,6 +199,9 @@ class PanelStub:
 	func set_connection(_code: String, _open: bool, _invite: bool):
 		pass
 
+	func set_rejoin(_code: String):
+		pass
+
 	func render(_lobby: Dictionary, _local_id: int, _host: bool):
 		pass
 
@@ -211,7 +214,10 @@ var _base: String
 func _initialize() -> void:
 	_base = get_script().resource_path.get_base_dir().get_base_dir().path_join("mod")
 	_closed_transport_teardown()
-	_abandoned_leader_rejoin()
+	_leader_returns_within_grace()
+	_teammate_takes_over()
+	_solo_and_empty_tables_wait()
+	_link_loss_pauses_table()
 	_run_vote_match_generation()
 	_run_closes_during_shot()
 	_targeted_shop_sync()
@@ -240,6 +246,7 @@ func _controller():
 	controller.shop_sync = ShopStub.new()
 	controller.presence = PresenceStub.new()
 	controller.run_setup = RunStub.new()
+	controller.recovery = load(_base.path_join("table_recovery.gd")).new()
 	controller.panel = PanelStub.new()
 	controller.panel.hide()
 	controller.pass_button = Button.new()
@@ -252,6 +259,7 @@ func _controller():
 		controller.shop_sync,
 		controller.presence,
 		controller.run_setup,
+		controller.recovery,
 		controller.panel,
 		controller.pass_button,
 		controller.turn_label,
@@ -363,11 +371,12 @@ func _run_vote_match_generation():
 	host.free()
 
 
-func _abandoned_leader_rejoin():
+func _recovery_host():
 	var host = _controller()
 	host.transport.is_host = true
 	host.transport.id = 10
 	host._local_id = 10
+	host.match_id = 5
 	host.lobby_model.setup(10, "Room host")
 	host.lobby_model.configure_run_options(
 		10,
@@ -376,99 +385,253 @@ func _abandoned_leader_rejoin():
 			"difficulty": [{"id": "diff_1", "label": "Chill Pool Night"}]
 		}
 	)
-	for id in [20, 30]:
+	for id in [20, 30, 40, 50]:
 		host.lobby_model.add_player(id, "Player %d" % id)
-	host.lobby_model.set_table_count(10, 2)
-	host.lobby_model.choose_slot(20, 1, 0)
-	host.lobby_model.choose_slot(30, 1, 1)
-	for id in [10, 20, 30]:
+	host.lobby_model.set_table_count(10, 3)
+	host.lobby_model.set_match_mode(10, "score")
+	for seat in [[20, 1, 0], [30, 1, 1], [40, 1, 2], [50, 2, 0]]:
+		host.lobby_model.choose_slot(seat[0], seat[1], seat[2])
+	for id in [10, 20, 30, 40, 50]:
 		host.lobby_model.set_ready(id, true)
-	_check(host.lobby_model.start(10), "fixture starts two real lobby-model tables")
-	host.table_summaries = [
-		{
-			"table": 0,
-			"leader_id": 10,
-			"score": 0.0,
-			"shots_used": 0,
-			"shot_budget": 6,
-			"finished": false,
-			"status": "Playing"
-		},
-		{
-			"table": 1,
-			"leader_id": 20,
-			"score": 18.0,
-			"shots_used": 2,
-			"shot_budget": 6,
-			"finished": false,
-			"status": "Playing"
-		}
-	]
+	_check(host.lobby_model.start(10), "recovery fixture starts three real tables")
+	host.table_summaries = [_summary(0, 10), _summary(1, 20), _summary(2, 50)]
+	host.table_summaries[1].merge({"score": 18.0, "shots_used": 2, "pending": true}, true)
+	host.recovery._checkpoints[1] = {"epoch": 1, "payload": {"revision": 1, "run": {"money": 37}}}
 	host._broadcast_lobby()
-	host._peer_left(20, "Connection lost.")
-	_check(
-		host.table_summaries[1].get("closed", false) and host.table_summaries[1].finished,
-		"leader departure closes its table"
-	)
-	_check(host.table_summaries[1].score == 18.0, "leader departure preserves existing standings")
-	_check(not host.table_summaries[0].finished, "another table keeps playing")
-	host._peer_joined(20)
-	_check(host.lobby_model.members_for_table(1)[0].connected, "reserved identity can reconnect")
-	var returning = _controller()
-	returning.lobby = host.lobby.duplicate(true)
-	returning._received(10, {"kind": "match_start", "match": host.match_id, "config": {}})
-	_check(
-		not returning.active and returning.run_setup.starts == 0,
-		"rejoining leader cannot start a fresh run in the old match"
-	)
-	_check(
-		returning.run_setup.validations == 0, "closed-table check precedes native run preparation"
-	)
-	_check(
-		returning.transport.sent.is_empty(),
-		"closed-table rejoin does not reset healthy tables through match_failed"
-	)
 	host.transport.sent.clear()
-	host._route_table(
-		20,
-		{
-			"kind": "table",
-			"match": host.match_id,
-			"table": 1,
-			"epoch": host._leader_epoch(1),
-			"payload": {"kind": "snapshot", "id": 1, "scene": {"available": false}}
-		}
+	return host
+
+
+func _recovery_guest(id: int, host):
+	var guest = _controller()
+	guest.transport.id = id
+	guest._local_id = id
+	guest.match_id = host.match_id
+	guest.lobby = host.lobby.duplicate(true)
+	guest.table_id = guest.player_table(id)
+	return guest
+
+
+func _sent_to(controller, recipient: int, kind: String) -> Dictionary:
+	for index in range(controller.transport.sent.size() - 1, -1, -1):
+		var entry: Dictionary = controller.transport.sent[index]
+		if entry.recipient == recipient and entry.message.get("kind") == kind:
+			return entry.message
+	return {}
+
+
+func _expire_grace(host, table: int) -> void:
+	host.recovery._lost_leaders[table].since -= host.recovery.TAKEOVER_GRACE_MS
+	for due in host.recovery.due_takeovers(host.lobby, Time.get_ticks_msec()):
+		host._hand_over(due.table, due.successor)
+
+
+func _leader_returns_within_grace():
+	var host = _recovery_host()
+	host._peer_left(20, "Connection lost.")
+	var summary: Dictionary = host.table_summaries[1]
+	_check(
+		not summary.finished and not summary.get("closed", false),
+		"leader departure pauses its table instead of closing it"
 	)
 	_check(
-		host.transport.sent.is_empty(),
-		"reconnected closed leader cannot publish a restarted snapshot stream"
+		summary.waiting_for == 20 and summary.takeover_by == 30 and summary.takeover_ms > 0,
+		"paused table publishes who is away and who takes over"
 	)
-	var follower = _controller()
-	follower.transport.id = 30
-	follower._local_id = 30
-	follower.active = true
-	follower.shot_pending = true
-	follower.awaiting_shot_turn = 4
-	follower.lobby = host.lobby.duplicate(true)
-	follower._roster_changed()
+	_check(summary.status.begins_with("Waiting for"), "standings explain the pause")
 	_check(
-		follower.finished and not follower.shot_pending and follower.awaiting_shot_turn == -1,
-		"closed table releases teammates from a pending shot"
+		host.lobby.table_summaries[1].get("takeover_by") == 30, "pause details reach every player"
 	)
-	host.table_summaries[1].closed = false
-	host.table_summaries[1].status = "Finished"
-	host._peer_left(20, "Left after finishing.")
+	_check(not host.table_summaries[0].has("waiting_for"), "other tables keep playing")
+	_check(
+		host.recovery.due_takeovers(host.lobby, Time.get_ticks_msec()).is_empty(),
+		"takeover waits for the grace period"
+	)
+	host._peer_joined(20)
+	var start = _sent_to(host, 20, "match_start")
+	_check(start.get("late") == true, "rejoining player receives a late start")
+	_check(
+		start.get("resume", {}).get("used_shots") == 3 and start.resume.total_score == 18.0,
+		"Score PvP rejoin keeps banked points and counts the interrupted shot"
+	)
+	_check(start.resume.checkpoint == {"money": 37}, "rejoining leader receives its checkpoint")
+	_check(
+		not host.recovery.is_waiting(1) and not host.table_summaries[1].has("waiting_for"),
+		"reconnection cancels the takeover"
+	)
+	var returning = _recovery_guest(20, host)
+	returning._received(10, start)
+	_check(
+		returning._rejoin_pending and returning._pending_resume == start.resume,
+		"late start waits for the native menu with its resume data"
+	)
+	_check(returning.run_setup.starts == 0, "late start never bypasses the menu check")
+	host.table_summaries[2].finished = true
+	host.table_summaries[2].status = "Finished"
+	host._peer_left(50, "Left after finishing.")
+	_check(
+		not host.recovery.is_waiting(2) and host.table_summaries[2].status == "Finished",
+		"finished table keeps its result when its player leaves"
+	)
+	var finished_player = _recovery_guest(50, host)
+	finished_player._begin_table({}, {}, true)
+	_check(
+		not finished_player.active and finished_player.run_setup.starts == 0,
+		"player of a finished table does not restart its run"
+	)
+	for controller in [finished_player, returning, host]:
+		controller.free()
+
+
+func _teammate_takes_over():
+	var host = _recovery_host()
+	host._peer_left(20, "Crashed.")
+	host.transport.sent.clear()
+	_expire_grace(host, 1)
+	_check(
+		host.lobby_model.leader_for_table(1) == 30 and host.lobby_model.leader_epoch(1) == 2,
+		"next connected teammate takes over under a new epoch"
+	)
+	var takeover = _sent_to(host, 30, "takeover")
 	_check(
 		(
-			host.table_summaries[1].closed
-			and host.table_summaries[1].status == "Finished"
-			and host.table_summaries[1].score == 18.0
+			takeover.get("epoch") == 2
+			and takeover.resume.used_shots == 3
+			and takeover.resume.checkpoint == {"money": 37}
 		),
-		"completed result survives its leader leaving while the table still closes"
+		"successor receives the checkpoint and banked totals"
 	)
-	follower.free()
-	returning.free()
+	_check(host.table_summaries[1].status.begins_with("Resuming"), "standings announce takeover")
+	_check(not host.recovery.is_waiting(1), "completed takeover stops the timer")
+	var successor = _recovery_guest(30, host)
+	successor.active = true
+	successor._roster_changed()
+	_check(
+		successor.table_leader_id == 20 and successor.transport.sent.is_empty(),
+		"successor waits for its takeover instead of following itself"
+	)
+	var stale: Dictionary = takeover.duplicate(true)
+	stale.epoch = 1
+	successor._received(10, stale)
+	_check(successor.active, "stale-epoch takeover is ignored")
+	successor._received(10, takeover)
+	_check(not successor.active and successor.table_sync.ended == 1, "successor leaves its replica")
+	_check(
+		successor._rejoin_pending and successor._pending_resume == takeover.resume,
+		"successor queues the checkpoint resume"
+	)
+	var follower = _recovery_guest(40, host)
+	follower.active = true
+	follower.latest_state = {"can_shoot": true}
+	follower.last_guest_snapshot = 9
+	follower._roster_changed()
+	_check(
+		(
+			follower.table_leader_id == 30
+			and follower.last_guest_snapshot == 0
+			and follower.latest_state.is_empty()
+		),
+		"teammates follow the new leader's fresh stream"
+	)
+	_check(
+		follower.transport.sent.any(
+			func(entry): return entry.message.get("payload", {}).get("kind") == "sync_request"
+		),
+		"teammates request a full resync from the new leader"
+	)
+	var former = _recovery_guest(20, host)
+	former.active = true
+	former._roster_changed()
+	_check(
+		not former.active and former._returning_to_menu and former._rejoin_pending,
+		"replaced leader leaves its native run and rejoins as a teammate"
+	)
+	host.transport.sent.clear()
+	host._peer_joined(20)
+	_check(
+		not _sent_to(host, 20, "match_start").has("resume"),
+		"replaced leader rejoins without taking the table back"
+	)
+	for controller in [former, follower, successor, host]:
+		controller.free()
+
+
+func _solo_and_empty_tables_wait():
+	var host = _recovery_host()
+	host._peer_left(50, "Crashed.")
+	var summary: Dictionary = host.table_summaries[2]
+	_check(
+		summary.takeover_by == 0 and summary.status.begins_with("Paused"),
+		"solo table pauses for its only player"
+	)
+	host.recovery._lost_leaders[2].since -= host.recovery.TAKEOVER_GRACE_MS * 10
+	_check(
+		host.recovery.due_takeovers(host.lobby, Time.get_ticks_msec()).is_empty(),
+		"solo table is never handed over"
+	)
+	_check(not host._match_complete(), "paused table keeps the match open")
+	host._peer_joined(50)
+	_check(
+		_sent_to(host, 50, "match_start").get("resume", {}).has("checkpoint"),
+		"solo player rejoins its paused table with a resume"
+	)
+	for id in [20, 30, 40]:
+		host._peer_left(id, "Gone.")
+	_check(host.table_summaries[1].takeover_by == 0, "empty table waits for anyone to return")
+	host._peer_joined(40)
+	_check(
+		not _sent_to(host, 40, "match_start").has("resume"),
+		"returning teammate does not own the table yet"
+	)
+	_check(host.table_summaries[1].takeover_by == 40, "returning teammate becomes the successor")
+	_expire_grace(host, 1)
+	_check(
+		(
+			host.lobby_model.leader_for_table(1) == 40
+			and not _sent_to(host, 40, "takeover").is_empty()
+		),
+		"returning teammate revives a table whose leader stays away"
+	)
 	host.free()
+
+
+func _link_loss_pauses_table():
+	var guest = _controller()
+	guest.transport.id = 30
+	guest._local_id = 30
+	guest.active = true
+	_check(not guest.table_paused(), "connected table is not paused")
+	guest._host_lost("Timed out.")
+	_check(
+		guest.table_paused() and guest.pause_reason() == "Reconnecting to the room host.",
+		"lost room link pauses the table"
+	)
+	guest._reconnected()
+	_check(not guest.table_paused(), "reconnection resumes the table")
+	_check(
+		guest.transport.sent.any(
+			func(entry): return entry.message.get("payload", {}).get("kind") == "sync_request"
+		),
+		"reconnected teammate requests a resync"
+	)
+	guest.lobby.players[1].connected = false
+	_check(
+		guest.table_paused() and guest.pause_reason().begins_with("Waiting for Table host"),
+		"absent table leader pauses teammates"
+	)
+	var leader = _controller()
+	leader.active = true
+	leader._host_lost("Timed out.")
+	_check(leader.table_paused(), "leader pauses its own table while reconnecting")
+	leader._last_phase = [1]
+	leader.last_shop_state = {"open": true}
+	leader._reconnected()
+	_check(
+		leader._last_phase.is_empty() and leader.last_shop_state.is_empty(),
+		"reconnected leader republishes its full state"
+	)
+	for controller in [leader, guest]:
+		controller.free()
 
 
 func _run_closes_during_shot():

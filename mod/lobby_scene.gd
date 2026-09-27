@@ -2,6 +2,7 @@ extends Control
 
 signal host_requested
 signal join_requested(code: String)
+signal rejoin_requested
 signal friends_requested
 signal invite_requested(id: int)
 signal slot_requested(table: int, slot: int)
@@ -81,6 +82,7 @@ func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_apply_theme()
 	%Host.pressed.connect(func(): host_requested.emit())
+	%Rejoin.pressed.connect(func(): rejoin_requested.emit())
 	%Join.pressed.connect(_join)
 	%JoinCode.text_submitted.connect(func(_text): _join())
 	%JoinCode.text_changed.connect(func(text): %Join.disabled = text.strip_edges().is_empty())
@@ -350,6 +352,13 @@ func set_connection(code: String, room_open: bool, invite_ready: bool):
 	if not room_open:
 		%Invite.get_popup().hide()
 	_resize_tables()
+
+
+func set_rejoin(code: String):
+	var available = not code.is_empty() and not _room_open
+	%Rejoin.visible = available
+	%RejoinNote.visible = available
+	%Rejoin.tooltip_text = "Rejoin room " + code if available else ""
 
 
 func set_friends(friends: Array):
@@ -704,7 +713,7 @@ func _apply_theme():
 	if _skinned():
 		_apply_skin(palette)
 		return
-	for button in [%Host, %Ready, %Start]:
+	for button in [%Host, %Rejoin, %Ready, %Start]:
 		button.add_theme_stylebox_override("normal", _box(FELT.darkened(0.13), FELT, 1))
 		button.add_theme_stylebox_override("hover", _box(FELT.lightened(0.12), GOLD, 1))
 		button.add_theme_color_override("font_color", Color("08241f"))
@@ -741,7 +750,7 @@ func _apply_skin(palette: Theme) -> void:
 	palette.set_stylebox("grabber_pressed", "VScrollBar", _chalk_bar(Color.WHITE))
 	palette.set_stylebox("panel", "PopupMenu", skin.style("panel_chalk", [18, 14, 18, 14]))
 	palette.set_stylebox("hover", "PopupMenu", skin.style("slot_chalk", [8, 4, 8, 4]))
-	for button in [%Host, %Ready, %Start]:
+	for button in [%Host, %Rejoin, %Ready, %Start]:
 		for state in ["normal", "hover", "pressed", "disabled"]:
 			button.add_theme_stylebox_override(
 				state, skin.button_style("green", state, BUTTON_CONTENT)

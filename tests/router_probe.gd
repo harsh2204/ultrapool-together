@@ -50,7 +50,7 @@ func _initialize() -> void:
 		router.route(roster, 40, _message(1, "ball_call")).is_empty(),
 		"removed custom-ball requests cannot enter gameplay routing"
 	)
-	for kind in ["state", "snapshot", "shot_start", "shop_state"]:
+	for kind in ["state", "snapshot", "shot_start", "shop_state", "checkpoint"]:
 		_check(
 			router.route(roster, 20, _message(0, kind)).is_empty(),
 			"nonleader cannot publish table authority"

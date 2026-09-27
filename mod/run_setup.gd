@@ -94,14 +94,24 @@ func validate_config(config: Dictionary) -> bool:
 	)
 
 
-func start(config: Dictionary) -> Error:
+# A run state resumes natively in its saved shop; null starts a fresh run.
+func start(config: Dictionary, run_state: RunState = null) -> Error:
 	if not validate_config(config):
 		return ERR_INVALID_DATA
 	if not at_main_menu():
 		return ERR_BUSY
+	if (
+		run_state != null
+		and (
+			run_state.chosen_deck_id != config.deck
+			or run_state.chosen_difficulty_id != config.difficulty
+			or run_state.seed != config.seed
+		)
+	):
+		return ERR_INVALID_DATA
 	var global_node = get_node("/root/Global")
 	var database = get_node("/root/BallDatabase")
-	global_node.chosen_run_state = null
+	global_node.chosen_run_state = run_state
 	global_node.chosen_deck = database.id_to_deck[config.deck]
 	global_node.chosen_difficulty = database.id_to_difficulty[config.difficulty]
 	global_node.run_mode = global_node.RunMode.NORMAL

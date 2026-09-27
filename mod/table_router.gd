@@ -1,7 +1,7 @@
 extends RefCounted
 
 const REQUESTS = ["shot", "pass", "shop_request", "sync_request"]
-const BROADCASTS = ["state", "snapshot", "shot_start", "shop_state"]
+const BROADCASTS = ["state", "snapshot", "shot_start", "shop_state", "checkpoint"]
 const RESULTS = ["shot_result", "shop_result"]
 
 

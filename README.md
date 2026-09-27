@@ -52,7 +52,7 @@ This source build is experimental; live Steam sessions, latency, and concurrent 
 
 - Standard runs only; daily challenges are unsupported.
 - Start a new run when upgrading from a version with custom multiplayer balls. Those unfinished runs are unsupported; their save files are preserved.
-- New players join between matches. A table host disconnecting ends that table; the room host leaving closes the lobby. Host migration is unsupported.
+- New players join between matches. If a table host disconnects or crashes, the table pauses. After 15 seconds, a connected teammate takes over. With no teammate, the table waits for its player to return. The table resumes from the start of the shop it was last in. Score PvP keeps shots already taken and their points. Reconnect with **Rejoin match** in the lobby, a Steam invite, or the room code. The room host leaving still closes the lobby; room-host migration is not yet supported.
 - Some transient effects and table-host audio are not mirrored. Local ball simulation uses corrections from the table host.
 - A Steam game update may require a compatible mod update and reinstall.
 

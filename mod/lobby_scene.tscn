@@ -129,6 +129,22 @@ layout_mode = 2
 text = "Up to eight players. Share one table for co-op, or compete across separate tables."
 autowrap_mode = 3
 
+[node name="RejoinNote" type="Label" parent="Margin/Layout/Body/Content/Home"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(0.91, 0.72, 0.38, 1)
+text = "Your last match may still be running. Rejoin it here; the game's Continue button would start a separate solo copy."
+autowrap_mode = 3
+
+[node name="Rejoin" type="Button" parent="Margin/Layout/Body/Content/Home"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(230, 54)
+layout_mode = 2
+size_flags_horizontal = 0
+text = "Rejoin match"
+
 [node name="Host" type="Button" parent="Margin/Layout/Body/Content/Home"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(230, 54)
