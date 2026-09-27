@@ -92,6 +92,13 @@ var _native_ui: Node
 ## Guest soft-reject window for transient bad table/shot snapshots.
 var bad_snapshot_grace_msec = 3000
 var _bad_snapshot_started_msec = -1
+## Host mid-round spawn barrier (PERF-008): hold until new bodies inited, then
+## publish a reliable keyframe so guests materialize the id (#17).
+const SPAWN_BARRIER_MAX_MSEC = 2000
+var _spawn_barrier_held = false
+var _spawn_barrier_since_msec = -1
+var _published_ball_ids: Dictionary = {}
+var _published_scene_id = 0
 
 
 func _ready():
@@ -633,6 +640,7 @@ func _begin_table(config: Dictionary):
 	_last_state_sig.clear()
 	_snapshot_idle_time = 0.0
 	_clear_bad_snapshot_streak()
+	_clear_spawn_barrier()
 	presence.clear()
 	active = true
 	if bool(lobby.get("multiplayer_balls", config.get("multiplayer_balls", false))):
@@ -728,6 +736,7 @@ func _end_table():
 	_guest_phase.clear()
 	table_id = -1
 	table_leader_id = 0
+	_clear_spawn_barrier()
 	if return_native:
 		_returning_to_menu = true
 
@@ -1073,6 +1082,13 @@ func _clear_bad_snapshot_streak() -> void:
 	_bad_snapshot_started_msec = -1
 
 
+func _clear_spawn_barrier() -> void:
+	_spawn_barrier_held = false
+	_spawn_barrier_since_msec = -1
+	_published_ball_ids.clear()
+	_published_scene_id = 0
+
+
 func can_control() -> bool:
 	if not _turn_ready():
 		return false
@@ -1403,15 +1419,42 @@ func _publish_state(
 func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary = {}):
 	if not active or not is_table_host() or not adapter.game_data().available:
 		return
+	# Hold ordinary publishes while a mid-round body is still initializing so guests
+	# never stream a table that permanently omits that authoritative id (#17 / PERF-008).
+	if target == 0 and table_sync.spawn_barrier_active():
+		if _spawn_barrier_since_msec < 0:
+			_spawn_barrier_since_msec = Time.get_ticks_msec()
+		if Time.get_ticks_msec() - _spawn_barrier_since_msec < SPAWN_BARRIER_MAX_MSEC:
+			_spawn_barrier_held = true
+			return
+		push_warning("Together: spawn barrier timed out; publishing without incomplete bodies")
 	var scene = table_sync.capture()
 	if not table_sync.valid_capture(scene):
-		push_warning("Together: skipped publishing invalid table capture")
+		var problem = table_sync.snapshot_problem(scene)
+		push_warning("Together: skipped publishing invalid table capture (%s)" % problem)
 		return
+	var force_reliable = reliable
+	if scene.get("available", false):
+		var scene_id: int = int(scene.get("scene_id", 0))
+		if scene_id != _published_scene_id:
+			_published_scene_id = scene_id
+			_published_ball_ids.clear()
+			force_reliable = true
+		var ids: Dictionary = table_sync.ball_ids(scene)
+		for id in ids:
+			if not _published_ball_ids.has(id):
+				force_reliable = true
+				break
+		if _spawn_barrier_held:
+			force_reliable = true
+		_published_ball_ids = ids
+	_spawn_barrier_held = false
+	_spawn_barrier_since_msec = -1
 	snapshot_id += 1
 	var message = {"kind": "snapshot", "id": snapshot_id, "scene": scene}
 	if not shop.is_empty():
 		message["shop"] = shop
-	_table_send(message, target, reliable)
+	_table_send(message, target, force_reliable)
 
 
 func _shop_request(message: Dictionary):
@@ -1651,12 +1694,12 @@ func _received_table(actor: int, message: Dictionary):
 	):
 		if message.id > last_guest_snapshot:
 			if not table_sync._valid_snapshot(message.scene):
-				_bad_table("shot")
+				_bad_table("shot", table_sync.snapshot_problem(message.scene))
 				return
 			if _snapshot_phase(message.scene) != _guest_phase:
 				return
 			if not table_sync.apply_snapshot(message.scene):
-				_bad_table("shot")
+				_bad_table("shot", "apply_snapshot failed")
 				return
 			last_guest_snapshot = message.id
 			table_sync.begin_shot(message.vector)
@@ -1698,18 +1741,18 @@ func _received_table(actor: int, message: Dictionary):
 		and message.get("scene") is Dictionary
 	):
 		if not table_sync._valid_snapshot(message.scene):
-			_bad_table("table")
+			_bad_table("table", table_sync.snapshot_problem(message.scene))
 			return
 		var phase = _snapshot_phase(message.scene)
 		# Ball updates must wait for the reliable scene transition.
 		if not message.has("shop") and phase != _guest_phase:
 			return
 		if not table_sync.apply_snapshot(message.scene):
-			_bad_table("table")
+			_bad_table("table", "apply_snapshot failed")
 			return
 		if message.has("shop"):
 			if not message.shop is Dictionary or not shop_sync.apply_state(message.shop):
-				_bad_table("shop")
+				_bad_table("shop", "shop apply failed")
 				return
 			_guest_phase = phase
 		_clear_bad_snapshot_streak()
@@ -1722,8 +1765,10 @@ func _snapshot_phase(scene: Dictionary) -> Array:
 	return [scene.scene_id, scene.rounds_played, scene.rotated, scene.results.phase]
 
 
-func _bad_table(part: String):
+func _bad_table(part: String, reason: String = ""):
 	if part == "shop":
+		if reason != "":
+			push_warning("Together: incompatible shop update (%s)" % reason)
 		_leave()
 		_status("The table host sent an incompatible " + part + " update.")
 		return
@@ -1731,7 +1776,12 @@ func _bad_table(part: String):
 	if _bad_snapshot_started_msec < 0:
 		_bad_snapshot_started_msec = now
 	var elapsed = now - _bad_snapshot_started_msec
-	push_warning("Together: skipping incompatible %s update (streak %d ms)" % [part, elapsed])
+	if reason != "":
+		push_warning(
+			"Together: skipping incompatible %s update (%s, streak %d ms)" % [part, reason, elapsed]
+		)
+	else:
+		push_warning("Together: skipping incompatible %s update (streak %d ms)" % [part, elapsed])
 	if elapsed < bad_snapshot_grace_msec:
 		return
 	_clear_bad_snapshot_streak()
