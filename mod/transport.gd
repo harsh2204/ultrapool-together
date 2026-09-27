@@ -614,6 +614,12 @@ func _on_enet_disconnected(id: int) -> void:
 
 
 func _on_join_requested(lobby_id: int, _friend_id: int) -> void:
+	# Steam can invoke this from its callback pump; defer the join off the signal so a
+	# slow handshake cannot stall the main thread and trip Windows AppHang.
+	_deferred_join.call_deferred(lobby_id)
+
+
+func _deferred_join(lobby_id: int) -> void:
 	var error := _join_lobby(lobby_id)
 	if error == ERR_ALREADY_IN_USE:
 		status_changed.emit("Leave the current game before joining another.")

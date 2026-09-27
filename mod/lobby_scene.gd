@@ -10,6 +10,9 @@ signal ready_requested(ready: bool)
 signal table_count_requested(count: int)
 signal shot_budget_requested(shots: int)
 signal run_vote_requested(field: String, choice: String, catalog_revision: int)
+signal clone_rounds_requested(enabled: bool)
+signal multiplayer_balls_requested(enabled: bool)
+signal expansion_set_requested(set_id: String, enabled: bool)
 signal start_requested
 signal return_requested
 signal return_vote_requested(approve: bool)
@@ -18,6 +21,7 @@ signal leave_requested
 signal close_requested
 
 const VoteOption = preload("lobby_vote_option.gd")
+const ExpansionRegistry = preload("sets/registry.gd")
 
 const INK = Color("eaf0e7")
 const MUTED = Color("8baeb2")
@@ -76,11 +80,13 @@ var _vote_catalogs: Dictionary = {}
 var _vote_buttons: Dictionary = {}
 var _vote_groups: Dictionary = {}
 var _header_plank: Panel
+var _expansion_checks: Dictionary = {}
 
 
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_apply_theme()
+	_ensure_expansion_toggles()
 	%Host.pressed.connect(func(): host_requested.emit())
 	%Rejoin.pressed.connect(func(): rejoin_requested.emit())
 	%Join.pressed.connect(_join)
@@ -92,6 +98,8 @@ func _ready():
 	%TableCount.value_changed.connect(func(value): table_count_requested.emit(int(value)))
 	%ShotBudget.value_changed.connect(func(value): shot_budget_requested.emit(int(value)))
 	%MatchMode.item_selected.connect(func(index): _vote_selected("match_mode", %MatchMode, index))
+	%CloneRounds.toggled.connect(func(enabled): clone_rounds_requested.emit(enabled))
+	%MultiplayerBalls.toggled.connect(func(enabled): multiplayer_balls_requested.emit(enabled))
 	%Ready.pressed.connect(_toggle_ready)
 	%Start.pressed.connect(func(): start_requested.emit())
 	%Return.pressed.connect(func(): return_requested.emit())
@@ -122,14 +130,20 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	%TableCount.max_value = maxi(maxi(1, connected), state.get("table_count", 1))
 	%TableCount.set_value_no_signal(state.get("table_count", 1))
 	%TableCount.set_block_signals(false)
-	%TableCount.editable = is_host and not started
 	%ShotBudget.set_value_no_signal(state.get("shot_budget", 6))
 	%ShotBudget.editable = is_host and not started
 	var multiple_tables: bool = state.get("table_count", 1) > 1
 	var racing = multiple_tables and state.get("match_mode", "race") == "race"
+	var single_table: bool = bool(state.get("single_table_difficulty", false))
+	%TableCount.editable = is_host and not started and not single_table
 	_render_run_votes(state, local_id, started)
 	%MatchMode.get_parent().visible = multiple_tables
 	%ShotBudget.get_parent().visible = multiple_tables and not racing
+	%CloneRounds.set_pressed_no_signal(bool(state.get("clone_rounds", false)))
+	%CloneRounds.disabled = not is_host or started
+	%MultiplayerBalls.set_pressed_no_signal(bool(state.get("multiplayer_balls", false)))
+	%MultiplayerBalls.disabled = not is_host or started
+	_render_expansion_toggles(state, is_host, started)
 	var summaries: Array = state.get("table_summaries", [])
 	var complete = (
 		started and not summaries.is_empty() and summaries.all(func(table): return table.finished)
@@ -141,6 +155,25 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 		"MATCH RESULTS" if complete else ("MATCH IN PROGRESS" if started else "YOUR LOBBY")
 	)
 	%Rules.text = "One table. One shared run. Take turns and shop together."
+	if single_table:
+		%Rules.text = (
+			"All Nighter (One Table): same long run as All Nighter, locked to a single shared table."
+		)
+	if state.get("clone_rounds", false):
+		%Rules.text = "Clone-table rounds: everyone plays the same layout at once; only the winner shops next."
+	if state.get("multiplayer_balls", false):
+		%Rules.text += (
+			" Opt-in multiplayer balls may appear rarely in the shop (never in the starting rack)."
+		)
+	var expansion_flags: Dictionary = ExpansionRegistry.normalize_flags(
+		state.get("expansion_sets", {})
+	)
+	if ExpansionRegistry.any_enabled(expansion_flags):
+		var names: Array = []
+		for set_id in ExpansionRegistry.SET_IDS:
+			if bool(expansion_flags.get(set_id, false)):
+				names.append(ExpansionRegistry.SET_LABELS[set_id])
+		%Rules.text += " Expansion sets (%s) may appear rarely in the shop." % ", ".join(names)
 	if racing:
 		%Rules.text = "Race to finish the run first. Each table has its own board and shared shop."
 	elif multiple_tables:
@@ -371,6 +404,45 @@ func set_friends(friends: Array):
 	if friends.is_empty():
 		popup.add_item("No online friends · share your room code")
 		popup.set_item_disabled(0, true)
+
+
+func _ensure_expansion_toggles() -> void:
+	if not _expansion_checks.is_empty():
+		return
+	var settings = %MultiplayerBalls.get_parent().get_parent()
+	var row = HBoxContainer.new()
+	row.name = "ExpansionSetting"
+	row.add_theme_constant_override("separation", 8)
+	var label = Label.new()
+	label.text = "Sets"
+	row.add_child(label)
+	var flow = HFlowContainer.new()
+	flow.name = "ExpansionSets"
+	flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 4)
+	for set_id in ExpansionRegistry.SET_IDS:
+		var check = CheckBox.new()
+		check.text = ExpansionRegistry.SET_LABELS[set_id]
+		check.focus_mode = Control.FOCUS_ALL
+		var captured = set_id
+		check.toggled.connect(
+			func(enabled): expansion_set_requested.emit(captured, enabled)
+		)
+		flow.add_child(check)
+		_expansion_checks[set_id] = check
+	row.add_child(flow)
+	settings.add_child(row)
+	settings.move_child(row, %MultiplayerBalls.get_parent().get_index() + 1)
+
+
+func _render_expansion_toggles(state: Dictionary, is_host: bool, started: bool) -> void:
+	_ensure_expansion_toggles()
+	var flags = ExpansionRegistry.normalize_flags(state.get("expansion_sets", {}))
+	for set_id in ExpansionRegistry.SET_IDS:
+		var check: CheckBox = _expansion_checks[set_id]
+		check.set_pressed_no_signal(bool(flags.get(set_id, false)))
+		check.disabled = not is_host or started
 
 
 func _join():

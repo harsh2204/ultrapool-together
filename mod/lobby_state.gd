@@ -3,6 +3,8 @@ extends RefCounted
 const CAPACITY = 8
 const DEFAULT_SHOT_BUDGET = 6
 const TeamVote = preload("team_vote.gd")
+const DifficultyCatalog = preload("difficulty_catalog.gd")
+const ExpansionRegistry = preload("sets/registry.gd")
 const RUN_FIELDS = ["deck", "difficulty", "match_mode"]
 const MATCH_MODES = [{"id": "race", "label": "Race"}, {"id": "score", "label": "Score PvP"}]
 
@@ -10,6 +12,9 @@ var host_id = 0
 var table_count = 1
 var shot_budget = DEFAULT_SHOT_BUDGET
 var match_mode = "race"
+var clone_rounds = false
+var multiplayer_balls = false
+var expansion_sets: Dictionary = {}
 var revision = 0
 var ready_generation = 0
 var started = false
@@ -42,6 +47,9 @@ func clear() -> void:
 	table_count = 1
 	shot_budget = DEFAULT_SHOT_BUDGET
 	match_mode = "race"
+	clone_rounds = false
+	multiplayer_balls = false
+	expansion_sets = ExpansionRegistry.default_flags()
 	revision = 0
 	ready_generation = 0
 	started = false
@@ -101,6 +109,8 @@ func set_table_count(sender: int, count: int) -> bool:
 		return _reject("Only the host can change the number of tables.")
 	if started:
 		return _reject("Table assignments are locked during a match.")
+	if _single_table_difficulty() and count != 1:
+		return _reject("This difficulty is limited to one shared table.")
 	if count < 1 or count > _players.size():
 		return _reject("Choose between one table and one table per player.")
 	if table_count == count:
@@ -145,6 +155,49 @@ func set_shot_budget(sender: int, count: int) -> bool:
 		last_error = ""
 		return true
 	shot_budget = count
+	_changed(true)
+	return true
+
+
+func set_clone_rounds(sender: int, enabled: bool) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can change clone-table rounds.")
+	if started:
+		return _reject("Clone-table rounds are locked during a match.")
+	if clone_rounds == enabled:
+		last_error = ""
+		return true
+	clone_rounds = enabled
+	_changed(true)
+	return true
+
+
+func set_multiplayer_balls(sender: int, enabled: bool) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can change multiplayer balls.")
+	if started:
+		return _reject("Multiplayer balls are locked during a match.")
+	if multiplayer_balls == enabled:
+		last_error = ""
+		return true
+	multiplayer_balls = enabled
+	_changed(true)
+	return true
+
+
+func set_expansion_set(sender: int, set_id: String, enabled: bool) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can change expansion sets.")
+	if started:
+		return _reject("Expansion sets are locked during a match.")
+	if set_id not in ExpansionRegistry.SET_IDS:
+		return _reject("Unknown expansion set.")
+	if expansion_sets.is_empty():
+		expansion_sets = ExpansionRegistry.default_flags()
+	if bool(expansion_sets.get(set_id, false)) == enabled:
+		last_error = ""
+		return true
+	expansion_sets[set_id] = enabled
 	_changed(true)
 	return true
 
@@ -234,6 +287,7 @@ func set_run_vote(sender: int, field: String, choice: String, catalog_revision: 
 	else:
 		votes[field] = choice
 	_changed(true)
+	_apply_difficulty_table_lock()
 	return true
 
 
@@ -299,6 +353,8 @@ func set_ready(sender: int, ready: bool, expected_generation: int = -1) -> bool:
 
 func can_start() -> bool:
 	if started or _players.size() < 2 or not _is_host(host_id) or _run_options.is_empty():
+		return false
+	if _single_table_difficulty() and table_count != 1:
 		return false
 	var occupied: Dictionary = {}
 	for player in _players.values():
@@ -402,6 +458,10 @@ func restore(state: Dictionary, new_host: int) -> bool:
 	table_count = state.table_count
 	shot_budget = state.shot_budget
 	match_mode = state.match_mode
+	clone_rounds = state.get("clone_rounds") == true
+	multiplayer_balls = state.get("multiplayer_balls") == true
+	if state.get("expansion_sets") is Dictionary:
+		expansion_sets = ExpansionRegistry.normalize_flags(state.expansion_sets)
 	revision = state.revision
 	ready_generation = state.ready_generation
 	started = state.started
@@ -551,6 +611,10 @@ func snapshot() -> Dictionary:
 		"table_count": table_count,
 		"shot_budget": shot_budget,
 		"match_mode": match_mode,
+		"clone_rounds": clone_rounds,
+		"multiplayer_balls": multiplayer_balls,
+		"expansion_sets": ExpansionRegistry.normalize_flags(expansion_sets),
+		"single_table_difficulty": _single_table_difficulty(),
 		"return_vote": return_vote,
 		"run_vote": _run_vote_snapshot(),
 		"capacity": CAPACITY,
@@ -645,9 +709,21 @@ func _clear_return_vote() -> void:
 	_return_vote.configure([])
 
 
+func _single_table_difficulty() -> bool:
+	var difficulty = resolved_run_selection().get("difficulty", "")
+	return DifficultyCatalog.forces_single_table(str(difficulty))
+
+
+func _apply_difficulty_table_lock() -> void:
+	if _single_table_difficulty() and table_count != 1:
+		table_count = 1
+		_fit_tables()
+
+
 func _changed(clear_ready: bool = false) -> void:
 	if not _run_options.is_empty():
 		match_mode = resolved_run_selection().get("match_mode", "race")
+		_apply_difficulty_table_lock()
 	if clear_ready:
 		ready_generation += 1
 		for player in _players.values():

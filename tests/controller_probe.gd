@@ -150,6 +150,66 @@ class ShopStub:
 		state = data.duplicate(true)
 		return true
 
+	func exclusive_shopper() -> int:
+		return 0
+
+	func set_exclusive_shopper(_id: int) -> void:
+		pass
+
+	func clear_exclusive_shopper() -> void:
+		pass
+
+
+class BallServiceStub:
+	extends Node
+	var catalog = null
+
+	func begin_session(_flags = null) -> void:
+		pass
+
+	func end_session() -> void:
+		pass
+
+	func prepare_shop() -> void:
+		pass
+
+	func bounty_shot() -> int:
+		return 0
+
+	func capture() -> Dictionary:
+		return {}
+
+	func display_signature(_state) -> Array:
+		return []
+
+	func valid_state(_state) -> bool:
+		return true
+
+	func apply_state(_state) -> bool:
+		return true
+
+	func blocks_shot_input() -> bool:
+		return false
+
+	func begin_shot(_shot: int, _player: int) -> bool:
+		return true
+
+	func finish_shot() -> void:
+		pass
+
+
+class SetVotingStub:
+	extends Node
+
+	func begin_session() -> void:
+		pass
+
+	func end_session() -> void:
+		pass
+
+	func handle_table_message(_actor: int, _message: Dictionary) -> void:
+		pass
+
 
 class PresenceStub:
 	extends Node
@@ -181,7 +241,7 @@ class RunStub:
 	func ready_for_input() -> bool:
 		return true
 
-	func start(_config: Dictionary, _run_state = null) -> Error:
+	func start(_config: Dictionary, _catalog = null, _run_state = null) -> Error:
 		starts += 1
 		return OK
 
@@ -247,6 +307,9 @@ func _controller():
 	controller.presence = PresenceStub.new()
 	controller.run_setup = RunStub.new()
 	controller.recovery = load(_base.path_join("table_recovery.gd")).new()
+	controller.multiplayer_balls = BallServiceStub.new()
+	controller.expansion_balls = BallServiceStub.new()
+	controller.set_voting = SetVotingStub.new()
 	controller.panel = PanelStub.new()
 	controller.panel.hide()
 	controller.pass_button = Button.new()
@@ -260,6 +323,9 @@ func _controller():
 		controller.presence,
 		controller.run_setup,
 		controller.recovery,
+		controller.multiplayer_balls,
+		controller.expansion_balls,
+		controller.set_voting,
 		controller.panel,
 		controller.pass_button,
 		controller.turn_label,

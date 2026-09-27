@@ -1,6 +1,7 @@
 extends "res://Game.gd"
 
 const PlayerInventory = preload("player_inventory_sync.gd")
+const TableSync = preload("table_sync.gd")
 
 var remote_ready = false
 var remote_shots = 0
@@ -73,6 +74,7 @@ func _ready() -> void:
 	_disable_gameplay(table)
 	table.score_display_diamond.set_process(true)
 	table.shots_info.set_process(true)
+	_enable_potted_rail(table.get_graveyard())
 	table.hide_end_round()
 	table.get_graveyard()._process(0.0)
 	playing = false
@@ -84,6 +86,7 @@ func _exit_tree() -> void:
 
 
 func _process(_delta: float) -> void:
+	_update_potted_rail_hover()
 	pass
 
 
@@ -251,6 +254,7 @@ func apply_table(data: Dictionary) -> void:
 			body.visuals.scale = state.visual_scale
 		if body.modulate != state.color:
 			body.modulate = state.color
+		body.set_process(simulate or state.player)
 		var basis: Basis = body.transform3d.global_transform.basis
 		if item_changed or spin_changed or _ball_bases.get(id) != basis:
 			body.ball.material.set_shader_parameter("rotation_x", basis.x)
@@ -261,6 +265,7 @@ func apply_table(data: Dictionary) -> void:
 			if body.is_targetable():
 				active_balls.append(body)
 			active_balls_include_untargetable.append(body)
+	_sync_potted_rail(data.balls)
 	for id in replicas.keys():
 		if not present.has(id):
 			var body = replicas[id]
@@ -503,3 +508,71 @@ func force_round_end():
 
 func shoot(_impulse):
 	pass
+
+func _enable_potted_rail(rail: Node) -> void:
+	if rail == null:
+		return
+	_resume_rail_node(rail)
+	rail._process(0.0)
+
+
+func _resume_rail_node(node: Node) -> void:
+	node.set_process(true)
+	node.set_process_input(true)
+	node.set_process_unhandled_input(true)
+	if node is Area2D:
+		node.monitoring = true
+		node.monitorable = true
+	if node is CollisionObject2D:
+		node.input_pickable = true
+	for child in node.get_children():
+		_resume_rail_node(child)
+
+
+func _sync_potted_rail(states: Array) -> void:
+	pocketed_balls.clear()
+	for state in states:
+		if not TableSync.ball_on_potted_rail(state):
+			continue
+		var body = replicas.get(state.id)
+		if is_instance_valid(body):
+			pocketed_balls.append(body)
+	var rail = table.get_graveyard()
+	if is_instance_valid(rail):
+		rail._process(0.0)
+
+func _update_potted_rail_hover() -> void:
+	if in_shop or in_menu or UIManager.is_popup_open():
+		return
+	var hit = _potted_rail_ball_at(get_global_mouse_position())
+	if hit != null:
+		select_ball(hit, hit.ball_item)
+		return
+	if is_instance_valid(selected_ball) and _is_potted_rail_body(selected_ball):
+		unselect_ball(selected_ball, selected_ball_item)
+
+func _is_potted_rail_body(body) -> bool:
+	return (
+		is_instance_valid(body)
+		and body.visible
+		and not body.is_player
+		and not body.alive
+		and body.ball_item != null
+	)
+
+func _potted_rail_ball_at(mouse: Vector2):
+	var best = null
+	var best_d2 = INF
+	for body in replicas.values():
+		if not _is_potted_rail_body(body):
+			continue
+		var radius = body.get_radius() if body.has_method("get_radius") else 12.0
+		var scale = body.visuals.scale.x if is_instance_valid(body.visuals) else 1.0
+		var hover_r = maxf(radius * maxf(scale, 0.35), 10.0)
+		var d2 = body.global_position.distance_squared_to(mouse)
+		if d2 <= hover_r * hover_r and d2 < best_d2:
+			best_d2 = d2
+			best = body
+	return best
+
+

@@ -233,10 +233,12 @@ func _check_native_resume() -> bool:
 	var wrong_seed: Dictionary = fixture_config.duplicate()
 	wrong_seed.seed += 1
 	_check(
-		mod.run_setup.start(wrong_seed, state) == ERR_INVALID_DATA,
+		mod.run_setup.start(wrong_seed, null, state) == ERR_INVALID_DATA,
 		"checkpoint from another run configuration is refused"
 	)
-	if not _check(mod.run_setup.start(fixture_config, state) == OK, "checkpoint resume starts"):
+	if not _check(
+		mod.run_setup.start(fixture_config, null, state) == OK, "checkpoint resume starts"
+	):
 		return false
 	var resumed_shop = func():
 		var game = get_node("/root/Global").gameManager

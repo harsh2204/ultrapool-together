@@ -174,6 +174,20 @@ func _run():
 	)
 	_check(game.player_info.money == completed_money, "completed table cannot spend money")
 	controller.finished = false
+	sync.set_exclusive_shopper(1)
+	_check(
+		not sync.handle_request({"action": "reroll", "revision": sync.capture().revision}, 2),
+		"non-winner cannot act during the winner-only shop"
+	)
+	_check(sync.last_error.findn("winner") >= 0, "winner-only rejection is explicit")
+	sync.clear_exclusive_shopper()
+	var reopened: Dictionary = sync.capture()
+	_check(
+		sync.handle_request({"action": "reroll", "revision": reopened.revision}, 2)
+		or sync.last_error.findn("money") >= 0
+		or sync.last_error.findn("changed") >= 0,
+		"shared shopping resumes after the winner-only shop clears"
+	)
 	_check_ready_departure(sync)
 	_finish(sync)
 

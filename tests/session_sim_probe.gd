@@ -232,6 +232,66 @@ class ShopStub:
 	func is_open() -> bool:
 		return false
 
+	func exclusive_shopper() -> int:
+		return 0
+
+	func set_exclusive_shopper(_id: int) -> void:
+		pass
+
+	func clear_exclusive_shopper() -> void:
+		pass
+
+
+class BallServiceStub:
+	extends Node
+	var catalog = null
+
+	func begin_session(_flags = null) -> void:
+		pass
+
+	func end_session() -> void:
+		pass
+
+	func prepare_shop() -> void:
+		pass
+
+	func bounty_shot() -> int:
+		return 0
+
+	func capture() -> Dictionary:
+		return {}
+
+	func display_signature(_state) -> Array:
+		return []
+
+	func valid_state(_state) -> bool:
+		return true
+
+	func apply_state(_state) -> bool:
+		return true
+
+	func blocks_shot_input() -> bool:
+		return false
+
+	func begin_shot(_shot: int, _player: int) -> bool:
+		return true
+
+	func finish_shot() -> void:
+		pass
+
+
+class SetVotingStub:
+	extends Node
+
+	func begin_session() -> void:
+		pass
+
+	func end_session() -> void:
+		pass
+
+	func handle_table_message(_actor: int, _message: Dictionary) -> void:
+		pass
+
 
 class PresenceStub:
 	extends Node
@@ -266,7 +326,7 @@ class RunStub:
 	func validate_config(config: Dictionary) -> bool:
 		return config.get("deck") is String and not config.deck.is_empty()
 
-	func start(_config: Dictionary, run_state = null) -> Error:
+	func start(_config: Dictionary, _catalog = null, run_state = null) -> Error:
 		starts.append(run_state)
 		return OK
 
@@ -374,6 +434,9 @@ func _spawn(id: int) -> Node:
 	controller.spectator = SpectatorStub.new()
 	controller.run_controls = RunControlsStub.new()
 	controller.recovery = recovery
+	controller.multiplayer_balls = BallServiceStub.new()
+	controller.expansion_balls = BallServiceStub.new()
+	controller.set_voting = SetVotingStub.new()
 	controller.panel = PanelStub.new()
 	controller.pass_button = Button.new()
 	controller.turn_label = Label.new()
@@ -388,6 +451,9 @@ func _spawn(id: int) -> Node:
 		controller.spectator,
 		controller.run_controls,
 		recovery,
+		controller.multiplayer_balls,
+		controller.expansion_balls,
+		controller.set_voting,
 		controller.panel,
 		controller.pass_button,
 		controller.turn_label,

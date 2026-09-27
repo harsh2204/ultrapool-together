@@ -4,6 +4,7 @@ const VERSION = "0.9.0"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
+const SNAPSHOT_IDLE_HEARTBEAT = 1.0
 const HUD_CONTENT = [16, 8, 18, 11]
 const HUD_OUTLINE = Color(0, 0, 0, 0.6)
 const HUD_TINTS = {
@@ -22,6 +23,10 @@ var run_setup: Node
 var spectator: Node
 var run_controls: Node
 var recovery: Node
+var multiplayer_balls: Node
+var expansion_balls: Node
+var set_voting: Node
+var bounty_race: Script
 var lobby_model: RefCounted
 var router: RefCounted
 var ui_root: Control
@@ -57,8 +62,18 @@ var snapshot_id = 0
 var last_guest_snapshot = 0
 var last_started_turn = -1
 var last_shop_state: Dictionary = {}
+const CloneRound = preload("clone_round.gd")
+var _clone_instances: Array = []
+var _clone_active = false
+var _clone_winner = 0
+var _clone_shop_armed = false
+var _clone_scores: Dictionary = {}
+var _shot_actor = 0
+var _was_in_shop = false
 var _last_phase: Array = []
 var _guest_phase: Array = []
+var _last_state_sig: Array = []
+var _snapshot_idle_time = 0.0
 var roster_time = 0.0
 var saw_table = false
 var _suspended_menu: Node
@@ -83,6 +98,9 @@ var _waiting_successor = 0
 var _waiting_deadline = 0
 var _lobby_received_at = 0
 var _prune_at = 0
+## Guest soft-reject window for transient bad table/shot snapshots.
+var bad_snapshot_grace_msec = 3000
+var _bad_snapshot_started_msec = -1
 
 
 func _ready():
@@ -100,6 +118,10 @@ func _ready():
 	spectator = load(base.path_join("table_spectator.gd")).new()
 	run_controls = load(base.path_join("run_controls.gd")).new()
 	recovery = load(base.path_join("table_recovery.gd")).new()
+	multiplayer_balls = load(base.path_join("multiplayer_balls.gd")).new()
+	expansion_balls = load(base.path_join("expansion_balls.gd")).new()
+	set_voting = load(base.path_join("set_voting.gd")).new()
+	bounty_race = load(base.path_join("bounty_race.gd"))
 	for service in [
 		transport,
 		adapter,
@@ -107,8 +129,11 @@ func _ready():
 		shop_sync,
 		presence,
 		run_setup,
+		multiplayer_balls,
+		expansion_balls,
 		spectator,
 		run_controls,
+		set_voting,
 		recovery
 	]:
 		add_child(service)
@@ -117,9 +142,23 @@ func _ready():
 	spectator.setup(self)
 	spectator.watch_changed.connect(_watch_changed)
 	run_controls.setup(self)
+	set_voting.setup(self)
+	if not multiplayer_balls.setup(self):
+		supported = false
+		_status("Multiplayer ball art is missing. Reinstall the complete mod package.")
+		return
+	if not expansion_balls.setup(self):
+		supported = false
+		_status("Expansion ball art is missing. Reinstall the complete mod package.")
+		return
 	presence.setup(self, transport, shop_sync)
 	shop_sync.request.connect(_shop_request)
 	_connect_transport()
+	var DifficultyCatalog = load(base.path_join("difficulty_catalog.gd"))
+	var ui = get_node_or_null("/root/UIManager")
+	DifficultyCatalog.register(
+		get_node_or_null("/root/BallDatabase"), ui.decks_menu if ui != null else null
+	)
 	if str(ProjectSettings.get_setting("application/config/version", "")) != GAME_VERSION:
 		supported = false
 		_status("This mod requires Ultrapool " + GAME_VERSION + ".")
@@ -222,6 +261,16 @@ func _build_ui():
 					"catalog_revision": catalog_revision
 				}
 			)
+	)
+	panel.clone_rounds_requested.connect(
+		func(enabled): _lobby_request({"action": "clone_rounds", "enabled": enabled})
+	)
+	panel.multiplayer_balls_requested.connect(
+		func(enabled): _lobby_request({"action": "multiplayer_balls", "enabled": enabled})
+	)
+	panel.expansion_set_requested.connect(
+		func(set_id, enabled):
+			_lobby_request({"action": "expansion_set", "set": set_id, "enabled": enabled})
 	)
 	panel.watch_requested.connect(_watch_table)
 	panel.return_vote_requested.connect(
@@ -536,6 +585,15 @@ func _apply_lobby_request(sender: int, message: Dictionary):
 				accepted = lobby_model.set_run_vote(
 					sender, message.field, message.choice, message.catalog_revision
 				)
+		"clone_rounds":
+			if message.get("enabled") is bool:
+				accepted = lobby_model.set_clone_rounds(sender, message.enabled)
+		"multiplayer_balls":
+			if message.get("enabled") is bool:
+				accepted = lobby_model.set_multiplayer_balls(sender, message.enabled)
+		"expansion_set":
+			if message.get("set") is String and message.get("enabled") is bool:
+				accepted = lobby_model.set_expansion_set(sender, message.set, message.enabled)
 		"start":
 			_start_match(sender)
 			return
@@ -568,6 +626,7 @@ func _lobby_error(recipient: int, reason: String):
 
 
 func _broadcast_lobby():
+	bounty_race.resolve(table_summaries, _score_match())
 	lobby = lobby_model.snapshot()
 	lobby.table_summaries = table_summaries.duplicate(true)
 	lobby.match = match_id
@@ -593,6 +652,9 @@ func _start_match(sender: int):
 		_status("Return to the main menu before starting the match.")
 		return
 	run_config = run_setup.capture_config(lobby_model.resolved_run_selection())
+	run_config["multiplayer_balls"] = bool(lobby_model.multiplayer_balls)
+	run_config["expansion_sets"] = lobby_model.expansion_sets.duplicate(true)
+	run_config["clone_rounds"] = bool(lobby_model.clone_rounds)
 	if not run_setup.validate_config(run_config):
 		_status("The voted starting set or difficulty is unavailable. Recreate the lobby.")
 		return
@@ -614,6 +676,9 @@ func _start_match(sender: int):
 				"table": table,
 				"leader_id": lobby_model.leader_for_table(table),
 				"score": 0.0,
+				"base_score": 0.0,
+				"bounty_shot": 0,
+				"bounty_bonus": 0.0,
 				"shots_used": 0,
 				"shot_budget": lobby_model.shot_budget,
 				"pending": false,
@@ -680,6 +745,9 @@ func _begin_table(config: Dictionary, resume: Dictionary = {}, late: bool = fals
 	last_shop_state.clear()
 	_last_phase.clear()
 	_guest_phase.clear()
+	_last_state_sig.clear()
+	_snapshot_idle_time = 0.0
+	_clear_bad_snapshot_streak()
 	presence.clear()
 	_waiting_for = 0
 	_waiting_successor = 0
@@ -694,15 +762,31 @@ func _begin_table(config: Dictionary, resume: Dictionary = {}, late: bool = fals
 		if not resume.checkpoint.is_empty():
 			run_state = recovery.run_state_from(resume.checkpoint)
 	active = true
+	if bool(lobby.get("multiplayer_balls", config.get("multiplayer_balls", false))):
+		multiplayer_balls.begin_session()
+	else:
+		# Keep registration for probes, but leave can_drop/shop injection off.
+		multiplayer_balls.end_session()
+	var expansion_flags = lobby.get("expansion_sets", config.get("expansion_sets", {}))
+	expansion_balls.begin_session(expansion_flags)
 	if not is_table_host() and not table_sync.begin_guest(config):
 		fail.call("Could not create the table view. Return to the main menu and try again.")
 		return
 	adapter.begin_session(self)
 	shop_sync.begin_session(self)
+	set_voting.begin_session()
+	_clear_clone_shop_gate()
+	_was_in_shop = false
+	_begin_clone_round()
 	run_controls.begin_session()
 	if is_table_host():
 		recovery.reset_leader()
-		if run_setup.start(config, run_state) != OK:
+		var catalog = (
+			multiplayer_balls.catalog
+			if bool(lobby.get("multiplayer_balls", config.get("multiplayer_balls", false)))
+			else null
+		)
+		if run_setup.start(config, catalog, run_state) != OK:
 			fail.call("Could not start the table's run.")
 			return
 	else:
@@ -806,7 +890,14 @@ func _end_table():
 	_starting_players.clear()
 	_restore_menu()
 	presence.clear()
+	_clear_clone_shop_gate()
+	_clone_active = false
+	_clone_instances.clear()
+	_clone_scores.clear()
+	set_voting.end_session()
 	shop_sync.end_session()
+	multiplayer_balls.end_session()
+	expansion_balls.end_session()
 	adapter.end_session()
 	table_sync.end_guest()
 	run_setup.cancel()
@@ -1253,6 +1344,7 @@ func _process(delta):
 			finished = true
 			finish_reason = "Run completed" if state.run_won else "Run ended"
 		state_time += delta
+		_sync_clone_shop_phase(bool(state.get("in_shop", false)))
 		if state_time >= 0.15:
 			state_time = 0.0
 			_publish_state()
@@ -1262,8 +1354,81 @@ func _process(delta):
 		var snapshot_interval = SHOP_SNAPSHOT_INTERVAL if state.in_shop else SNAPSHOT_INTERVAL
 		if snapshot_time >= snapshot_interval:
 			snapshot_time = 0.0
-			_publish_snapshot()
+			if state.in_shop or not latest_state.get("settled", true):
+				_snapshot_idle_time = 0.0
+				_publish_snapshot()
+			else:
+				_snapshot_idle_time += snapshot_interval
+				if _snapshot_idle_time >= SNAPSHOT_IDLE_HEARTBEAT:
+					_snapshot_idle_time = 0.0
+					_publish_snapshot()
 	_update_hud()
+
+
+func _clone_member_ids() -> Array:
+	return _members(table_id).map(func(player): return int(player.id))
+
+
+func _clone_enabled_for_table() -> bool:
+	return CloneRound.should_run(lobby, _clone_member_ids())
+
+
+func _begin_clone_round() -> void:
+	if not is_table_host() or not _clone_enabled_for_table():
+		_clone_active = false
+		_clone_instances.clear()
+		_clone_scores.clear()
+		return
+	_clone_instances = CloneRound.assign_instances(_clone_member_ids())
+	_clone_scores.clear()
+	for entry in _clone_instances:
+		_clone_scores[int(entry.player_id)] = 0.0
+	_clone_active = true
+	_clone_winner = 0
+	_status("Clone table round - everyone plays the same layout on their own instance.")
+
+
+func _finalize_clone_round() -> void:
+	if not _clone_active:
+		return
+	for entry in _clone_instances:
+		var player_id = int(entry.player_id)
+		CloneRound.mark_finished(
+			_clone_instances, player_id, float(_clone_scores.get(player_id, entry.score))
+		)
+	CloneRound.finish_all(_clone_instances)
+	_clone_winner = CloneRound.pick_winner(_clone_instances)
+	_clone_active = false
+	if _clone_winner != 0:
+		shop_sync.set_exclusive_shopper(_clone_winner)
+		_clone_shop_armed = true
+		_status("Winner shops alone - %s won the clone round." % _player_name(_clone_winner))
+	else:
+		shop_sync.clear_exclusive_shopper()
+		_clone_shop_armed = false
+
+
+func _clear_clone_shop_gate() -> void:
+	if _clone_shop_armed or shop_sync.exclusive_shopper() != 0:
+		shop_sync.clear_exclusive_shopper()
+	_clone_shop_armed = false
+	_clone_winner = 0
+
+
+func _sync_clone_shop_phase(in_shop: bool) -> void:
+	if not active or not is_table_host():
+		_was_in_shop = in_shop
+		return
+	if in_shop and not _was_in_shop:
+		_finalize_clone_round()
+	elif not in_shop and _was_in_shop:
+		_clear_clone_shop_gate()
+		_begin_clone_round()
+	_was_in_shop = in_shop
+
+
+func _clear_bad_snapshot_streak() -> void:
+	_bad_snapshot_started_msec = -1
 
 
 func can_control() -> bool:
@@ -1325,9 +1490,17 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		or vector.length() > 200.1
 	):
 		return false
+	if multiplayer_balls != null and multiplayer_balls.blocks_shot_input():
+		return false
 	shot_start_score = adapter.score()
 	var starting_table = table_sync.capture()
-	if not adapter.shoot(vector):
+	if not adapter.shoot(
+		vector,
+		func():
+			if not multiplayer_balls.begin_shot(used_shots + 1, player):
+				return false
+			return expansion_balls.begin_shot(used_shots + 1, player)
+	):
 		return false
 	shot_pending = true
 	settle_time = 0.0
@@ -1347,6 +1520,8 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 
 
 func _finish_shot():
+	multiplayer_balls.finish_shot()
+	expansion_balls.finish_shot()
 	total_score += maxf(0.0, adapter.shot_score() - shot_start_score)
 	used_shots += 1
 	shot_pending = false
@@ -1430,15 +1605,26 @@ func _update_hud():
 	elif shot_pending or awaiting_shot_turn >= 0:
 		turn_text = "Shot in play"
 	elif latest_state.get("in_shop", false):
-		turn_text = "Shared shop · Table %d" % (table_id + 1)
+		var winner = int(latest_state.get("clone_round", {}).get("winner_id", _clone_winner))
+		if winner != 0:
+			turn_text = (
+				"Winner shops alone"
+				if winner == transport.local_id()
+				else "Winner shops alone - watching %s" % _player_name(winner)
+			)
+		else:
+			turn_text = "Shared shop · Table %d" % (table_id + 1)
 	elif not latest_state.get("table_active", false):
 		turn_text = "Waiting for the table"
 	else:
-		turn_text = (
-			"Your turn"
-			if turn_owner == transport.local_id()
-			else _player_name(turn_owner) + "'s turn"
-		)
+		if _clone_active or bool(latest_state.get("clone_round", {}).get("active", false)):
+			turn_text = "Clone table round - play your instance"
+		else:
+			turn_text = (
+				"Your turn"
+				if turn_owner == transport.local_id()
+				else _player_name(turn_owner) + "'s turn"
+			)
 	if _race_match():
 		score_text = (
 			"Table %d · Round %d/%d"
@@ -1500,6 +1686,8 @@ func _publish_state(
 ):
 	if not active or not is_table_host():
 		return
+	multiplayer_balls.prepare_shop()
+	expansion_balls.prepare_shop()
 	latest_state = adapter.game_data()
 	latest_state.run_won = latest_state.run_won and finished
 	latest_state.can_shoot = latest_state.can_shoot and run_setup.ready_for_input() and not finished
@@ -1511,12 +1699,39 @@ func _publish_state(
 			"pending": shot_pending,
 			"total_score": total_score,
 			"used_shots": used_shots,
+			"bounty_shot": multiplayer_balls.bounty_shot(),
+			"multiplayer_balls": multiplayer_balls.capture(),
+			"expansion_balls": expansion_balls.capture(),
+			"clone_round":
+			CloneRound.snapshot(_clone_instances, _clone_active, _clone_winner, _clone_shop_armed),
 			"finished": finished,
 			"finish_reason": finish_reason
 		},
 		true
 	)
-	_table_send(latest_state, target)
+	var balls_state: Dictionary = latest_state.get("multiplayer_balls", {})
+	var expansion_state: Dictionary = latest_state.get("expansion_balls", {})
+	var state_sig = [
+		latest_state.get("available"),
+		latest_state.get("settled"),
+		latest_state.get("in_shop"),
+		latest_state.get("game_over"),
+		latest_state.get("round"),
+		latest_state.get("shots_left"),
+		latest_state.get("score"),
+		latest_state.get("bounty_shot"),
+		turn_owner,
+		shot_number,
+		shot_pending,
+		used_shots,
+		finished,
+		multiplayer_balls.display_signature(balls_state),
+		expansion_balls.display_signature(expansion_state)
+	]
+	if target != 0 or state_sig != _last_state_sig:
+		if target == 0:
+			_last_state_sig = state_sig
+		_table_send(latest_state, target)
 	# A reliable send failure may synchronously change membership or end this
 	# session. Such changes invalidate shop consent even without an await.
 	if not active or not is_table_host():
@@ -1560,8 +1775,12 @@ func _publish_checkpoint():
 func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary = {}):
 	if not active or not is_table_host() or not adapter.game_data().available:
 		return
+	var scene = table_sync.capture()
+	if not table_sync.valid_capture(scene):
+		push_warning("Together: skipped publishing invalid table capture")
+		return
 	snapshot_id += 1
-	var message = {"kind": "snapshot", "id": snapshot_id, "scene": table_sync.capture()}
+	var message = {"kind": "snapshot", "id": snapshot_id, "scene": scene}
 	if not shop.is_empty():
 		message["shop"] = shop
 	_table_send(message, target, reliable)
@@ -1627,6 +1846,9 @@ func _record_summary(table: int, state: Dictionary):
 		"table": table,
 		"leader_id": _leader(table),
 		"score": state.total_score,
+		"base_score": state.total_score,
+		"bounty_shot": int(state.get("bounty_shot", 0)),
+		"bounty_bonus": 0.0,
 		"shots_used": state.used_shots,
 		"shot_budget": lobby.shot_budget,
 		"pending": state.pending,
@@ -1652,7 +1874,8 @@ func _record_summary(table: int, state: Dictionary):
 				_finish_count += 1
 				summary.finish_order = _finish_count
 			if (
-				previous.score == summary.score
+				previous.get("base_score", previous.score) == summary.base_score
+				and int(previous.get("bounty_shot", 0)) == summary.bounty_shot
 				and previous.shots_used == summary.shots_used
 				and previous.finished == summary.finished
 				and previous.status == summary.status
@@ -1765,6 +1988,9 @@ func _received_table(actor: int, message: Dictionary):
 	if not active or player_table(actor) != table_id:
 		return
 	var kind = message.get("kind", "")
+	if kind == "set_vote":
+		set_voting.handle_table_message(actor, message)
+		return
 	if is_table_host():
 		if (
 			kind == "shot"
@@ -1778,6 +2004,8 @@ func _received_table(actor: int, message: Dictionary):
 			var accepted = _pass(actor, message.turn)
 			_table_send({"kind": "shot_result", "turn": message.turn, "accepted": accepted}, actor)
 		elif kind == "shop_request":
+			multiplayer_balls.prepare_shop()
+			expansion_balls.prepare_shop()
 			var accepted = not finished and shop_sync.handle_request(message, actor)
 			var shop_state = shop_sync.capture()
 			var captured_lobby_revision: int = lobby.get("revision", -1)
@@ -1793,6 +2021,9 @@ func _received_table(actor: int, message: Dictionary):
 			)
 			# Share the final capture unless sending the result changed membership.
 			_publish_state(0, shop_state, captured_lobby_revision)
+		elif kind == "ball_call":
+			multiplayer_balls.handle_call(actor, message)
+			_publish_state()
 		elif kind == "sync_request":
 			_publish_state(actor)
 		return
@@ -1843,6 +2074,19 @@ func _received_table(actor: int, message: Dictionary):
 		used_shots = message.used_shots
 		finished = message.finished
 		finish_reason = message.finish_reason
+		if message.get("multiplayer_balls") is Dictionary:
+			multiplayer_balls.apply_state(message.multiplayer_balls)
+		if message.get("expansion_balls") is Dictionary:
+			expansion_balls.apply_state(message.expansion_balls)
+		if message.get("clone_round") is Dictionary:
+			var clone: Dictionary = message.clone_round
+			_clone_active = bool(clone.get("active", false))
+			_clone_winner = int(clone.get("winner_id", 0))
+			_clone_shop_armed = bool(clone.get("shop_armed", false))
+			if _clone_shop_armed and _clone_winner != 0:
+				shop_sync.set_exclusive_shopper(_clone_winner)
+			elif not _clone_shop_armed:
+				shop_sync.clear_exclusive_shopper()
 		if shot_pending or awaiting_shot_turn != shot_number:
 			awaiting_shot_turn = -1
 	elif (
@@ -1872,6 +2116,7 @@ func _received_table(actor: int, message: Dictionary):
 				_bad_table("shop")
 				return
 			_guest_phase = phase
+		_clear_bad_snapshot_streak()
 		last_guest_snapshot = message.id
 
 
@@ -1882,6 +2127,18 @@ func _snapshot_phase(scene: Dictionary) -> Array:
 
 
 func _bad_table(part: String):
+	if part == "shop":
+		_leave()
+		_status("The table host sent an incompatible " + part + " update.")
+		return
+	var now = Time.get_ticks_msec()
+	if _bad_snapshot_started_msec < 0:
+		_bad_snapshot_started_msec = now
+	var elapsed = now - _bad_snapshot_started_msec
+	push_warning("Together: skipping incompatible %s update (streak %d ms)" % [part, elapsed])
+	if elapsed < bad_snapshot_grace_msec:
+		return
+	_clear_bad_snapshot_streak()
 	_leave()
 	_status("The table host sent an incompatible " + part + " update.")
 
@@ -1906,6 +2163,25 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 	for key in ["round", "shots_left", "used_shots", "run_goal_rounds"]:
 		if not message.get(key) is int or message[key] < 0:
 			return false
+	if (
+		message.has("bounty_shot")
+		and (
+			not message.get("bounty_shot") is int
+			or message.bounty_shot < 0
+			or message.bounty_shot > message.used_shots
+		)
+	):
+		return false
+	if (
+		message.has("multiplayer_balls")
+		and not multiplayer_balls.valid_state(message.get("multiplayer_balls"))
+	):
+		return false
+	if (
+		message.has("expansion_balls")
+		and not expansion_balls.valid_state(message.get("expansion_balls"))
+	):
+		return false
 	return (
 		_number(message.get("score"))
 		and _number(message.get("total_score"))
