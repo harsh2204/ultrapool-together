@@ -23,6 +23,7 @@ Use this skill from a checkout of this repository. Read [AGENTS.md](../../../AGE
 - Distinguish durable state from transient animation. A ball's `flaming` flag does not represent a fire patch on the floor. A dynamic hole is not a fixed pocket just because both occur in one native Array. Do not replay native scoring, spawning, collision effects, or saves on a replica.
 - Preserve existing native item nodes, focus, drags, animation, and immediate pending feedback. Update changed properties. Audit inherited setters, `_ready`, timers, signals, scene construction, and saves for side effects before calling them from packet/frame paths.
 - Treat arrays and resources returned by PackedScene/exported-property readers as borrowed. Copy mutable containers before retaining them, and replace owned references during teardown instead of clearing a native scene's shared array. Exercise setup → dispose → setup; a single successful first hydration misses these ownership bugs.
+- For native catalog labels, distinguish identity, translation keys, stored fields, and computed getters. Translate a valid native key before deciding it is unusable; a key-looking string is not an invalid label. Give mod clones an explicit presentation rule by registered ID when a native getter would otherwise return the base title; assigning a field does not replace that getter. Use the catalog-label checks in [regressions and validation](references/regressions-and-validation.md).
 - Define cache/queue bounds and invalidation at shot, round, scene, match, disconnect, and rematch boundaries as appropriate. A targeted resync must not consume a reliable broadcast still owed to other clients.
 
 ## Verify behavior at the right seam
@@ -38,6 +39,8 @@ Read [regressions and validation](references/regressions-and-validation.md) and 
 Before native runtime work, follow the current authorization in AGENTS.md and the session. Use the existing Capture-Screens harness for rendering; extend shared fixtures instead of inventing a launcher. Do not run standalone Godot probes, headless mode, concurrent instances, or GDRE as a substitute for authorization. Continue useful static work when runtime execution is unavailable.
 
 For a bug fix, the fixture must reach the former failure through the relevant production boundary. Explain why it would fail before the change. Do not seed the desired final state and then claim to have tested the interaction that creates it. Run appropriate checks once; expand only for failures, changed scope, or unresolved concerns.
+
+For catalog UI changes, obtain options from the production catalog builder and compare every generated visible label with the native resource's expected localized name, plus the explicit name of each mod variant. Handwritten friendly-label fixtures can cover layout but bypass catalog regressions. Check label meaning, variant distinction, and actual rendered text fit; nonempty text or in-bounds controls do not establish that the complete label is readable. Inspect the corresponding gallery for visible text and clipping.
 
 ## Deliver and maintain
 

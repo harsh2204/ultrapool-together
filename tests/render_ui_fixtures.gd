@@ -21,6 +21,15 @@ const MAIN_FIELDS = [
 var checks: Array[Dictionary] = []
 
 
+class AllUnlockedRunSetup:
+	extends "../mod/run_setup.gd"
+
+	# Substitute only isolated profile progression. Resource discovery, Together
+	# registration, label resolution, translation, filtering and sorting stay real.
+	func _available_to_host(resource: Resource) -> bool:
+		return bool(resource.get("can_be_chosen"))
+
+
 class OfflineTransport:
 	extends Node
 
@@ -49,6 +58,7 @@ class OfflineTransport:
 
 
 func check_native_run_votes(mod: Node, capture: Callable) -> void:
+	await _check_native_play_menu(mod, capture)
 	var saved = _save(mod)
 	var previous_model = mod.lobby_model
 	mod.active = false
@@ -76,6 +86,7 @@ func check_native_run_votes(mod: Node, capture: Callable) -> void:
 		mod.panel.show()
 		mod.panel.set_block_signals(false)
 		mod._broadcast_lobby()
+		await _check_difficulty_labels(mod, mod.lobby, "host-unlocked catalog")
 		for field in ["deck", "difficulty", "match_mode"]:
 			for player in [1, 2]:
 				mod.lobby_model.set_ready(player, true)
@@ -129,6 +140,123 @@ func check_native_run_votes(mod: Node, capture: Callable) -> void:
 		)
 	mod.lobby_model = previous_model
 	_restore(mod, saved)
+
+
+func _check_native_play_menu(mod: Node, capture: Callable) -> void:
+	var global_node = mod.get_node("/root/Global")
+	var saves = mod.get_node("/root/SaveManager")
+	var ui = mod.get_node("/root/UIManager")
+	var menu = ui.decks_menu
+	if not _record(
+		(
+			saves.run_state == null
+			and global_node.chosen_run_state == null
+			and mod.run_setup.at_main_menu()
+			and not menu.is_open
+			and ui.active_popups.is_empty()
+		),
+		"native Play fixture starts at an idle menu with no saved or selected run"
+	):
+		return
+	var original_array: Array = menu.difficulties
+	var original_difficulties: Array = menu.difficulties.duplicate()
+	var original_panels: Array = menu.difficulty_panels.duplicate()
+	var original_children: Array = menu.diff_scroll_items.get_children()
+	var original_pips: Dictionary = {}
+	for panel in menu.decks_panels:
+		original_pips[panel.get_instance_id()] = panel.diff_pips.duplicate()
+	var aligned: bool = (
+		original_difficulties.size() == original_panels.size()
+		and original_children == original_panels
+		and original_difficulties.size() > 0
+	)
+	for pips in original_pips.values():
+		aligned = aligned and pips.size() == original_difficulties.size()
+	_record(aligned, "native difficulty arrays, panels and every deck's pips remain aligned")
+	for repeat in 2:
+		mod.run_setup.available_choices()
+	var preserved: bool = (
+		is_same(menu.difficulties, original_array)
+		and menu.difficulties == original_difficulties
+		and menu.difficulty_panels == original_panels
+		and menu.diff_scroll_items.get_children() == original_children
+	)
+	for panel in menu.decks_panels:
+		preserved = preserved and panel.diff_pips == original_pips[panel.get_instance_id()]
+	_record(
+		preserved,
+		"multiplayer catalog registration preserves native menu arrays and control identities"
+	)
+	if not aligned or not preserved:
+		return  # Do not call native index-sensitive UI with a known broken fixture.
+	var saved = {
+		"index_deck": menu.index_deck,
+		"index_diff": menu.index_diff,
+		"tscroll": menu.tscroll,
+		"scroll": menu.scroll,
+		"tscroll_diff": menu.tscroll_diff,
+		"scroll_diff": menu.scroll_diff,
+		"seed_active": menu.seed_menu.seed_toggle.active,
+		"seed_text": menu.seed_menu.seed_edit.text,
+		"seed_visible": menu.seed_menu.seed_edit.visible,
+		"seed_warn": menu.seed_menu.seed_warn.visible,
+		"paused": mod.get_tree().paused
+	}
+	global_node.main_menu._on_play_button_pressed()
+	var opened: bool = await _wait_native_menu(
+		mod,
+		func():
+			return (
+				menu.is_open
+				and menu.canvas.visible
+				and not menu.just_opened_or_closed
+				and menu.animation_offset == 0.0
+				and menu.underlay_bg.self_modulate.a > 0.65
+			)
+	)
+	_record(
+		opened and ui.active_popups.has(menu),
+		"native Play callback opens the complete decks and difficulty menu"
+	)
+	if opened:
+		await capture.call(
+			"native-play-menu",
+			"Native Play menu remains functional after multiplayer difficulty registration."
+		)
+		menu._on_close_button_pressed()
+	var closed: bool = await _wait_native_menu(
+		mod,
+		func():
+			return not menu.is_open and not menu.canvas.visible and not ui.active_popups.has(menu)
+	)
+	_record(closed, "native close callback dismisses the Play menu without stale popup state")
+	if not closed:
+		menu.just_opened_or_closed = false
+		menu.instant_close_menu()
+	for field in ["index_deck", "index_diff", "tscroll", "scroll", "tscroll_diff", "scroll_diff"]:
+		menu.set(field, saved[field])
+	menu.seed_menu.seed_toggle.update_state(saved.seed_active)
+	menu.seed_menu.seed_edit.text = saved.seed_text
+	menu.seed_menu.seed_edit.visible = saved.seed_visible
+	menu.seed_menu.seed_warn.visible = saved.seed_warn
+	menu.refresh_play_button()
+	ui.update_pause()
+	_record(
+		(
+			mod.get_tree().paused == saved.paused
+			and saves.run_state == null
+			and global_node.chosen_run_state == null
+			and mod.run_setup.at_main_menu()
+		),
+		"native Play fixture restores menu state without creating or starting a run"
+	)
+
+
+func _wait_native_menu(mod: Node, ready: Callable) -> bool:
+	var deadline = Time.get_ticks_msec() + 2000
+	while not ready.call() and Time.get_ticks_msec() < deadline:
+		await mod.get_tree().process_frame
+	return ready.call()
 
 
 func _check_vote_cards(mod: Node, field: String, choice: String) -> void:
@@ -398,18 +526,23 @@ func _capture_full_catalog(mod: Node, capture: Callable) -> void:
 	# unlocks, so an empty isolated save still exercises every selectable native card.
 	var state = _lobby([0, 0, 1, 1, 2, 2, 3, 3], 4)
 	var database = mod.get_node("/root/BallDatabase")
+	var saved_locale = TranslationServer.get_locale()
+	TranslationServer.set_locale("en")
+	var available: Dictionary = _all_native_choices(mod)
 	var catalog: Dictionary = state.run_vote.options
-	catalog.deck = []
-	catalog.difficulty = []
-	for resource in database.id_to_deck.values():
-		var deck_id = str(resource.id)
-		if resource.can_be_chosen and SetRegistry.is_native_lobby_deck(deck_id):
-			catalog.deck.append({"id": deck_id, "label": tr(str(resource.name))})
+	catalog.deck = available.deck
+	catalog.difficulty = available.difficulty
+	var expected_ids: Array = []
 	for resource in database.id_to_difficulty.values():
 		if resource.can_be_chosen:
-			catalog.difficulty.append({"id": str(resource.id), "label": tr(str(resource.name))})
-	for field in ["deck", "difficulty"]:
-		catalog[field].sort_custom(func(a, b): return a.id < b.id)
+			expected_ids.append(str(resource.id))
+	var actual_ids: Array = catalog.difficulty.map(func(entry): return entry.id)
+	expected_ids.sort()
+	actual_ids.sort()
+	_record(
+		actual_ids == expected_ids,
+		"production catalog includes every selectable native and Together difficulty exactly once"
+	)
 	_record(catalog.deck.size() == 8, "full native card fixture includes all eight starting sets")
 	_record(
 		catalog.deck.all(func(entry): return SetRegistry.is_native_lobby_deck(entry.id)),
@@ -430,6 +563,7 @@ func _capture_full_catalog(mod: Node, capture: Callable) -> void:
 		)
 	)
 	if catalog.deck.is_empty() or catalog.difficulty.is_empty():
+		TranslationServer.set_locale(saved_locale)
 		return
 	state.run_vote.catalog_revision += 1
 	state.can_start = false
@@ -443,6 +577,7 @@ func _capture_full_catalog(mod: Node, capture: Callable) -> void:
 		}
 	_recount_votes(state)
 	mod.panel.render(state, 1, true)
+	await _check_difficulty_labels(mod, state, "complete English catalog")
 	await mod.get_tree().process_frame
 	for field in ["deck", "difficulty"]:
 		var seen: Array[int] = []
@@ -481,6 +616,9 @@ func _capture_full_catalog(mod: Node, capture: Callable) -> void:
 		"lobby-full-native-catalog",
 		"Every native starting-set card and difficulty with eight players across four tables."
 	)
+	await _capture_localized_catalog(mod, state, capture)
+	TranslationServer.set_locale("en")
+	mod.panel.render(state, 1, true)
 	var selected_deck: String = catalog.deck[0].id
 	var selected_difficulty: String = catalog.difficulty[0].id
 	for player in state.players:
@@ -506,6 +644,147 @@ func _capture_full_catalog(mod: Node, capture: Callable) -> void:
 		"lobby-eight-player-consensus",
 		"Eight-player agreement remains visible from a guest's view."
 	)
+	TranslationServer.set_locale(saved_locale)
+	await mod.get_tree().process_frame
+	_record(
+		TranslationServer.get_locale() == saved_locale,
+		"difficulty fixture restores original locale"
+	)
+
+
+func _all_native_choices(mod: Node) -> Dictionary:
+	var setup = AllUnlockedRunSetup.new()
+	mod.add_child(setup)
+	var result = setup.available_choices()
+	setup.free()
+	return result
+
+
+func _check_difficulty_labels(mod: Node, state: Dictionary, context: String) -> void:
+	var database = mod.get_node("/root/BallDatabase")
+	var difficulty_catalog = preload("../mod/difficulty_catalog.gd")
+	var entries: Array = state.run_vote.options.difficulty
+	mod.panel.render(state, 1, true)
+	await mod.get_tree().process_frame
+	await mod.get_tree().process_frame
+	var together_label = ""
+	var native_labels: Array = []
+	for entry in entries:
+		var resource = database.id_to_difficulty.get(entry.id)
+		if not _record(resource != null, context + ": difficulty ID resolves to native resource"):
+			continue
+		var expected: String
+		if entry.id == difficulty_catalog.together_nighter_id():
+			expected = difficulty_catalog.TOGETHER_ALL_NIGHTER_TITLE
+			together_label = str(entry.label)
+		else:
+			expected = str(TranslationServer.translate(str(resource.name)))
+			native_labels.append(str(entry.label))
+		_record(
+			(
+				entry.label == expected
+				and entry.label != entry.id
+				and not str(entry.label).begins_with("DIFF_")
+			),
+			(
+				context
+				+ ": "
+				+ entry.id
+				+ " uses its native translated name or explicit Together title"
+			)
+		)
+		var card = mod.panel.vote_button("difficulty", entry.id)
+		if not _record(card != null, context + ": " + entry.id + " has a real difficulty card"):
+			continue
+		_record(
+			(
+				card._label.text == expected
+				and card.accessibility_name == expected
+				and card.tooltip_text.begins_with(expected)
+			),
+			context + ": " + entry.id + " card, tooltip and accessible label preserve the full name"
+		)
+		var title: Label = card._label
+		var fits = (
+			title.get_line_count() > 0
+			and title.get_visible_line_count() >= title.get_line_count()
+			and title.size.y + 1.0 >= title.get_line_count() * title.get_line_height()
+			and Rect2(Vector2.ZERO, card.size).encloses(title.get_rect())
+			and title.position.y + title.size.y <= card.size.y - 22.0
+		)
+		if not fits:
+			print(
+				"NATIVE_DIFFICULTY_CLIP ",
+				JSON.stringify(
+					{
+						"context": context,
+						"id": entry.id,
+						"text": title.text,
+						"size": str(title.size),
+						"card_size": str(card.size),
+						"lines": title.get_line_count(),
+						"visible_lines": title.get_visible_line_count(),
+						"line_height": title.get_line_height(),
+						"font_size": title.get_theme_font_size("font_size")
+					}
+				)
+			)
+		_record(
+			fits,
+			context + ": " + entry.id + " title lines fit without clipping or escaping the card"
+		)
+		var selected = state.duplicate(true)
+		selected.run_vote.selected.difficulty = entry.id
+		mod.panel.render(selected, 1, true)
+		var result: String = mod.panel.get_node("%RunSelection").text
+		_record(
+			expected in result and not str(entry.id) in result,
+			context + ": selected result shows the translated difficulty name"
+		)
+	if not together_label.is_empty():
+		_record(
+			not together_label in native_labels,
+			context + ": Together difficulty is distinct from every native label"
+		)
+	mod.panel.render(state, 1, true)
+
+
+func _capture_localized_catalog(mod: Node, english: Dictionary, capture: Callable) -> void:
+	var english_labels: Dictionary = {}
+	for entry in english.run_vote.options.difficulty:
+		english_labels[entry.id] = entry.label
+	var locale = ""
+	var translated: Dictionary = {}
+	var locales = TranslationServer.get_loaded_locales()
+	locales.sort()
+	for candidate in locales:
+		if str(candidate).begins_with("en"):
+			continue
+		TranslationServer.set_locale(candidate)
+		var available = _all_native_choices(mod)
+		if available.difficulty.any(
+			func(entry):
+				return (
+					english_labels.get(entry.id, "") != entry.label
+					and not str(entry.label).begins_with("DIFF_")
+				)
+		):
+			locale = candidate
+			translated = available
+			break
+	if _record(
+		not locale.is_empty(), "installed catalog supplies a translated non-English difficulty name"
+	):
+		var localized = english.duplicate(true)
+		localized.run_vote.options.deck = translated.deck
+		localized.run_vote.options.difficulty = translated.difficulty
+		await _check_difficulty_labels(mod, localized, "complete localized catalog " + locale)
+		print("NATIVE_DIFFICULTY_LOCALE ", locale, " ", translated.difficulty)
+		await capture.call(
+			"lobby-full-native-catalog-localized",
+			"All native difficulty names and the distinct Together option in " + locale + "."
+		)
+	TranslationServer.set_locale("en")
 
 
 func clipped_players(mod: Node) -> Array[String]:
@@ -540,12 +819,8 @@ func _card_roster(label: Control, body: Control) -> ScrollContainer:
 func capture_table_states(mod: Node, capture: Callable) -> void:
 	var saved = _save(mod)
 	_set_table(mod)
-	var CueCatalog = load(
-		mod.get_script().resource_path.get_base_dir().path_join("cue_catalog.gd")
-	)
-	var ShotsPips = load(
-		mod.get_script().resource_path.get_base_dir().path_join("shots_pips.gd")
-	)
+	var CueCatalog = load(mod.get_script().resource_path.get_base_dir().path_join("cue_catalog.gd"))
+	var ShotsPips = load(mod.get_script().resource_path.get_base_dir().path_join("shots_pips.gd"))
 	var game = mod.get_node("/root/Global").gameManager
 	# Custom cue + one spent shot so #22 / #29 are visible on the host table (#31/#32/#36 also here).
 	for player in mod.lobby.players:
@@ -621,13 +896,17 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	panel.render(heading, 1, true)
 	panel.get_node("%ModOptions").hide()
 	panel._mod_options_open = false
-	_record(panel.get_node("%Settings").visible, "Settings heading stays visible before match start")
+	_record(
+		panel.get_node("%Settings").visible, "Settings heading stays visible before match start"
+	)
 	_record(
 		panel.get_node("%ModOptionsButton").visible,
 		"Together options button sits beside Tables / Mode / Shots"
 	)
 	_record(panel.get_node("%MatchMode").get_parent().visible, "Mode appears with multiple tables")
-	_record(panel.get_node("%ShotBudget").get_parent().visible, "Shots appears with multiple tables")
+	_record(
+		panel.get_node("%ShotBudget").get_parent().visible, "Shots appears with multiple tables"
+	)
 	await capture.call(
 		"lobby-settings-heading",
 		"Native Settings heading · Tables / Mode / Shots with Together options closed."
@@ -641,14 +920,7 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	nighter.sync_shop = true
 	nighter.expansion_sets_enabled = true
 	nighter.expansion_sets = ExpansionRegistry.normalize_flags(
-		{
-			"PHASES": true,
-			"MORPH": true,
-			"TIDE": true,
-			"RELIC": true,
-			"TAROT": true,
-			"ZODIAC": true
-		}
+		{"PHASES": true, "MORPH": true, "TIDE": true, "RELIC": true, "TAROT": true, "ZODIAC": true}
 	)
 	for player in nighter.players:
 		player["cue"] = "emerald"
@@ -666,20 +938,38 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	await mod.get_tree().process_frame
 	panel._reset_mod_options_scroll()
 	await mod.get_tree().process_frame
-	_record(panel.get_node("%CloneRounds").visible, "clone-table rounds shown on Together All Nighter")
 	_record(
-		panel.get_node("%CloneRounds").button_pressed and not panel.get_node("%CloneRounds").disabled,
+		panel.get_node("%CloneRounds").visible, "clone-table rounds shown on Together All Nighter"
+	)
+	_record(
+		(
+			panel.get_node("%CloneRounds").button_pressed
+			and not panel.get_node("%CloneRounds").disabled
+		),
 		"clone-table rounds enabled and checked on Together All Nighter"
 	)
-	_record(panel.get_node("%CloneRounds").text == "Clone-table rounds", "clone-table rounds label is ungated on Nighter")
-	_record(not panel.get_node("%CloneRoundsHint").visible, "clone-table rounds All Nighter hint hidden when allowed")
-	_record(panel.get_node("%MultiplayerBalls").visible, "multiplayer balls toggle is in Together options")
 	_record(
-		panel.get_node("%ExpansionSetsEnabled").button_pressed
-		and panel.get_node("%ExpansionSets").visible,
+		panel.get_node("%CloneRounds").text == "Clone-table rounds",
+		"clone-table rounds label is ungated on Nighter"
+	)
+	_record(
+		not panel.get_node("%CloneRoundsHint").visible,
+		"clone-table rounds All Nighter hint hidden when allowed"
+	)
+	_record(
+		panel.get_node("%MultiplayerBalls").visible,
+		"multiplayer balls toggle is in Together options"
+	)
+	_record(
+		(
+			panel.get_node("%ExpansionSetsEnabled").button_pressed
+			and panel.get_node("%ExpansionSets").visible
+		),
 		"expansion master on reveals the six per-set toggles"
 	)
-	_record(panel.get_node("%ExpansionSets").get_child_count() >= 6, "six expansion set toggles present")
+	_record(
+		panel.get_node("%ExpansionSets").get_child_count() >= 6, "six expansion set toggles present"
+	)
 	var options_rect: Rect2 = panel.get_node("%ModOptions").get_global_rect()
 	var header_rect: Rect2 = panel.get_node("%Close").get_global_rect()
 	_record(
@@ -699,9 +989,12 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 		"Show turn banner toggle is visible in Together options"
 	)
 	_assert_mod_options_no_horizontal_overflow(panel, "nighter")
-	await capture.call(
-		"lobby-together-options-nighter",
-		"Together options · scrolled panel below header · Multiplayer balls, Clone-table rounds, expansions, sync shop, turn banner, cue picker."
+	await (
+		capture
+		. call(
+			"lobby-together-options-nighter",
+			"Together options · scrolled panel below header · Multiplayer balls, Clone-table rounds, expansions, sync shop, turn banner, cue picker."
+		)
 	)
 
 	# Same popup away from Nighter → clone-table rounds visible but gated off (#3).
@@ -723,8 +1016,7 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	_record(clone_gate.disabled, "clone-table rounds disabled off Together All Nighter")
 	_record(not clone_gate.button_pressed, "clone-table rounds unchecked off Together All Nighter")
 	_record(
-		clone_gate.text == "Clone-table rounds",
-		"clone-table rounds keeps short label when gated"
+		clone_gate.text == "Clone-table rounds", "clone-table rounds keeps short label when gated"
 	)
 	var clone_hint = panel.get_node("%CloneRoundsHint")
 	_record(clone_hint.visible, "clone-table rounds shows All Nighter only hint when gated")
@@ -733,9 +1025,12 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 		"clone-table rounds hint text says All Nighter only when gated"
 	)
 	_assert_mod_options_no_horizontal_overflow(panel, "gated")
-	await capture.call(
-		"lobby-together-options-gated",
-		"Together options on Chill Pool Night · Clone-table rounds visible, disabled, unchecked, All Nighter only hint."
+	await (
+		capture
+		. call(
+			"lobby-together-options-gated",
+			"Together options on Chill Pool Night · Clone-table rounds visible, disabled, unchecked, All Nighter only hint."
+		)
 	)
 
 	# Eight-player lobby with the same gated options open — column must still fit.
@@ -781,10 +1076,7 @@ func _assert_mod_options_no_horizontal_overflow(panel: Node, label: String) -> v
 		visible_w > 1.0 and column_w <= visible_w + 1.0,
 		"Together options column width fits scroll viewport (%s)" % label
 	)
-	_record(
-		scroll.scroll_horizontal == 0,
-		"Together options horizontal scroll is 0 (%s)" % label
-	)
+	_record(scroll.scroll_horizontal == 0, "Together options horizontal scroll is 0 (%s)" % label)
 	_record(
 		scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED,
 		"Together options horizontal scroll mode disabled (%s)" % label
@@ -805,8 +1097,7 @@ func capture_shop_presence(mod: Node, capture: Callable, input: Node) -> void:
 	_cursor(mod, 2, "shop", Vector2(0.3, 0.35))
 	_cursor(mod, 3, "shop", Vector2(0.72, 0.55))
 	await capture.call(
-		"shop-shared",
-		"Shared shop with sync_shop ON · teammate cursors over native ball offers."
+		"shop-shared", "Shared shop with sync_shop ON · teammate cursors over native ball offers."
 	)
 
 	var inspected = false
@@ -877,14 +1168,7 @@ func capture_expansion_shop(mod: Node, capture: Callable, input: Node) -> void:
 		mod.get_script().resource_path.get_base_dir().path_join("sets/registry.gd")
 	)
 	var flags = ExpansionRegistry.normalize_flags(
-		{
-			"PHASES": true,
-			"MORPH": true,
-			"TIDE": true,
-			"RELIC": true,
-			"TAROT": true,
-			"ZODIAC": true
-		}
+		{"PHASES": true, "MORPH": true, "TIDE": true, "RELIC": true, "TAROT": true, "ZODIAC": true}
 	)
 	mod.expansion_balls.begin_session(flags)
 	var database = mod.get_node("/root/BallDatabase")
@@ -944,8 +1228,9 @@ func capture_expansion_shop(mod: Node, capture: Callable, input: Node) -> void:
 	mod.expansion_balls.end_session()
 
 
-func _record(passed: bool, name: String) -> void:
+func _record(passed: bool, name: String) -> bool:
 	checks.append({"name": name, "passed": passed})
+	return passed
 
 
 func _lobby(tables: Array, count: int) -> Dictionary:

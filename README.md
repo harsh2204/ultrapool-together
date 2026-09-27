@@ -2,7 +2,7 @@
 
 Steam multiplayer for **2–8 players**. Share a table in co-op, race other tables to the end of a run, or compete on score. Each table has its own board, shop, and run.
 
-**Source version: v0.9.4** · Requires **Ultrapool 0.15.7**, Steam build **25298901**, on Windows or macOS. [Released builds](https://github.com/harsh2204/ultrapool-together/releases) may be older than this branch.
+**Source version: v0.9.5** · Requires **Ultrapool 0.15.7**, Steam build **25298901**, on Windows or macOS. [Released builds](https://github.com/harsh2204/ultrapool-together/releases) may be older than this branch.
 
 ## Install
 

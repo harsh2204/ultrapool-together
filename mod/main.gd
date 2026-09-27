@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.9.4"
+const VERSION = "0.9.5"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
@@ -175,10 +175,7 @@ func _ready():
 	transport.status_changed.connect(_status)
 	transport.room_ready.connect(_room_ready)
 	var DifficultyCatalog = load(base.path_join("difficulty_catalog.gd"))
-	var ui = get_node_or_null("/root/UIManager")
-	DifficultyCatalog.register(
-		get_node_or_null("/root/BallDatabase"), ui.decks_menu if ui != null else null
-	)
+	DifficultyCatalog.register(get_node_or_null("/root/BallDatabase"))
 	if str(ProjectSettings.get_setting("application/config/version", "")) != GAME_VERSION:
 		supported = false
 		_status("This mod requires Ultrapool " + GAME_VERSION + ".")
