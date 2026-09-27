@@ -6,8 +6,6 @@ extends "res://player_ball.gd"
 ## local process loop is frozen (fixtures) or a teammate aims, drive pivot from the aim
 ## vector so the shaft stays attached to the cue ball (#18).
 
-const CUE_REST_OFFSET := Vector2(-426, 0)
-
 var together_controller: Node
 var _remote_aim_active: bool = false
 
@@ -78,11 +76,11 @@ func _ensure_aim_chrome() -> void:
 		gauge = visuals.get_node_or_null("static/chargeGauge")
 	if gauge is CanvasItem and preparing_shot:
 		gauge.visible = true
-	# Always pose CuePivot while preparing — fixtures freeze process, and live play can
-	# leave the packed rest shaft visible until native aim writes a transform (#18).
-	if preparing_shot and shot is Vector2 and shot.is_finite() and shot.length() > 1.0:
-		_show_cue_aim(shot)
-	elif not preparing_shot:
+	# Native processing owns the local aim pose, pullback and pivot fade (PERF-027).
+	# Only undo our idle visibility guard; a fixed mod pose overwrites native charging.
+	if preparing_shot and shot is Vector2 and shot.is_finite() and shot.length() > 50.0:
+		_reveal_cue_pivot()
+	else:
 		_hide_cue_pivot()
 
 
@@ -90,7 +88,13 @@ func _ensure_aim_chrome() -> void:
 ## Local input is already cancelled; this only sets visual transform.
 func _apply_teammate_aim_chrome() -> void:
 	var aim: Dictionary = {}
-	if is_instance_valid(together_controller) and together_controller.has_method("get"):
+	var game = Global.gameManager
+	if (
+		is_instance_valid(game)
+		and game.can_shoot()
+		and game.has_shots()
+		and is_instance_valid(together_controller)
+	):
 		var presence = together_controller.get("presence")
 		var turn_owner: int = int(together_controller.get("turn_owner"))
 		var transport = together_controller.get("transport")
@@ -109,7 +113,7 @@ func _apply_teammate_aim_chrome() -> void:
 		and bool(aim.get("aiming", false))
 		and vector is Vector2
 		and vector.is_finite()
-		and vector.length() > 1.0
+		and vector.length() > 50.0
 	)
 	if not aiming:
 		_hide_cue_pivot()
@@ -123,24 +127,44 @@ func _show_cue_aim(vector: Vector2) -> void:
 	var pivot = get_node_or_null("CuePivot")
 	if pivot == null:
 		return
+	_reveal_cue_pivot()
 	# Glue the pivot to this ball in global space so a packed/animated offset cannot
-	# leave the shaft floating at table mid-left (#18).
-	pivot.global_position = global_position
-	pivot.visible = true
+	# leave the shaft floating at table mid-left (#18). Only remote/frozen aim uses
+	# this pose; the live local owner retains the native process result.
+	if pivot.global_position != global_position:
+		pivot.global_position = global_position
+	# Off-turn native processing fades toward transparent black. Remote aim needs
+	# the whole neutral pivot color restored; the Cue child owns the selected finish.
+	if pivot.modulate != Color.WHITE:
+		pivot.modulate = Color.WHITE
 	# Native packs Cue at (-426, 0) on local -X. rotation = aim.angle() puts -X behind
 	# the ball (opposite the shot), matching the vanilla aim pose.
-	pivot.rotation = vector.angle()
+	if pivot.rotation != vector.angle():
+		pivot.rotation = vector.angle()
 	var cue = pivot.get_node_or_null("Cue")
 	if cue is Node2D:
-		# Aim pose uses the shoot-anim start offset, not the far RESET park.
-		cue.position = Vector2(-350, 0)
-		cue.visible = true
-		cue.modulate.a = 1.0
+		var pullback = Vector2(-400.0 - clampf(vector.length(), 0.0, 200.0) * 0.4, 0.0)
+		if cue.position != pullback:
+			cue.position = pullback
+
+
+func _reveal_cue_pivot() -> void:
+	var pivot = get_node_or_null("CuePivot")
+	if pivot == null:
+		return
+	if not pivot.visible:
+		pivot.visible = true
+	var cue = pivot.get_node_or_null("Cue")
+	if cue is CanvasItem:
+		if not cue.visible:
+			cue.visible = true
+		if cue.modulate.a != 1.0:
+			cue.modulate.a = 1.0
 		var shadow = cue.get_node_or_null("CueShadow")
-		if shadow is CanvasItem:
+		if shadow is CanvasItem and not shadow.visible:
 			shadow.visible = true
 	var anim = pivot.get_node_or_null("AnimationPlayer")
-	if anim is AnimationPlayer:
+	if anim is AnimationPlayer and not anim.active:
 		anim.active = true
 
 
@@ -151,10 +175,13 @@ func _hide_cue_pivot() -> void:
 	var anim = pivot.get_node_or_null("AnimationPlayer")
 	if anim is AnimationPlayer and anim.is_playing():
 		anim.stop()
-	if anim is AnimationPlayer:
+	if anim is AnimationPlayer and anim.active:
 		anim.active = false
 	var cue = pivot.get_node_or_null("Cue")
 	if cue is CanvasItem:
-		cue.visible = false
-		cue.modulate.a = 0.0
-	pivot.visible = false
+		if cue.visible:
+			cue.visible = false
+		if cue.modulate.a != 0.0:
+			cue.modulate.a = 0.0
+	if pivot.visible:
+		pivot.visible = false

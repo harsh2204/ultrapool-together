@@ -54,15 +54,22 @@ func _initialize() -> void:
 	root.modulate = Color.WHITE
 	var pivot = Node2D.new()
 	pivot.name = "CuePivot"
+	pivot.modulate = Color.TRANSPARENT
 	var cue = Sprite2D.new()
 	cue.name = "Cue"
 	cue.modulate = Color.WHITE
+	var shadow = Sprite2D.new()
+	shadow.name = "CueShadow"
+	shadow.modulate = Color(0.2, 0.2, 0.2, 0.4)
+	cue.add_child(shadow)
 	pivot.add_child(cue)
 	root.add_child(pivot)
 	catalog.apply(root, "emerald")
 	_check(root.get_meta("together_cue_id") == "emerald", "apply stamps cue meta")
 	_check(root.modulate == Color.WHITE, "apply leaves ball-root modulate alone")
 	_check(cue.modulate != Color.WHITE, "apply tints the Cue child")
+	_check(pivot.modulate == Color.TRANSPARENT, "cue finish preserves native idle pivot fade")
+	_check(shadow.modulate == Color(0.2, 0.2, 0.2, 0.4), "cue finish preserves native shadow")
 	var before = cue.modulate
 	catalog.apply(root, "emerald")
 	_check(cue.modulate == before, "identical apply is idempotent")
@@ -73,8 +80,17 @@ func _initialize() -> void:
 	cue.modulate = Color.WHITE
 	catalog.apply(root, "emerald")
 	_check(cue.modulate != Color.WHITE, "diverged child tint is restored")
+	# A snapshot/turn change can recolor between native process frames. Neither the
+	# same finish nor a different one may revive idle art or reset an active fade.
+	pivot.modulate = Color(1.0, 1.0, 1.0, 0.35)
+	cue.modulate.a = 0.0
+	catalog.apply(root, "emerald")
+	_check(is_zero_approx(cue.modulate.a), "identical finish leaves a hidden cue transparent")
+	catalog.apply(root, "coral")
+	_check(is_zero_approx(cue.modulate.a), "new finish leaves a hidden cue transparent")
+	_check(is_equal_approx(pivot.modulate.a, 0.35), "finish change preserves in-progress native fade")
 	catalog.apply(root, "native")
-	_check(cue.modulate == Color.WHITE, "native apply restores the base modulate")
+	_check(cue.modulate == Color(1, 1, 1, 0), "native apply restores base RGB without revealing cue")
 	root.free()
 
 	# Bare cue root (no ball children) still tints itself for lobby swatches / tests.

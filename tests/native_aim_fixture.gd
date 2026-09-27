@@ -1,5 +1,22 @@
 extends RefCounted
 
+const CueCatalog = preload("../mod/cue_catalog.gd")
+
+
+class AimPresence:
+	extends Node
+	var aim: Dictionary = {}
+
+	func remote_aim(_actor: int) -> Dictionary:
+		return aim
+
+
+class LocalIdentity:
+	extends Node
+
+	func local_id() -> int:
+		return 1
+
 
 class ShotSink:
 	extends Node
@@ -38,6 +55,11 @@ func check(mod: Node, game: Node, role: String, record: Callable) -> void:
 		"input_mode": input_manager.mode
 	}
 	var sink = ShotSink.new()
+	var presence = AimPresence.new()
+	var identity = LocalIdentity.new()
+	sink.presence = presence
+	sink.transport = identity
+	var saved_cue: String = str(ball.get_meta("together_cue_id", "native"))
 	mod.adapter.set_process(false)
 	ball.set_process(false)
 	ball.together_controller = sink
@@ -51,7 +73,15 @@ func check(mod: Node, game: Node, role: String, record: Callable) -> void:
 	await mod.get_tree().process_frame
 	ball._process(1.0 / 30.0)
 	var pivot = ball.get_node_or_null("CuePivot")
+	var cue = ball.get_node_or_null("CuePivot/Cue")
 	record.call(pivot != null and not pivot.visible, role + " mouse aim: idle cue stays hidden")
+	var idle_alpha: float = pivot.modulate.a
+	CueCatalog.apply(ball, "coral")
+	record.call(
+		not pivot.visible and is_zero_approx(cue.modulate.a)
+		and is_equal_approx(pivot.modulate.a, idle_alpha),
+		role + " mouse aim: idle cosmetic reconciliation cannot reveal cue"
+	)
 	record.call(game.can_shoot() and game.has_shots(), role + " mouse aim: native table ready")
 
 	await _button(mod, start, true)
@@ -67,6 +97,20 @@ func check(mod: Node, game: Node, role: String, record: Callable) -> void:
 		ball.shot is Vector2 and ball.shot.length() > 50.0 and pivot.visible,
 		role + " mouse aim: held pointer motion charges and reveals cue"
 	)
+	var short_pullback: float = cue.position.x
+	_motion(mod, start - Vector2(160, 0))
+	ball._process(1.0 / 30.0)
+	record.call(
+		cue.position.x < short_pullback,
+		role + " mouse aim: stronger native charge pulls the cue farther back"
+	)
+	var aiming_alpha: float = pivot.modulate.a
+	var aiming_pose: Transform2D = cue.transform
+	CueCatalog.apply(ball, "gold")
+	record.call(
+		cue.transform == aiming_pose and is_equal_approx(pivot.modulate.a, aiming_alpha),
+		role + " mouse aim: cosmetic reconciliation preserves native pose and fade"
+	)
 	await _button(mod, target, false)
 	ball._process(1.0 / 30.0)
 	await mod.get_tree().process_frame
@@ -79,6 +123,27 @@ func check(mod: Node, game: Node, role: String, record: Callable) -> void:
 		not ball.preparing_shot and not ball.holding_shot and not pivot.visible,
 		role + " mouse aim: completed intent clears aiming and parked cue"
 	)
+	sink.allowed = false
+	sink.turn_owner = 2
+	presence.aim = {"aiming": true, "vector": Vector2(120, 0)}
+	ball._process(1.0 / 30.0)
+	record.call(
+		pivot.visible and pivot.global_position.is_equal_approx(ball.global_position),
+		role + " mouse aim: teammate cue remains attached to cue ball"
+	)
+	for frame in range(3):
+		ball._process(1.0 / 30.0)
+	record.call(
+		pivot.modulate == Color.WHITE,
+		role + " mouse aim: teammate cue keeps neutral parent color across native fades"
+	)
+	game.in_menu = true
+	ball._process(1.0 / 30.0)
+	record.call(not pivot.visible, role + " mouse aim: menu hides even a cached teammate aim")
+	game.in_menu = false
+	presence.aim = {}
+	ball._process(1.0 / 30.0)
+	record.call(not pivot.visible, role + " mouse aim: stale teammate aim leaves no parked cue")
 
 	for blocked in ["off turn", "native menu"]:
 		sink.allowed = blocked != "off turn"
@@ -97,6 +162,7 @@ func check(mod: Node, game: Node, role: String, record: Callable) -> void:
 		ball._process(1.0 / 30.0)
 		record.call(sink.submitted.size() == 1, role + " mouse aim: " + blocked + " cannot submit")
 	ball.pause_cancel_shot()
+	CueCatalog.apply(ball, saved_cue)
 	ball.together_controller = saved.controller
 	game.in_menu = saved.in_menu
 	game.playing = saved.playing
@@ -106,6 +172,8 @@ func check(mod: Node, game: Node, role: String, record: Callable) -> void:
 	ball.set_process(saved.process)
 	mod.adapter.set_process(saved.adapter_process)
 	sink.free()
+	presence.free()
+	identity.free()
 
 
 func _button(mod: Node, position: Vector2, pressed: bool) -> void:

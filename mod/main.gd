@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.9.1"
+const VERSION = "0.9.2"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
@@ -108,6 +108,7 @@ const SPAWN_BARRIER_MAX_MSEC = 2000
 var _spawn_barrier_held = false
 var _spawn_barrier_since_msec = -1
 var _published_ball_ids: Dictionary = {}
+var _published_pocket_ids: Dictionary = {}
 var _published_scene_id = 0
 
 
@@ -1128,6 +1129,7 @@ func _clear_spawn_barrier() -> void:
 	_spawn_barrier_held = false
 	_spawn_barrier_since_msec = -1
 	_published_ball_ids.clear()
+	_published_pocket_ids.clear()
 	_published_scene_id = 0
 
 
@@ -1202,8 +1204,16 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		return false
 	if multiplayer_balls != null and multiplayer_balls.blocks_shot_input():
 		return false
-	shot_start_score = adapter.score()
 	var starting_table = table_sync.capture()
+	# Validate before spending a shot: every guest must be able to accept its baseline.
+	if not table_sync.valid_capture(starting_table):
+		push_warning(
+			"Together: rejected shot with invalid table capture (%s)"
+			% table_sync.snapshot_problem(starting_table)
+		)
+		_status("Shot not started: table sync is not ready.")
+		return false
+	shot_start_score = adapter.score()
 	if not adapter.shoot(
 		vector,
 		func():
@@ -1564,23 +1574,27 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 		var problem = table_sync.snapshot_problem(scene)
 		push_warning("Together: skipped publishing invalid table capture (%s)" % problem)
 		return
-	var force_reliable = reliable
-	if scene.get("available", false):
+	var force_reliable = reliable or target != 0
+	# Only broadcasts advance the shared topology cache. A targeted resync must not
+	# consume the reliable update still owed to every other teammate (PERF-008).
+	if target == 0 and scene.get("available", false):
 		var scene_id: int = int(scene.get("scene_id", 0))
 		if scene_id != _published_scene_id:
 			_published_scene_id = scene_id
 			_published_ball_ids.clear()
+			_published_pocket_ids.clear()
 			force_reliable = true
 		var ids: Dictionary = table_sync.ball_ids(scene)
-		for id in ids:
-			if not _published_ball_ids.has(id):
-				force_reliable = true
-				break
+		var pocket_ids: Dictionary = table_sync.pocket_ids(scene)
+		if ids != _published_ball_ids or pocket_ids != _published_pocket_ids:
+			force_reliable = true
 		if _spawn_barrier_held:
 			force_reliable = true
 		_published_ball_ids = ids
-	_spawn_barrier_held = false
-	_spawn_barrier_since_msec = -1
+		_published_pocket_ids = pocket_ids
+	if target == 0:
+		_spawn_barrier_held = false
+		_spawn_barrier_since_msec = -1
 	snapshot_id += 1
 	var message = {"kind": "snapshot", "id": snapshot_id, "scene": scene}
 	if not shop.is_empty():

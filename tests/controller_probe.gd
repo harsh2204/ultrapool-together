@@ -95,9 +95,11 @@ class TableStub:
 	extends Node
 	var ended = 0
 	var shots: Array[Vector2] = []
+	var captured: Dictionary = {"available": false}
+	var applied: Dictionary = {}
 
 	func capture() -> Dictionary:
-		return {"available": false}
+		return captured.duplicate(true)
 
 	func end_guest():
 		ended += 1
@@ -111,14 +113,26 @@ class TableStub:
 	func snapshot_problem(data: Dictionary) -> String:
 		return "" if _valid_snapshot(data) else "stub invalid"
 
-	func ball_ids(_data: Dictionary) -> Dictionary:
-		return {}
+	func ball_ids(data: Dictionary) -> Dictionary:
+		var result = {}
+		for ball in data.get("balls", []):
+			result[ball.id] = true
+		return result
+
+	func pocket_ids(data: Dictionary) -> Dictionary:
+		var result = {}
+		for pocket in data.get("pockets", []):
+			result[pocket.id] = pocket.base_index
+		return result
 
 	func spawn_barrier_active() -> bool:
 		return false
 
 	func apply_snapshot(data: Dictionary) -> bool:
-		return _valid_snapshot(data)
+		if not _valid_snapshot(data):
+			return false
+		applied = data.duplicate(true)
+		return true
 
 	func begin_shot(vector: Vector2) -> bool:
 		shots.append(vector)
@@ -298,6 +312,7 @@ func _initialize() -> void:
 	_targeted_shop_sync()
 	_shop_capture_reuse_after_send()
 	_rejected_shots_preserve_turn_state()
+	_topology_keyframes()
 	_first_shot_phase_order()
 	_race_and_score_limits()
 	_native_score_standings()
@@ -691,6 +706,19 @@ func _rejected_shots_preserve_turn_state():
 		"native rejection cannot spend a shot or block the next input"
 	)
 	controller.adapter.ready_to_shoot = true
+	controller.table_sync.captured = {"available": "invalid"}
+	_check(
+		not controller._take_shot(20, Vector2(100, 0), 0),
+		"unsyncable table capture rejects the shot before native physics"
+	)
+	_check(
+		controller.adapter.accepted_shots == 0
+		and not controller.shot_pending
+		and controller.shot_number == 0
+		and controller.transport.sent.is_empty(),
+		"invalid baseline preserves the turn and publishes no invalid shot-start"
+	)
+	controller.table_sync.captured = {"available": false}
 	_check(not controller._take_shot(30, Vector2(100, 0), 0), "nonowner shot is rejected")
 	_check(not controller._take_shot(20, Vector2(100, 0), 1), "future turn is rejected")
 	_check(not controller._take_shot(20, Vector2(20, 0), 0), "weak shot is rejected")
@@ -720,6 +748,84 @@ func _rejected_shots_preserve_turn_state():
 	)
 	_check(controller.adapter.accepted_shots == 2, "next turn executes exactly one native shot")
 	controller.free()
+
+
+func _topology_keyframes():
+	var host = _controller()
+	host.active = true
+	host.adapter.state.available = true
+	host.table_sync.captured = {
+		"available": true,
+		"scene_id": 101,
+		"rounds_played": 0,
+		"rotated": false,
+		"results": {"phase": "table"},
+		"balls": [{"id": 11}, {"id": 12}],
+		"pockets": [{"id": 21, "base_index": 0}]
+	}
+	host._publish_snapshot()
+	_check(not host.transport.sent.back().unreliable, "initial topology is reliable")
+	host._publish_snapshot()
+	_check(host.transport.sent.back().unreliable, "unchanged table motion remains disposable")
+	host.table_sync.captured.pockets.append({"id": 27, "base_index": -1})
+	host._spawn_barrier_held = true
+	host._spawn_barrier_since_msec = 123
+	host._publish_snapshot(false, 30)
+	_check(not host.transport.sent.back().unreliable, "targeted blackhole resync is reliable")
+	_check(
+		not host._published_pocket_ids.has(27),
+		"targeted resync cannot consume the other teammates' topology update"
+	)
+	_check(
+		host._spawn_barrier_held and host._spawn_barrier_since_msec == 123,
+		"targeted resync preserves the pending broadcast spawn barrier"
+	)
+	host._publish_snapshot()
+	var added_hole: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	_check(not host.transport.sent.back().unreliable, "new blackhole broadcasts reliably")
+	_check(not host._spawn_barrier_held, "broadcast consumes the pending spawn barrier")
+	_check(
+		host.transport.sent.back().message.payload.scene.pockets.size() == 2,
+		"reliable topology keyframe contains the complete pocket state"
+	)
+	host._publish_snapshot()
+	_check(host.transport.sent.back().unreliable, "stable blackhole returns to motion cadence")
+	host.table_sync.captured.pockets[1].base_index = 1
+	host._publish_snapshot()
+	_check(not host.transport.sent.back().unreliable, "same-id pocket role change is reliable")
+	host.table_sync.captured.pockets.pop_back()
+	host._publish_snapshot()
+	var removed_hole: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	_check(not host.transport.sent.back().unreliable, "removed blackhole broadcasts reliably")
+	var guest = _controller()
+	guest.active = true
+	guest._local_id = 30
+	guest.transport.id = 30
+	guest._guest_phase = guest._snapshot_phase(removed_hole.scene)
+	guest._received_table(20, added_hole)
+	_check(guest.table_sync.applied.pockets.size() == 2, "guest accepts the new hole keyframe")
+	guest._received_table(20, removed_hole)
+	guest._received_table(20, added_hole)
+	_check(
+		guest.table_sync.applied.pockets.size() == 1
+		and guest.last_guest_snapshot == removed_hole.id,
+		"delayed hole keyframe cannot resurrect a removed pocket"
+	)
+	guest.free()
+	host.table_sync.captured.balls.pop_back()
+	host._publish_snapshot()
+	_check(not host.transport.sent.back().unreliable, "removed ball broadcasts reliably")
+	host.table_sync.captured.balls.append({"id": 13})
+	host._publish_snapshot()
+	_check(not host.transport.sent.back().unreliable, "new ball broadcasts reliably")
+	host._clear_spawn_barrier()
+	_check(
+		host._published_ball_ids.is_empty() and host._published_pocket_ids.is_empty(),
+		"disconnect/rematch reset clears both bounded topology caches"
+	)
+	host._publish_snapshot()
+	_check(not host.transport.sent.back().unreliable, "reset restores reliable initial topology")
+	host.free()
 
 
 func _first_shot_phase_order():

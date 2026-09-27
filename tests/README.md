@@ -58,6 +58,8 @@ The harness also records and replays native host/client round transitions, inclu
 
 ## Native game probes
 
+The BLACK-HOLE regression in `snapshot_probe.gd` reproduces native table/game pocket-array aliasing, zero-scale first spawn, all ten holes, authoritative pocket state and round cleanup. `controller_probe.gd` covers reliable topology changes, targeted resync isolation, late keyframes and invalid-shot rejection before physics. Cue fixtures also check native fades/pullback, finish changes while hidden/aiming, and teammate-aim cleanup. These added cases need an authorized native harness run; parsing alone does not execute their assertions.
+
 These probes require your own installed Ultrapool 0.15.7. Make private test directories containing local copies of `game.exe`, `steam_api64.dll`, and `libgodotsteam.windows.template_release.x86_64.dll`. Keep overrides out of the normal game directory. Replace the checkout prefix in the following examples with an absolute path using forward slashes.
 
 Each native probe checks its save namespace before proceeding. Configure the namespace and autoload in `override.cfg` beside the private executable:
