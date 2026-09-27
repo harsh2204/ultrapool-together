@@ -660,7 +660,14 @@ func _capture_shots_max(game: Node) -> int:
 
 
 func _capture_shots_used(game: Node) -> int:
+	# Prefer remaining-vs-max so spent pips stay correct when native ShotsInfo.shots_used
+	# lags the live shot counter (#29 / PERF-015).
+	var remaining: int = int(game.get_shots_left())
 	var info = game.table.shots_info if is_instance_valid(game.table) else null
+	var info_used: int = 0
+	var info_max: int = remaining
 	if is_instance_valid(info):
-		return clampi(int(info.shots_used), 0, 20)
-	return 0
+		info_used = clampi(int(info.shots_used), 0, 20)
+		info_max = maxi(int(info.shots_max), remaining)
+	var maximum: int = maxi(info_max, remaining + info_used)
+	return clampi(maximum - remaining, 0, maximum)

@@ -86,7 +86,13 @@ func _process(delta: float) -> void:
 	_update_player_hook()
 	_apply_turn_cue()
 	if is_instance_valid(_hooked_player) and not _controller.can_control():
-		_hooked_player.pause_cancel_shot()
+		# Hold an in-progress local aim even if can_control flickers (UI hover) (#18).
+		var keep_aim: bool = (
+			bool(_hooked_player.get("preparing_shot"))
+			and int(_controller.get("turn_owner")) == _local_id()
+		)
+		if not keep_aim:
+			_hooked_player.pause_cancel_shot()
 	var game = _game()
 	var game_id: int = game.get_instance_id() if game != null else 0
 	if game_id != _last_game_id:
@@ -98,6 +104,13 @@ func _process(delta: float) -> void:
 		_settled_seconds += delta
 	else:
 		_settled_seconds = 0.0
+
+
+func _local_id() -> int:
+	var transport = _controller.get("transport") if _controller != null else null
+	if is_instance_valid(transport) and transport.has_method("local_id"):
+		return int(transport.local_id())
+	return 0
 
 
 func can_shoot() -> bool:

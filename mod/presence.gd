@@ -143,6 +143,26 @@ func cue_for(actor: int) -> String:
 	return str(_cues.get(actor, CueCatalog.DEFAULT_ID))
 
 
+## Latest interpolated presence aim for a peer (empty if stale / not aiming). Refs #18.
+func remote_aim(actor: int) -> Dictionary:
+	if not _remotes.has(actor):
+		return {}
+	var remote: Dictionary = _remotes[actor]
+	if remote.age >= STALE_SECONDS:
+		return {}
+	var message: Dictionary = remote.message
+	if message.space != "table" or not bool(message.aiming):
+		return {}
+	return {
+		"aiming": true,
+		"origin": remote.origin,
+		"vector": remote.vector,
+		"cue": CueCatalog.normalize(
+			str(message.get("cue", _cues.get(actor, CueCatalog.DEFAULT_ID)))
+		)
+	}
+
+
 func _relay(message: Dictionary) -> void:
 	for id in _transport.connected_peers():
 		if id != message.actor and _controller.player_table(id) == message.table:

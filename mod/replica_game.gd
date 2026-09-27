@@ -77,8 +77,15 @@ func _ready() -> void:
 	player_ball_position = table.get_player_ball_position()
 	_disable_gameplay(table)
 	table.score_display_diamond.set_process(true)
-	table.shots_info.set_process(true)
+	_enable_shots_info(table.shots_info)
 	_enable_potted_rail(table.get_graveyard())
+	# Doors AnimationPlayer must run for the guest round-start open (#15).
+	var doors = table.get_node_or_null("Doors")
+	if doors != null:
+		var doors_anim = doors.get_node_or_null("AnimationPlayer")
+		if doors_anim != null:
+			doors_anim.set_process(true)
+			doors_anim.process_mode = Node.PROCESS_MODE_INHERIT
 	table.hide_end_round()
 	table.get_graveyard()._process(0.0)
 	# Enable native aim chrome (cue / prediction / reticle) on the local guest turn.
@@ -138,6 +145,7 @@ func begin_shot(vector: Vector2) -> bool:
 	player_ball.linear_velocity = vector.limit_length(200.0) * 12.5 / player_ball.mass
 	player_ball.angular_velocity = 0.0
 	corrections.clear()
+	_fx.observe_shot()
 	return true
 
 
@@ -419,6 +427,8 @@ func _create_ball(state: Dictionary) -> void:
 	body.spawned = true
 	body.set_physics_process(false)
 	body.set_process(true)
+	# ball.tscn packs static/spark visible=true; host spawn clears it, guests must too (#32).
+	BallLevelFx.hide_default_table_fx(body)
 	replicas[state.id] = body
 
 
@@ -447,14 +457,16 @@ func _set_item(body, item: Dictionary) -> void:
 	body.flash_spr.material = body.flash_spr.material.duplicate()
 	body.ball_item.weight_state = item.weight_state
 	body.update_weight()
-	# Native never draws star chrome on the cue ball (#31). Keep object-ball stars.
+	# Native never draws star chrome on the cue ball (#31). Object-ball star_power only.
 	var is_cue: bool = body == player_ball or item.get("data") == "PLAYER"
 	if is_cue:
 		if body.has_method("set_star"):
 			body.set_star(false)
 		_hide_star_chrome(body)
 	else:
-		body.set_star(item.star_power)
+		body.set_star(bool(item.star_power))
+		if not bool(item.star_power):
+			_hide_star_chrome(body)
 	body.set_flame(item.flaming)
 	body.set_shield_broken(item.shield_broken)
 	body.set_shield(item.shielded)
@@ -464,8 +476,9 @@ func _set_item(body, item: Dictionary) -> void:
 		body.set_fleeting()
 	body.flash_alpha = 0.0
 	body.flash_spr.material.set_shader_parameter("alpha", 0.0)
-	# Shop Upgradebar defaults visible at level 1; mirror native start_level gate (#32).
+	# Shop Upgradebar + packed table spark gate (#32).
 	BallLevelFx.apply_upgrade_badge(body, int(item.level), BallLevelFx.start_level_of(native_item))
+	BallLevelFx.hide_default_table_fx(body)
 	body.set_meta("remote_item", item.duplicate())
 
 
@@ -475,16 +488,35 @@ func _hide_star_chrome(body: Node) -> void:
 	var visuals = body.get("visuals")
 	if not is_instance_valid(visuals):
 		return
-	for path in ["static/star_indicator", "static/StarEffect"]:
+	for path in ["static/star_indicator", "static/StarEffect", "static/spark"]:
 		var node = visuals.get_node_or_null(path)
 		if node is CanvasItem and node.visible:
 			node.visible = false
 
 
+func _enable_shots_info(info: Node) -> void:
+	if not is_instance_valid(info):
+		return
+	info.set_process(true)
+	info.set_physics_process(true)
+	info.process_mode = Node.PROCESS_MODE_INHERIT
+	# prepare_scene/_disable_gameplay clears process on AnimationPlayer/pips; restore (#29).
+	for child in info.find_children("*", "", true, false):
+		if child is AnimationPlayer or child is CanvasItem:
+			child.set_process(true)
+			child.process_mode = Node.PROCESS_MODE_INHERIT
+
+
 func _update_shots(remaining: int, maximum: int, used: int) -> void:
 	var info = table.shots_info
+	if not is_instance_valid(info):
+		return
+	_enable_shots_info(info)
 	var max_shots: int = maximum if maximum >= remaining else remaining + maxi(used, 0)
+	# Prefer remaining-derived used when the wire value lags (#29).
 	var used_shots: int = clampi(used, 0, max_shots)
+	if remaining >= 0 and remaining <= max_shots:
+		used_shots = clampi(max_shots - remaining, 0, max_shots)
 	if (
 		_hud_state.get("shots_max") == max_shots
 		and _hud_state.get("shots_used") == used_shots
@@ -492,33 +524,51 @@ func _update_shots(remaining: int, maximum: int, used: int) -> void:
 		and info.shots_used == used_shots
 		and info.shot_pips.size() == max_shots
 	):
+		_apply_pip_spent_state(info, used_shots)
 		return
 	if info.shots_max != max_shots or info.shot_pips.size() != max_shots:
 		for pip in info.shot_pips:
 			pip.queue_free()
 		info.shot_pips.clear()
 		info.shots_max = max_shots
+		var holder = info.get("pips_holder")
+		if holder == null:
+			holder = info.get_node_or_null("%PipsHolder")
 		for index in max_shots:
 			var pip = info.pip_scene.instantiate()
-			info.pips_holder.add_child(pip)
+			if holder != null:
+				holder.add_child(pip)
+			else:
+				info.add_child(pip)
 			info.shot_pips.append(pip)
 	info.shots_used = used_shots
-	info.update_visuals(true)
+	if info.has_method("update_visuals"):
+		info.update_visuals(true)
+	_apply_pip_spent_state(info, used_shots)
+
+
+func _apply_pip_spent_state(info: Node, used_shots: int) -> void:
+	# Belt-and-suspenders when native update_visuals cannot animate under replica (#29).
+	for index in info.shot_pips.size():
+		var pip = info.shot_pips[index]
+		if not pip is CanvasItem:
+			continue
+		if not pip.has_meta("together_pip_lit"):
+			pip.set_meta("together_pip_lit", pip.modulate)
+		var lit: Color = pip.get_meta("together_pip_lit")
+		if index < used_shots:
+			pip.modulate = Color(lit.r * 0.35, lit.g * 0.35, lit.b * 0.35, lit.a * 0.5)
+		elif pip.modulate != lit:
+			pip.modulate = lit
 
 
 func _refresh_inventory_visuals() -> void:
 	# Inventory tickets/cubes/passives live on PlayerInfo; native snack counters and the
-	# CubesButton live on the shop inventory HUD. PlayerInfo has no update_cubes API
-	# (PR #23 no-op), so drive the shop HUD on inventory change only (#33 / PERF-015/020).
+	# CubesButton live on the shop inventory HUD. Drive the shop HUD only (#33 / PERF-015/020).
+	# Removed dead update_cubes / update_build has_method fallbacks (no such native APIs).
 	if is_instance_valid(shop) and shop.has_method("refresh_inventory_hud"):
 		shop.refresh_inventory_hud()
-		return
-	if player_info.has_method("update_cubes"):
-		player_info.update_cubes()
-	if player_info.has_method("update_build"):
-		player_info.update_build()
-	if player_info.has_method("refresh"):
-		player_info.refresh()
+
 
 
 func _update_aim_reminder(show_aim: bool) -> void:

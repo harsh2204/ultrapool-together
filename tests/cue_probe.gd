@@ -52,15 +52,37 @@ func _initialize() -> void:
 
 	var root = Node2D.new()
 	root.modulate = Color.WHITE
+	var pivot = Node2D.new()
+	pivot.name = "CuePivot"
+	var cue = Sprite2D.new()
+	cue.name = "Cue"
+	cue.modulate = Color.WHITE
+	pivot.add_child(cue)
+	root.add_child(pivot)
 	catalog.apply(root, "emerald")
 	_check(root.get_meta("together_cue_id") == "emerald", "apply stamps cue meta")
-	_check(root.modulate != Color.WHITE, "apply tints the cue root")
-	var before = root.modulate
+	_check(root.modulate == Color.WHITE, "apply leaves ball-root modulate alone")
+	_check(cue.modulate != Color.WHITE, "apply tints the Cue child")
+	var before = cue.modulate
 	catalog.apply(root, "emerald")
-	_check(root.modulate == before, "identical apply is idempotent")
+	_check(cue.modulate == before, "identical apply is idempotent")
+	# Simulate replica overwrite of root modulate (#22).
+	root.modulate = Color(0.8, 0.8, 0.8, 1)
+	catalog.apply(root, "emerald")
+	_check(cue.modulate == before, "re-apply keeps cue tint after root modulate wipe")
+	cue.modulate = Color.WHITE
+	catalog.apply(root, "emerald")
+	_check(cue.modulate != Color.WHITE, "diverged child tint is restored")
 	catalog.apply(root, "native")
-	_check(root.modulate == Color.WHITE, "native apply restores the base modulate")
+	_check(cue.modulate == Color.WHITE, "native apply restores the base modulate")
 	root.free()
+
+	# Bare cue root (no ball children) still tints itself for lobby swatches / tests.
+	var bare = Node2D.new()
+	bare.modulate = Color.WHITE
+	catalog.apply(bare, "emerald")
+	_check(bare.modulate != Color.WHITE, "bare cue root still receives tint")
+	bare.free()
 
 	if failures.is_empty():
 		print("CUE_PROBE PASS (%d checks)" % checks)

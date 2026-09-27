@@ -1134,6 +1134,17 @@ func can_control() -> bool:
 		return false
 	if get_node("/root/InputManager").is_controller():
 		return true
+	# Hold an in-progress aim even if the pointer briefly crosses mod UI (#18).
+	var game = get_node_or_null("/root/Global")
+	if game != null:
+		var gm = game.get("gameManager")
+		if (
+			is_instance_valid(gm)
+			and is_instance_valid(gm.get("player_ball"))
+			and bool(gm.player_ball.get("preparing_shot"))
+			and turn_owner == transport.local_id()
+		):
+			return true
 	var hovered = get_viewport().gui_get_hovered_control()
 	return hovered == null or not ui_root.is_ancestor_of(hovered)
 
