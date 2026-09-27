@@ -303,6 +303,11 @@ func apply_table(data: Dictionary) -> void:
 			var lobby: Dictionary = controller.get("lobby") if controller.get("lobby") is Dictionary else {}
 			var turn_owner: int = int(controller.get("turn_owner"))
 			CueCatalog.apply(player_ball, CueCatalog.cue_for_player(lobby, turn_owner))
+		# Tint must not revive the packed rest-pose shaft (#18).
+		if not bool(player_ball.get("preparing_shot")) and player_ball.has_method("_hide_cue_pivot"):
+			player_ball._hide_cue_pivot()
+		if controller != null:
+			player_ball.set("together_controller", controller)
 	_sync_potted_rail(data.balls)
 	for id in replicas.keys():
 		if not present.has(id):
@@ -416,6 +421,10 @@ func _create_ball(state: Dictionary) -> void:
 		body.set_script(
 			load(get_script().resource_path.get_base_dir().path_join("replica_ball.gd"))
 		)
+	else:
+		# Host adapter swaps PlayerBall → native_player; guests must too or CuePivot stays
+		# at the packed rest pose and CueCatalog tint makes that shaft look "solid" (#18).
+		_install_native_player(body)
 	body.freeze = true
 	body.set_meta("together_replica", true)
 	_set_item(body, state.item)
@@ -430,7 +439,23 @@ func _create_ball(state: Dictionary) -> void:
 	body.set_process(true)
 	# ball.tscn packs static/spark visible=true; host spawn clears it, guests must too (#32).
 	BallLevelFx.hide_default_table_fx(body)
+	if state.player and body.has_method("_hide_cue_pivot"):
+		body._hide_cue_pivot()
 	replicas[state.id] = body
+
+
+func _install_native_player(body: Node) -> void:
+	var script = load(get_script().resource_path.get_base_dir().path_join("native_player.gd"))
+	var values = {}
+	for property in body.get_property_list():
+		if property.usage & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			values[property.name] = body.get(property.name)
+	body.set_script(script)
+	for property in body.get_property_list():
+		if property.usage & PROPERTY_USAGE_SCRIPT_VARIABLE and values.has(property.name):
+			body.set(property.name, values[property.name])
+	var controller = get_parent().get_parent() if get_parent() else null
+	body.set("together_controller", controller)
 
 
 func _set_item(body, item: Dictionary) -> void:

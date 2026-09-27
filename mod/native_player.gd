@@ -23,6 +23,10 @@ func _process(delta):
 		_ensure_aim_chrome()
 		if not preparing_shot:
 			_hide_cue_pivot()
+		elif shot is Vector2 and shot.is_finite() and shot.length() > 1.0:
+			# Native may leave CuePivot at the packed rest pose when playing is forced
+			# late; keep the shaft glued to this ball (#18).
+			_show_cue_aim(shot)
 		return
 	# Off-turn: cancel local input aim, then optionally mirror teammate presence aim (#18).
 	pause_cancel_shot()
@@ -77,16 +81,12 @@ func _ensure_aim_chrome() -> void:
 		gauge = visuals.get_node_or_null("static/chargeGauge")
 	if gauge is CanvasItem and preparing_shot:
 		gauge.visible = true
-	# Fixtures freeze PlayerBall process so native aim never poses CuePivot — drive it
-	# from the shot vector whenever we are preparing and not ticking (#18).
-	if (
-		preparing_shot
-		and not is_processing()
-		and shot is Vector2
-		and shot.is_finite()
-		and shot.length() > 1.0
-	):
+	# Always pose CuePivot while preparing — fixtures freeze process, and live play can
+	# leave the packed rest shaft visible until native aim writes a transform (#18).
+	if preparing_shot and shot is Vector2 and shot.is_finite() and shot.length() > 1.0:
 		_show_cue_aim(shot)
+	elif not preparing_shot:
+		_hide_cue_pivot()
 
 
 ## Non-controllers: drive CuePivot from the turn owner's presence aim vector (#18).
@@ -126,9 +126,9 @@ func _show_cue_aim(vector: Vector2) -> void:
 	var pivot = get_node_or_null("CuePivot")
 	if pivot == null:
 		return
-	# CuePivot is a child of the cue ball; keep local origin on the ball so the shaft
-	# cannot drift to the packed rest pose at table mid-left.
-	pivot.position = Vector2.ZERO
+	# Glue the pivot to this ball in global space so a packed/animated offset cannot
+	# leave the shaft floating at table mid-left (#18).
+	pivot.global_position = global_position
 	pivot.visible = true
 	# Native packs Cue at (-426, 0): shaft extends opposite +X. Aim direction is the
 	# shot vector, so the butt sits behind the ball along -aim (rotation = angle + PI).
@@ -137,6 +137,7 @@ func _show_cue_aim(vector: Vector2) -> void:
 	if cue is Node2D:
 		cue.position = CUE_REST_OFFSET
 		cue.visible = true
+		cue.modulate.a = 1.0
 		var shadow = cue.get_node_or_null("CueShadow")
 		if shadow is CanvasItem:
 			shadow.visible = true
@@ -146,5 +147,8 @@ func _hide_cue_pivot() -> void:
 	var pivot = get_node_or_null("CuePivot")
 	if pivot == null:
 		return
+	var cue = pivot.get_node_or_null("Cue")
+	if cue is CanvasItem:
+		cue.visible = false
 	if pivot.visible:
 		pivot.visible = false

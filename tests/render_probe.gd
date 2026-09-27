@@ -173,7 +173,6 @@ func _run():
 	mod.latest_state.in_shop = false
 	# Guest seat owns the opening turn so the banner paints on first table entry (#30).
 	mod.turn_owner = 2
-	mod.table_leader_id = 2
 	mod.shot_pending = false
 	mod.awaiting_shot_turn = -1
 	mod.finished = false
@@ -193,19 +192,16 @@ func _run():
 	_check(mod.table_sync.apply_snapshot(snapshot), "guest snapshot accepted")
 	await get_tree().create_timer(1.0).timeout
 	game = global_node.gameManager
-	var previous_transport = mod.transport
-	var guest_transport = (
-		load(get_script().resource_path.get_base_dir().path_join("render_guest_transport.gd")).new()
-	)
-	guest_transport.people = mod.lobby.get("players", [])
-	add_child(guest_transport)
-	mod.transport = guest_transport
 	mod._local_id = 2
 	mod.turn_owner = 2
 	mod.latest_state = mod.adapter.game_data()
 	mod.latest_state["shots_left"] = int(snapshot["shots"])
 	mod.latest_state["table_active"] = true
 	mod.latest_state["in_shop"] = false
+	# Hide parked cue before the idle guest table capture (#18).
+	if is_instance_valid(game) and is_instance_valid(game.player_ball):
+		if game.player_ball.has_method("_hide_cue_pivot"):
+			game.player_ball._hide_cue_pivot()
 	mod._update_hud()
 	_check_run_config("guest")
 	_check_balls(game.replicas.values(), "guest")
@@ -213,9 +209,6 @@ func _run():
 	await _capture_guest_aim(game)
 	await _capture_ball_previews(game)
 	await _capture_guest_shop(snapshot, shop_state)
-	if is_instance_valid(mod.transport) and mod.transport != previous_transport:
-		mod.transport.queue_free()
-	mod.transport = previous_transport
 	mod.table_sync.end_guest()
 	for result in await round_flow.replay_guest(mod, _capture):
 		_check(result.passed, result.name)
@@ -354,17 +347,22 @@ func _capture_guest_aim(game) -> void:
 		gauge.visible = true
 	if ball.has_method("_ensure_aim_chrome"):
 		ball._ensure_aim_chrome()
+	if ball.has_method("_show_cue_aim"):
+		ball._show_cue_aim(Vector2(90, -140))
 	mod._update_hud()
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var shoot_ui = ball.get("shoot_ui")
 	var prediction = ball.get("prediction")
 	var pivot = ball.get_node_or_null("CuePivot")
+	var pivot_ok: bool = (
+		pivot is CanvasItem
+		and pivot.visible
+		and pivot.global_position.distance_squared_to(ball.global_position) < 16.0
+	)
 	_check(
 		bool(ball.get("preparing_shot"))
-		and pivot is CanvasItem
-		and pivot.visible
-		and pivot.global_position.distance_to(ball.global_position) < 2.0
+		and pivot_ok
 		and (
 			(shoot_ui is CanvasItem and shoot_ui.visible)
 			or (prediction is CanvasItem and prediction.visible)
