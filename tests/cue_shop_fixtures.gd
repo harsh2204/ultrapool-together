@@ -151,6 +151,7 @@ func run_host(mod: Node, capture: Callable, check: Callable) -> void:
 		"cue-shop-host-equipped",
 		"Purchased Finesse cue · Gold finish · confirmed shared-money debit."
 	)
+	await _capture_animation(mod, view, capture, check)
 	var retained_nodes: Array = _node_ids(view)
 	view._change_page(1)
 	var leaving_tween: Tween = view._rack_tween
@@ -366,6 +367,167 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 		"cue shop: newer wallet reconciles while cue ownership and action stay current"
 	)
 	_restore(mod, saved, wire)
+
+
+func _capture_animation(mod: Node, view, capture: Callable, check: Callable) -> void:
+	# Real viewport frames from the existing single-process harness. Static capture
+	# waits two frames and has no timestamp return, so this bounded sequence reads
+	# the same viewport at frame_post_draw and records its monotonic draw time.
+	# No queued images: at most one readback/PNG is held, 96 frames / 8 seconds.
+	var owner = capture.get_object()
+	if not check.call(is_instance_valid(owner), "cue animation: capture owner exists"):
+		return
+	var output = str(owner.get("output"))
+	if not check.call(not output.is_empty(), "cue animation: uses the harness output directory"):
+		return
+	var directory = output.path_join("cue-animation")
+	if not check.call(
+		DirAccess.make_dir_recursive_absolute(directory) == OK,
+		"cue animation: frame directory created"
+	):
+		return
+	var preview = [view._page, view._selected_model, view._selected_finish]
+	var confirmed: Dictionary = view.confirmed_equipment()
+	var inventory: Dictionary = mod.cue_inventory.snapshot()
+	var wallet: float = mod.shop_sync.native_shop().player_info.money
+	var retained_nodes: Array = _node_ids(view)
+	view.settle_rack()
+	var timeline = [
+		{"at": 0.0, "action": "greet"},
+		{"at": 0.7, "action": "next"},
+		{"at": 1.5, "action": "next"},
+		{"at": 2.3, "action": "previous"},
+		{"at": 3.1, "action": "emerald"},
+		{"at": 3.6, "action": "nudge"},
+		{"at": 4.5, "action": "previous"},
+		{"at": 5.2, "action": "rose"},
+		{"at": 5.7, "action": "next"},
+		{"at": 6.5, "action": "previous"},
+	]
+	var frames: Array = []
+	var events: Array = []
+	var observed = {"rack": false, "idle": false, "blink": false, "talk": false, "nudge": false}
+	var unchanged = true
+	var event_index = 0
+	var next_sample = 0
+	var bytes_written = 0
+	var started = Time.get_ticks_usec()
+	var started_unix = Time.get_unix_time_from_system()
+	while frames.size() < 96 and Time.get_ticks_usec() - started < 8000000:
+		await mod.get_tree().process_frame
+		var elapsed = Time.get_ticks_usec() - started
+		while event_index < timeline.size() and elapsed >= int(timeline[event_index].at * 1000000):
+			var action = str(timeline[event_index].action)
+			_cue_animation_action(view, action)
+			events.append({"action": action, "elapsed_usec": Time.get_ticks_usec() - started})
+			event_index += 1
+		await RenderingServer.frame_post_draw
+		var draw_time = Time.get_ticks_usec()
+		elapsed = draw_time - started
+		if elapsed >= 8000000:
+			break
+		if elapsed < next_sample:
+			continue
+		# Skip missed samples instead of queuing or fabricating intermediate frames.
+		next_sample = (floori(float(elapsed) / 83333.0) + 1) * 83333
+		var image = mod.get_viewport().get_texture().get_image()
+		var filename = "frame-%03d.png" % frames.size()
+		var path = directory.path_join(filename)
+		if not check.call(image.save_png(path) == OK, "cue animation: saved " + filename):
+			break
+		var saved_file = FileAccess.open(path, FileAccess.READ)
+		if saved_file != null:
+			bytes_written += saved_file.get_length()
+			saved_file.close()
+		var displayed: Dictionary = view.confirmed_equipment()
+		unchanged = unchanged and displayed == confirmed
+		var seller_frame: int = view._seller._body.frame
+		observed.rack = observed.rack or view._rack_transitioning
+		observed.idle = observed.idle or seller_frame == 0
+		observed.blink = observed.blink or seller_frame % 2 == 1
+		observed.talk = observed.talk or seller_frame >= 2
+		observed.nudge = observed.nudge or view._seller._nudge > 0.4
+		(
+			frames
+			. append(
+				{
+					"file": filename,
+					"draw_ticks_usec": draw_time,
+					"elapsed_usec": elapsed,
+					"engine_frame": Engine.get_frames_drawn(),
+					"width": image.get_width(),
+					"height": image.get_height(),
+					"rack_page": view._page + 1,
+					"rack_moving": view._rack_transitioning,
+					"rack_offset_x": view._rack.position.x,
+					"rack_alpha": view._rack.modulate.a,
+					"preview_model": view._selected_model,
+					"preview_finish": view._selected_finish,
+					"seller_cel": seller_frame,
+					"seller_body_y": view._seller._body.position.y,
+					"seller_nudge": view._seller._nudge,
+					"equipped_model": displayed.model,
+					"equipped_finish": displayed.finish,
+					"equipped_label": displayed.label,
+				}
+			)
+		)
+		if bytes_written >= 192 * 1024 * 1024:
+			break
+	var manifest = {
+		"schema": 1,
+		"source": "Actual Godot viewport after RenderingServer.frame_post_draw",
+		"timing_note": "Monotonic draw timestamps; PNG readback/write affects capture cadence.",
+		"target_fps": 12,
+		"target_duration_seconds": 8,
+		"started_ticks_usec": started,
+		"started_unix_seconds": started_unix,
+		"elapsed_usec": Time.get_ticks_usec() - started,
+		"bytes_written": bytes_written,
+		"events": events,
+		"observed": observed,
+		"frames": frames,
+	}
+	var manifest_file = FileAccess.open(directory.path_join("manifest.json"), FileAccess.WRITE)
+	if check.call(manifest_file != null, "cue animation: manifest opened"):
+		manifest_file.store_string(JSON.stringify(manifest, "\t"))
+		manifest_file.close()
+	check.call(frames.size() >= 60, "cue animation: captured at least sixty actual rendered frames")
+	check.call(
+		event_index == timeline.size(), "cue animation: completed the bounded interaction timeline"
+	)
+	for motion in observed:
+		check.call(observed[motion], "cue animation: actual frames include " + motion)
+	check.call(
+		(
+			unchanged
+			and mod.cue_inventory.snapshot() == inventory
+			and mod.shop_sync.native_shop().player_info.money == wallet
+		),
+		"cue animation: browsing preserves confirmed equipment, ownership and money"
+	)
+	check.call(_node_ids(view) == retained_nodes, "cue animation: all presentation nodes retained")
+	view.settle_rack()
+	view._page = int(preview[0])
+	view._selected_model = str(preview[1])
+	view._selected_finish = str(preview[2])
+	view.settle_rack()
+	view._seller._stop_speech()
+	print("CUE_ANIMATION_CAPTURE ", directory, " ", frames.size(), " real frames")
+
+
+func _cue_animation_action(view, action: String) -> void:
+	match action:
+		"greet":
+			view._seller.say("A little edge. All you.")
+		"next":
+			view._next_page.pressed.emit()
+		"previous":
+			view._previous_page.pressed.emit()
+		"emerald", "rose":
+			view._swatches[action].pressed.emit()
+		"nudge":
+			view._seller._hit.pressed.emit()
 
 
 func _check_pages(view, capture: Callable, check: Callable) -> void:
