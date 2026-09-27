@@ -89,7 +89,6 @@ var _seller: Node2D
 var _rack: Control
 var _title: Label
 var _description: Label
-var _wallet: Label
 var _finish_label: Label
 var _status: Label
 var _action: Button
@@ -288,11 +287,11 @@ func _build_details() -> void:
 	var paper = Panel.new()
 	paper.name = "SelectionDetails"
 	paper.position = Vector2(-415, 160)
-	paper.size = Vector2(300, 250)
+	paper.size = Vector2(300, 222)
 	paper.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	paper.add_theme_stylebox_override("panel", _paper_style())
 	_root.add_child(paper)
-	_title = _label("House cue", 27)
+	_title = _label("House", 27)
 	_title.position = Vector2(18, 10)
 	_title.size = Vector2(264, 36)
 	paper.add_child(_title)
@@ -301,27 +300,18 @@ func _build_details() -> void:
 	_description.size = Vector2(264, 124)
 	_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	paper.add_child(_description)
-	var note = _label("Personal cue · this run", 17, Color("70553d"))
-	note.position = Vector2(18, 179)
-	note.size = Vector2(264, 22)
-	paper.add_child(note)
 	_action = _button("Equipped", Color("bb804d"))
 	_action.name = "CueAction"
-	_action.position = Vector2(18, 207)
+	_action.position = Vector2(18, 179)
 	_action.size = Vector2(264, 36)
 	_action.add_theme_font_size_override("font_size", 21)
 	for state in ["font_color", "font_hover_color", "font_pressed_color"]:
 		_action.add_theme_color_override(state, INK)
-	_action.tooltip_text = "Buy and equip the selected cue using shared money. Owned cues equip free."
+	_action.tooltip_text = "Buy and equip using the table's money. Cues last for this run; switching owned cues and finishes is free."
 	_action.pressed.connect(_submit)
 	paper.add_child(_action)
-	_wallet = _label("Shared money: 0€", 19, Color("fff1d2"))
-	_wallet.position = Vector2(-405, 421)
-	_wallet.size = Vector2(282, 25)
-	_outline(_wallet)
-	_root.add_child(_wallet)
 	_status = _label("", 17, Color("fff4d8"))
-	_status.position = Vector2(-405, 451)
+	_status.position = Vector2(-405, 397)
 	_status.size = Vector2(284, 46)
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_outline(_status)
@@ -335,7 +325,7 @@ func _build_finishes() -> void:
 	_back.size = Vector2(56, 56)
 	_back.pressed.connect(_close)
 	_root.add_child(_back)
-	_finish_label = _label("Finish: Native · free", 19, Color("fff1d2"))
+	_finish_label = _label("Finish: Native", 19, Color("fff1d2"))
 	_finish_label.position = Vector2(22, 422)
 	_finish_label.size = Vector2(520, 25)
 	_outline(_finish_label)
@@ -502,24 +492,23 @@ func _refresh() -> void:
 			_swatches[id].set_pressed_no_signal(id == _selected_finish)
 		_set_text(_swatches[id], "✓" if id == _selected_finish else "")
 	var selected: Dictionary = _cards.get(_selected_model, _cards.house).entry
-	_set_text(_title, "%s cue" % selected.label)
+	_set_text(_title, str(selected.label))
 	var description = str(selected.description)
 	if float(selected.get("bonus_rate", 0.0)) > 0.0:
 		description = description.replace(CueModels.BONUS_LIMITS, "").strip_edges()
-		description += "\nFirst qualifying pot / shot.\n+4 / player / round, all cues."
+		description += "\nFirst qualifying pot per shot.\nYour round limit: +4 across cues."
 	_set_text(_description, description)
 	if _description.tooltip_text != str(selected.description):
 		_description.tooltip_text = str(selected.description)
-	_set_text(_wallet, "Shared money: %s€" % str(snappedf(_money, 0.01)))
-	_set_text(_finish_label, "Finish: %s · free" % str(finish.label))
+	_set_text(_finish_label, "Finish: %s" % str(finish.label))
 	var owned: bool = _selected_model in _player.get("owned", ["house"])
 	var equipped: bool = _selected_model == _player.get("equipped", "house")
 	var same_finish: bool = _selected_finish == _player.get("finish", "native")
 	var action_text = "Buy · %d€" % int(selected.price)
 	if owned:
-		action_text = "Equip · free"
+		action_text = "Equip"
 	if equipped:
-		action_text = "Equipped" if same_finish else "Use finish · free"
+		action_text = "Equipped" if same_finish else "Apply finish"
 	if _pending:
 		action_text = "Confirming…"
 	_set_text(_action, action_text)
@@ -530,18 +519,16 @@ func _refresh() -> void:
 		or (equipped and same_finish)
 		or (not owned and _money < float(selected.price))
 	)
-	var status = "Choose a cue. Try a finish."
+	var status = ""
 	if _error != "":
 		status = _error
-	elif _pending:
-		status = "Waiting for the table. Keep browsing."
-	elif _blocked:
-		status = "Browse while the table finishes."
-	elif not owned and _money < float(selected.price):
-		status = "The table needs %d€ for this cue." % int(selected.price)
-	elif equipped and same_finish:
-		status = "Ready for the next round."
+	elif not _pending:
+		if _blocked:
+			status = "Available when the table finishes."
+		elif not owned and _money < float(selected.price):
+			status = "Not enough money."
 	_set_text(_status, status)
+	_status.visible = not status.is_empty()
 	_update_focus_access()
 	_link_focus()
 	if (

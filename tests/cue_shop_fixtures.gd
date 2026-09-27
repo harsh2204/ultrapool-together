@@ -363,7 +363,7 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 		view, "house", "rose", "stale nested cues cannot rewind the equipped display", check
 	)
 	check.call(
-		sync._state.money == delayed_shop.money and view._action.text == "Equip · free",
+		sync._state.money == delayed_shop.money and view._action.text == "Equip",
 		"cue shop: newer wallet reconciles while cue ownership and action stay current"
 	)
 	_restore(mod, saved, wire)

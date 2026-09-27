@@ -10,6 +10,8 @@ Fifteen distinct cue designs occupy five racks of three upright portrait cards. 
 
 The selected cue's paper placard contains a compact purchase/equip control and the effect details. Browse, preview, and customize a finish locally while a purchase awaits table-host confirmation. Rejections reconcile ownership and money and show their reason. The felt-lined case beside the inventory displays only the player's confirmed cue and finish; browsing and pending/rejected purchases never replace it. Rook blinks, talks, idles, and responds to a click using the native merchants' presentation pattern. Seller motion and rack transitions stop when leaving the counter.
 
+The placard shows the cue name, effect, limits and action. The native inventory supplies the wallet display. Run ownership and free switching are explained in the action tooltip; idle shopping has no extra status prompt. Pending confirmation appears on the action, while rejection, blocked shopping and insufficient funds retain visible feedback.
+
 The composition fits narrower windows at resize boundaries while keeping Rook aligned with the counter and preserving the native inventory. Portrait windows use a smaller case above the inventory. Native geometry assertions pass at these sizes; actual narrow/portrait window rendering and readability remain pending.
 
 ## Ownership and economy
