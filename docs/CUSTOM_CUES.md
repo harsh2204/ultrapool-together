@@ -83,3 +83,12 @@ The preceding Windows run `20260927T104101Z-rook-animation` at gameplay/fixture 
 
 The first Rook capture exposed an oversized case despite passing parent-bound assertions. The production fix sets `TextureRect.EXPAND_IGNORE_SIZE` before assigning its texture, and the repeated run checks the actual artwork descendant against the case, viewport and native inventory. PNG encoding now follows the bounded recording so compression does not stall the shown animation. GIF palette conversion uses recorded frame timing; no generated or interpolated frames are used. This establishes rendering/callback correctness for this fixture, not foreground frame-time or input-latency performance.
 Runtime verification uses the existing bounded Capture-Screens harness after authorization. Keep #20 open until the remaining acceptance work is complete.
+
+
+## Current economy and collection verification
+
+Windows capture `20260927T120908Z-cue-balance-collection` at gameplay/fixture commit `d3e203a` passed **2,797/2,797 checks**, including **610 collection checks**, and produced **90 native screenshots** plus **96 actual viewport animation frames**. One muted isolated process used the compatibility renderer, 1280×720, a 30 FPS cap and a 180-second watchdog. It exited normally in about 105 seconds with no script errors; normal saves and installed files were unchanged. Engine shutdown resource warnings remain.
+
+All eight ball inspections, native rarity prices and highlighted descriptions, the four-helper Bounty/Encore mix, level badges, label/ball/tooltip bounds, retained outline geometry, no-overlap checks, unchanged discovery records, native tabs/scrolling and close/reopen passed. Every individual tooltip and the mixed tooltip were visually reviewed. The final native rows are centered within the original set footprint. Cue probes passed 226 catalog/curve, 206 inventory and 209 effect checks, including mixed-price spending and the shared bonus budget.
+
+This is native fixture rendering and callback evidence, not live networking or a foreground performance/balance measurement. Actual narrow/portrait rendering, macOS, controller hardware, simultaneous shoppers, delayed/reordered network updates and long-run balance remain open.
