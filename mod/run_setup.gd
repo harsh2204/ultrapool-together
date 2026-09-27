@@ -28,8 +28,7 @@ func at_main_menu() -> bool:
 # for any published option; local progression never removes the shared selection.
 func available_choices() -> Dictionary:
 	var database = get_node("/root/BallDatabase")
-	var ui = get_node_or_null("/root/UIManager")
-	DifficultyCatalog.register(database, ui.decks_menu if ui != null else null)
+	DifficultyCatalog.register(database)
 	var result = {"deck": [], "difficulty": []}
 	for resource in database.id_to_deck.values():
 		var deck_id = str(resource.id)
@@ -40,7 +39,7 @@ func available_choices() -> Dictionary:
 		if _available_to_host(resource):
 			# Prefer catalog label so Together All Nighter is distinct from native (#13).
 			var label = DifficultyCatalog._resource_label(resource, str(resource.id))
-			result.difficulty.append({"id": str(resource.id), "label": tr(label)})
+			result.difficulty.append({"id": str(resource.id), "label": label})
 	for field in result:
 		result[field].sort_custom(func(a, b): return a.id < b.id)
 	return result

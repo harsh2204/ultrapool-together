@@ -7,7 +7,7 @@ const MUTED = Color("8baeb2")
 const GOLD = Color("e8b861")
 const FELT = Color("35d5ab")
 const DECK_SIZE = Vector2(76, 112)
-const COMPACT_SIZE = Vector2(130, 62)
+const COMPACT_SIZE = Vector2(130, 66)
 const MAX_VOTERS = 8
 const CHALK_IDLE = Color(1, 1, 1, 0.72)
 const CHALK_VOTED = Color("f2cf7d")
@@ -120,8 +120,20 @@ func _layout_label() -> void:
 		_label.size = Vector2(maxf(0, size.x - 12), 48)
 	else:
 		var inset = 35.0 if _texture != null else 16.0
-		_label.position = Vector2(inset, 5)
-		_label.size = Vector2(maxf(0, size.x - inset - 14), 30)
+		_label.position = Vector2(inset, 2)
+		var width = maxf(COMPACT_SIZE.x, size.x) - inset - 14
+		_label.size = Vector2(width, 40)
+		# Native names need two or more lines at the game's font metrics. Measure
+		# when configured/resized, reserve the voter row, and grow instead of hiding
+		# the word that distinguishes a choice (GAP-002 / PERF-026).
+		var lines = maxi(1, _label.get_line_count())
+		var text_height = (
+			lines * _label.get_line_height()
+			+ (lines - 1) * _label.get_theme_constant("line_spacing")
+		)
+		var title_height = maxf(40, ceilf(text_height))
+		_label.size.y = title_height
+		custom_minimum_size.y = maxf(COMPACT_SIZE.y, title_height + 24)
 
 
 func _draw() -> void:
@@ -175,7 +187,7 @@ func _draw_flat_marks() -> void:
 func _draw_voters() -> void:
 	var is_deck = _field == "deck"
 	if _voters.is_empty():
-		_draw_centered("No votes", Vector2(size.x / 2, 94 if is_deck else 54), 10, MUTED)
+		_draw_centered("No votes", Vector2(size.x / 2, 94 if is_deck else size.y - 8), 10, MUTED)
 		return
 	var columns = 4 if is_deck else MAX_VOTERS
 	var spacing = 15.0 if is_deck else 14.0
@@ -184,7 +196,7 @@ func _draw_voters() -> void:
 		var column = index % columns
 		var row_count = mini(columns, _voters.size() - row * columns)
 		var x = size.x / 2 + (column - (row_count - 1) / 2.0) * spacing
-		var y = 86.0 + row * 15 if is_deck else 49.0
+		var y = 86.0 + row * 15 if is_deck else size.y - 13.0
 		if is_deck and _voters.size() <= columns:
 			y += 6
 		var voter: Dictionary = _voters[index]

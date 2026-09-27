@@ -1,6 +1,6 @@
 # Code map and change routes
 
-Paths below are relative to the repository root. Locate functions with `rg -n` rather than relying on line numbers. This map describes v0.9.4; confirm the checked-out implementation before extending it.
+Paths below are relative to the repository root. Locate functions with `rg -n` rather than relying on line numbers. This map describes v0.9.5; confirm the checked-out implementation before extending it.
 
 ## Roles and native boundary
 
@@ -16,6 +16,7 @@ Paths below are relative to the repository root. Locate functions with `rg -n` r
 | Stage | Entry points | Preserve |
 | --- | --- | --- |
 | Lobby and frozen run | `lobby_state.gd`, `lobby_scene.gd/.tscn`, `run_setup.gd::capture_config/validate_config/start`, `main.gd::_start_match/_begin_table` | Host-only settings, per-player votes, native allowlists, readiness invalidation, identical frozen configuration. |
+| Native catalog labels | `run_setup.available_choices`, `difficulty_catalog._resource_label/register`, `lobby_vote_option._layout_label`, `render_ui_fixtures.gd` | Native name fields contain translation keys. Resolve them before fallback, preserve distinct mod variant names, measure actual text lines and reserve the voter row. Register multiplayer resources in the database without appending to already-built native menu arrays that have parallel panels/indicators. |
 | Local input | `native_player.gd::_process`, `game_adapter.gd::can_shoot/shoot`, `main.gd::can_control/submit_shot` | Actual native initial click/controller poll, menu/popup and turn gates; rendering changes must not falsify gameplay state. |
 | Accepted shot | `main.gd::_take_shot` → `table_sync.capture/valid_capture` → `game_adapter.shoot` → reliable `shot_start` | Validate actor, turn and baseline before physics or ability callbacks; one accepted shot. |
 | Active shot and settlement | `game_adapter.gd::_process/_raw_settled`, `main.gd::_process/_finish_shot`, `multiplayer_balls.gd`, `expansion_balls.gd` | Native settlement, effect ordering, score/shot budgets, one turn advance and reliable settled state. |

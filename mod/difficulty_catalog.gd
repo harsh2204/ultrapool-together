@@ -21,11 +21,10 @@ static func is_registered(database) -> bool:
 	return database != null and database.id_to_difficulty.has(TOGETHER_ALL_NIGHTER_ID)
 
 
-static func register(database, menu = null) -> bool:
+static func register(database) -> bool:
 	if database == null or not database.id_to_difficulty.has(NATIVE_ALL_NIGHTER_ID):
 		return false
 	if is_registered(database):
-		_ensure_menu(menu, database.id_to_difficulty[TOGETHER_ALL_NIGHTER_ID])
 		return true
 	var base = database.id_to_difficulty[NATIVE_ALL_NIGHTER_ID]
 	var clone = base.duplicate(true)
@@ -35,7 +34,9 @@ static func register(database, menu = null) -> bool:
 	database.id_to_difficulty[TOGETHER_ALL_NIGHTER_ID] = clone
 	if database.get("difficulties") is Array and not database.difficulties.has(clone):
 		database.difficulties.append(clone)
-	_ensure_menu(menu, clone)
+	# The native menu builds parallel panels and per-deck indicators in _ready.
+	# Appending only its difficulty array afterward leaves invalid UI indices.
+	# Multiplayer selection resolves this registered resource through the database.
 	return true
 
 
@@ -78,17 +79,22 @@ static func _apply_title(difficulty) -> void:
 
 
 static func _resource_label(resource, fallback: String) -> String:
+	# Identity overrides belong before native label lookup: this clone shares its
+	# gameplay with diff_6, but must remain distinguishable in every catalog view.
+	if str(resource.id) == TOGETHER_ALL_NIGHTER_ID:
+		return TOGETHER_ALL_NIGHTER_TITLE
 	for field in ["title", "name", "display_name"]:
 		if not _has_property(resource, field):
 			continue
-		var value = str(resource.get(field)).strip_edges()
+		# Native DifficultyResource.name is a DIFF_* translation key, not an ID.
+		# Resolve it before checking for an unavailable label (GAP-002).
+		var value = str(TranslationServer.translate(str(resource.get(field)))).strip_edges()
 		if not value.is_empty() and not value.begins_with("DIFF_") and value != str(resource.id):
 			return value
-	if str(resource.id) == TOGETHER_ALL_NIGHTER_ID:
-		return TOGETHER_ALL_NIGHTER_TITLE
 	if str(resource.id) == NATIVE_ALL_NIGHTER_ID:
 		return "All Nighter"
-	return fallback
+	# An unsupported/missing native translation must not expose a resource ID.
+	return "Unknown difficulty" if fallback.begins_with("diff_") else fallback
 
 
 static func _has_property(object, property_name: String) -> bool:
@@ -98,10 +104,3 @@ static func _has_property(object, property_name: String) -> bool:
 		if property.name == property_name:
 			return true
 	return false
-
-
-static func _ensure_menu(menu, difficulty) -> void:
-	if menu == null or difficulty == null:
-		return
-	if menu.get("difficulties") is Array and not menu.difficulties.has(difficulty):
-		menu.difficulties.append(difficulty)
