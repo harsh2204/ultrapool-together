@@ -1,0 +1,425 @@
+{
+  "capture": "20260927T070455Z-1962c3ec",
+  "source_pr": 45,
+  "screens": [
+    {
+      "caption": "Native run votes and Ready travel through the controller.",
+      "file": "lobby-native-vote-input.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Create or join a lobby.",
+      "file": "lobby-home.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Four-player co-op with one player choosing a seat.",
+      "file": "lobby-choosing-seats.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Four players ready at a shared table.",
+      "file": "lobby-coop-ready.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Native starting-set cards and difficulty buttons show live voters.",
+      "file": "lobby-native-run-vote.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Every native starting-set card and difficulty with eight players across four tables.",
+      "file": "lobby-full-native-catalog.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Eight-player agreement remains visible from a guest's view.",
+      "file": "lobby-eight-player-consensus.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Native Settings heading · Tables / Mode / Shots with Together options closed.",
+      "file": "lobby-settings-heading.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Together options · scrolled panel below header · Multiplayer balls, Clone-table rounds, expansions, sync shop, turn banner, cue picker.",
+      "file": "lobby-together-options-nighter.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Together options on Chill Pool Night · Clone-table rounds visible, disabled, unchecked, All Nighter only.",
+      "file": "lobby-together-options-gated.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "The in-game invite menu with offline fixture friends.",
+      "file": "lobby-friends.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "A 1v1v1v3 match with equal shot budgets per table.",
+      "file": "lobby-four-tables.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Race mode · two teams racing to finish the full run",
+      "file": "lobby-race.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "End-match vote · every connected player must approve",
+      "file": "lobby-return-vote.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Race standings · first finisher and a team still playing",
+      "file": "lobby-race-finish.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Completed table standings with authoritative native scores.",
+      "file": "lobby-standings.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Host table · the selected native Classic starting set",
+      "file": "10-host-table.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Bankshot equipped on the native table · aiming preview.",
+      "file": "cue-native-bankshot.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Host turn · banner, spent shot pip, emerald cue, cue ball without a star.",
+      "file": "table-your-turn.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Teammate turn · seat-colored banner, presence aim line, and CRT over mod UI.",
+      "file": "table-teammate-aim.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "The winning table's end-of-match HUD.",
+      "file": "table-match-result.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Watch another table while your own run continues",
+      "file": "spectate-table.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Spectating with locally selected felt, rails, floor, and palette",
+      "file": "spectate-customized.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Shopping table keeps its last board visible",
+      "file": "spectate-shopping.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Shared shop · native offers and the selected starting build",
+      "file": "20-shared-shop.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Shared shop with sync_shop ON · teammate cursors over native ball offers.",
+      "file": "shop-shared.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "A native starter's description and shop actions.",
+      "file": "shop-ball-details.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Shop offering Crescent · expansion ball with placeholder texture while sets are enabled.",
+      "file": "shop-expansion-offer.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Expansion ball inspection · Crescent name, description, and placeholder art.",
+      "file": "shop-expansion-details.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "The native snack counter, shared by the table.",
+      "file": "shop-snacks.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "The native cocktail counter for mixing the table's balls.",
+      "file": "shop-mixing.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Independent shop · Your shop label · sync_shop OFF so shared teammate cursors do not draw.",
+      "file": "shop-sync-off.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Cue workshop rack 1 · distinct cues and their complete effect descriptions.",
+      "file": "cue-shop-rack-1.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Cue workshop rack 2 · distinct cues and their complete effect descriptions.",
+      "file": "cue-shop-rack-2.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Cue workshop rack 3 · distinct cues and their complete effect descriptions.",
+      "file": "cue-shop-rack-3.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Cue workshop rack 4 · distinct cues and their complete effect descriptions.",
+      "file": "cue-shop-rack-4.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Cue workshop rack 5 · distinct cues and their complete effect descriptions.",
+      "file": "cue-shop-rack-5.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Cue workshop · subtle cue effects, free finishes, and the shared table wallet.",
+      "file": "cue-shop-host-preview.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Purchased Finesse cue · Gold finish · confirmed shared-money debit.",
+      "file": "cue-shop-host-equipped.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Host · native shop ball follows the pointer",
+      "file": "22-host-native-drag.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Native shared shop · one teammate ready, waiting for the other",
+      "file": "shop-team-ready.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Host · native round completion and payout",
+      "file": "60-host-payout.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Host · shared shop reached through round payout",
+      "file": "61-host-round-shop.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Host · next round after both teammates ready",
+      "file": "62-host-next-round.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Host · native run win result",
+      "file": "68-host-win.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Host · native run loss result",
+      "file": "68-host-loss.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest table · reconstructed from the host snapshot",
+      "file": "30-guest-table.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest turn · native cue stick, aim line, and reticle with a gold custom cue.",
+      "file": "31-guest-aim.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "BALL_2-BALL_NAME · guest inspection card",
+      "file": "40-ball-2-ball.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "BALL_1-BALL_NAME · guest inspection card",
+      "file": "40-ball-1-ball.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest native shop · shared build and offers",
+      "file": "50-guest-shop.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest native shop · inspect a shared ball",
+      "file": "51-guest-shop-details.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest snack / tapas bar · ticket counters visible on the shared shop HUD.",
+      "file": "53-guest-snack-bar.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · native snack drag and offer retraction",
+      "file": "52-guest-native-snack-drag.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest shop · CubesPopup with two textured NEGATIVE cubes (not black silhouettes) and snack tickets.",
+      "file": "54-guest-negative-cubes.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest browsing the next cue rack while the table confirms a purchase.",
+      "file": "cue-shop-guest-pending.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Rejected cue purchase · inventory and money preserved · local browsing remains available.",
+      "file": "cue-shop-guest-rejected.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest cue purchase confirmed by the table · equipped model, finish, and wallet agree.",
+      "file": "cue-shop-guest-equipped.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · payout received through serialized table messages",
+      "file": "63-guest-payout.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · native shared shop after the round payout",
+      "file": "64-guest-round-shop.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · native shop ball follows the pointer",
+      "file": "67-guest-native-drag.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · purchase appears immediately during a simulated network delay",
+      "file": "67-guest-purchase-pending.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · Ready responds immediately while host confirmation is delayed",
+      "file": "65-guest-ready-pending.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · next round remains playable after delayed old shop messages",
+      "file": "66-guest-next-round.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · native run win result",
+      "file": "69-guest-win.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · native run loss result",
+      "file": "69-guest-loss.png",
+      "height": 720,
+      "width": 1280
+    },
+    {
+      "caption": "Guest · first-round defeat before any shop has opened",
+      "file": "70-guest-cold-loss.png",
+      "height": 720,
+      "width": 1280
+    }
+  ],
+  "assets": [
+    "bankshot.png",
+    "carom.png",
+    "clean.png",
+    "closer.png",
+    "comeback.png",
+    "corner.png",
+    "double_rail.png",
+    "finesse.png",
+    "firm.png",
+    "house.png",
+    "opener.png",
+    "relay.png",
+    "sidewinder.png",
+    "silk.png",
+    "thunder.png"
+  ]
+}
