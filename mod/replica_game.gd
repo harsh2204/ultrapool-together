@@ -6,6 +6,8 @@ const ReplicaFx = preload("replica_fx.gd")
 const CueCatalog = preload("cue_catalog.gd")
 const BallLevelFx = preload("ball_level_fx.gd")
 const ShotsPips = preload("shots_pips.gd")
+const TableEffectsView = preload("table_effects_view.gd")
+const TableVisualFxView = preload("table_visual_fx_view.gd")
 
 var remote_ready = false
 var remote_shots = 0
@@ -22,6 +24,8 @@ var _hud_state: Dictionary = {}
 var _pocket_states: Array = []
 var _ball_bases: Dictionary = {}
 var _fx = ReplicaFx.new()
+var effects_view = TableEffectsView.new()
+var _visual_fx_view = TableVisualFxView.new()
 
 
 func prepare_scene() -> void:
@@ -93,15 +97,20 @@ func _ready() -> void:
 	# Host Game sets this during play; keeping it false suppresses shoot_ui (#18).
 	playing = true
 	balls_spawned = true
+	effects_view.setup(self, Global.SCENE_GAME)
+	_visual_fx_view.setup(self, Global.SCENE_GAME)
 
 
 func _exit_tree() -> void:
 	_fx.clear()
+	effects_view.dispose()
+	_visual_fx_view.clear()
 
 
 func _process(_delta: float) -> void:
 	_update_potted_rail_hover()
-	pass
+	effects_view.tick()
+	_visual_fx_view.tick()
 
 
 func _physics_process(delta: float) -> void:
@@ -195,6 +204,11 @@ func apply_table(data: Dictionary) -> void:
 	var locale_changed: bool = _hud_state.get("locale") != TranslationServer.get_locale()
 	_update_hud(data, locale_changed)
 	_update_pockets(data.pockets, locale_changed)
+	# GAP-007: native effect presentation has no guest gameplay callbacks.
+	var effect_epoch = "%s:%s" % [data.scene_id, data.rounds_played]
+	effects_view.apply(data.get("effects", {}), Vector2.ZERO, effect_epoch)
+	effects_view.apply_pockets(data.get("effects", {}), pocket_replicas)
+	_visual_fx_view.apply(data.get("visual_fx", {}), Vector2.ZERO, effect_epoch)
 	_fx.begin_apply()
 	_fx.observe_round(table, data.rounds_played, data.in_shop)
 	_update_aim_reminder(data.ready and playing)

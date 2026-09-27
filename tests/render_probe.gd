@@ -22,6 +22,8 @@ var round_flow: RefCounted
 var shop_input: Node
 var native_aim = preload("native_aim_fixture.gd").new()
 var native_pocket = preload("native_pocket_fixture.gd").new()
+var native_effects = preload("native_table_effects_fixture.gd").new()
+var native_visual_fx = preload("native_visual_fx_fixture.gd").new()
 var fixture_config = {"deck": "1_CLASSIC", "difficulty": "diff_3", "seed": 24681}
 
 
@@ -77,14 +79,18 @@ func _run():
 		return
 	shop_input = input_script.new()
 	add_child(shop_input)
-	var snapshot_probe = (
-		load(get_script().resource_path.get_base_dir().path_join("snapshot_probe.gd")).new()
-	)
-	snapshot_probe.embedded = true
-	add_child(snapshot_probe)
-	await snapshot_probe.completed
-	_check(not snapshot_probe.failed, "snapshot_probe: %d checks" % snapshot_probe.checks)
-	snapshot_probe.queue_free()
+	for name in ["snapshot_probe", "table_effects_probe"]:
+		var native_probe = (
+			load(get_script().resource_path.get_base_dir().path_join(name + ".gd")).new()
+		)
+		native_probe.embedded = true
+		add_child(native_probe)
+		await native_probe.completed
+		_check(
+			not native_probe.failed and native_probe.checks > 0,
+			"%s: %d checks" % [name, native_probe.checks]
+		)
+		native_probe.queue_free()
 	for probe in [
 		"team_vote_probe",
 		"lobby_probe",
@@ -139,6 +145,8 @@ func _run():
 	_check_balls(game.balls, "host")
 	await native_aim.check(mod, game, "host", _check)
 	await native_pocket.check_host(mod, game, _check, _capture)
+	await native_effects.check_host(mod, game, _check, _capture)
+	await native_visual_fx.check_host(mod, game, _check, _capture)
 	await _capture("10-host-table", "Host table · the selected native Classic starting set")
 	await fixtures.capture_table_states(mod, _capture)
 	var snapshot = mod.table_sync.capture()
@@ -163,9 +171,9 @@ func _run():
 		shop_report.close()
 		await fixtures.capture_shop_presence(mod, _capture, shop_input)
 		await round_flow.check_host_shop_drag(mod, _capture)
-		var shop_probe = load(
-			get_script().resource_path.get_base_dir().path_join("shop_probe.gd")
-		).new()
+		var shop_probe = (
+			load(get_script().resource_path.get_base_dir().path_join("shop_probe.gd")).new()
+		)
 		var transactions_complete: bool = await shop_probe.check_native_transactions(
 			mod.shop_sync, _check
 		)
@@ -236,6 +244,8 @@ func _run():
 	await _capture("30-guest-table", "Guest table · reconstructed from the host snapshot")
 	await native_aim.check(mod, game, "guest", _check)
 	await native_pocket.check_guest(mod, snapshot, _check, _capture)
+	await native_effects.check_guest(mod, snapshot, _check, _capture)
+	await native_visual_fx.check_guest(mod, snapshot, _check, _capture)
 	await _capture_guest_aim(game)
 	await _capture_ball_previews(game)
 	await _capture_guest_shop(snapshot, shop_state)
@@ -344,13 +354,20 @@ func _check_shop_view_preference(original: Dictionary) -> void:
 	var saved_started = mod.lobby.get("started")
 	var saved_nav: Dictionary = mod.latest_state.get("ui_nav", {}).duplicate(true)
 	_check(not saved_preference, "shop view: following defaults off in a fresh profile")
-	_check(sync.shared_shop_sync_active(), "shop view: shared purchasing remains enabled by default")
+	_check(
+		sync.shared_shop_sync_active(), "shop view: shared purchasing remains enabled by default"
+	)
 	sync.show_section("balls")
 	var host_view: Dictionary = original.duplicate(true)
 	host_view.section = "snacks"
 	host_view.focus = ""
-	_check(sync.apply_state(host_view), "shop view: guest accepts host inventory while follow is off")
-	_check(sync.current_section() == "balls", "shop view: host counter change preserves manual guest view")
+	_check(
+		sync.apply_state(host_view), "shop view: guest accepts host inventory while follow is off"
+	)
+	_check(
+		sync.current_section() == "balls",
+		"shop view: host counter change preserves manual guest view"
+	)
 	mod._queue_host_ui_nav({"place": "snack_bar", "section": "snacks", "focus": ""})
 	_check(
 		mod._queued_ui_nav.is_empty() and sync.current_section() == "balls",
@@ -368,9 +385,14 @@ func _check_shop_view_preference(original: Dictionary) -> void:
 		"mod settings: personal follow toggle is available and off during a match"
 	)
 	_check(mod.panel._sync_shop_check.disabled, "mod settings: shared match rules remain locked")
-	await _capture("mod-settings-shop-follow-off", "Mod settings · personal shop view following is off")
+	await _capture(
+		"mod-settings-shop-follow-off", "Mod settings · personal shop view following is off"
+	)
 	toggle.set_pressed(true)
-	_check(prefs.follow_shop_view_enabled(), "mod settings: toggle opts this client into view following")
+	_check(
+		prefs.follow_shop_view_enabled(),
+		"mod settings: toggle opts this client into view following"
+	)
 	mod.panel._close_mod_options()
 	mod._set_panel(false)
 	sync._try_apply_queued_nav()
@@ -398,7 +420,9 @@ func _check_shop_view_preference(original: Dictionary) -> void:
 	host_view.section = "snacks"
 	sync.apply_state(host_view)
 	sync._try_apply_queued_nav()
-	_check(sync.current_section() == "balls", "shop view: opt-out cannot apply a delayed counter jump")
+	_check(
+		sync.current_section() == "balls", "shop view: opt-out cannot apply a delayed counter jump"
+	)
 	_check(sync.shared_shop_sync_active(), "shop view: personal opt-out preserves shared shopping")
 	mod.settings_button.pressed.emit()
 	mod._toggle_panel()
@@ -438,7 +462,9 @@ func _capture_guest_aim(game) -> void:
 	if not is_instance_valid(game) or not is_instance_valid(game.player_ball):
 		_check(false, "guest aim fixture has a cue ball")
 		return
-	var CueCatalog = load(get_script().resource_path.get_base_dir().path_join("../mod/cue_catalog.gd"))
+	var CueCatalog = load(
+		get_script().resource_path.get_base_dir().path_join("../mod/cue_catalog.gd")
+	)
 	for player in mod.lobby.get("players", []):
 		if int(player.get("id", 0)) == 2:
 			player["cue"] = "gold"
@@ -487,12 +513,14 @@ func _capture_guest_aim(game) -> void:
 		and pivot.global_position.distance_squared_to(ball.global_position) < 16.0
 	)
 	_check(
-		bool(ball.get("preparing_shot"))
-		and pivot_ok
-		and (
-			(shoot_ui is CanvasItem and shoot_ui.visible)
-			or (prediction is CanvasItem and prediction.visible)
-			or (gauge is CanvasItem and gauge.visible)
+		(
+			bool(ball.get("preparing_shot"))
+			and pivot_ok
+			and (
+				(shoot_ui is CanvasItem and shoot_ui.visible)
+				or (prediction is CanvasItem and prediction.visible)
+				or (gauge is CanvasItem and gauge.visible)
+			)
 		),
 		"guest cue ball shows aim chrome (stick / line / reticle)"
 	)
@@ -522,8 +550,13 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 	for resource in cube_resources:
 		var cube = BallItem.new()
 		cube.data = resource
-		_check(str(cube.data.from_set) == "NEGATIVE", "fixture cube %s is NEGATIVE" % str(resource.id))
-		_check(cube.data.texture != null, "fixture cube %s has a BallResource.texture" % str(resource.id))
+		_check(
+			str(cube.data.from_set) == "NEGATIVE", "fixture cube %s is NEGATIVE" % str(resource.id)
+		)
+		_check(
+			cube.data.texture != null,
+			"fixture cube %s has a BallResource.texture" % str(resource.id)
+		)
 		cubes.append(cube)
 	var previous_cubes = game.player_info.cubes.duplicate()
 	game.player_info.cubes.assign(cubes)
@@ -635,8 +668,10 @@ func _capture_host_native_cubes(host_mod: Node, game) -> void:
 		if tex != null:
 			native_tex += 1
 	print(
-		"RENDER_HOST_CUBES native_sprites=%s tex_bound=%s (no mod rebind)"
-		% [sprites.size(), native_tex]
+		(
+			"RENDER_HOST_CUBES native_sprites=%s tex_bound=%s (no mod rebind)"
+			% [sprites.size(), native_tex]
+		)
 	)
 	await _capture(
 		"54-host-native-cubes",
@@ -670,7 +705,11 @@ func _capture_host_native_cubes(host_mod: Node, game) -> void:
 		button.visible = false
 	get_node("/root/UIManager").info_display.hide_info()
 	await get_tree().process_frame
-	if host_mod != null and host_mod.shop_sync != null and host_mod.shop_sync.has_method("show_section"):
+	if (
+		host_mod != null
+		and host_mod.shop_sync != null
+		and host_mod.shop_sync.has_method("show_section")
+	):
 		host_mod.shop_sync.show_section("balls")
 	# Wait until UIManager reports no popup, otherwise host drag stays blocked.
 	var ui = get_node("/root/UIManager")
@@ -699,7 +738,10 @@ func _force_close_cubes_popups(shop: Node) -> void:
 		for node in root.find_children("*", "CanvasLayer", true, false):
 			# CubesPopup implementations often flip an inner CanvasLayer while the
 			# Control root stays hidden — that still counts as an open UI popup.
-			if str(node.name).to_lower().contains("cube") or str(node.get_parent().name).to_lower().contains("cube"):
+			if (
+				str(node.name).to_lower().contains("cube")
+				or str(node.get_parent().name).to_lower().contains("cube")
+			):
 				node.visible = false
 
 
@@ -768,7 +810,10 @@ func _collect_cube_sprites(shop: Node, popup: Node) -> Array:
 		for sprite in root.find_children("*", "Sprite2D", true, false):
 			if sprite in sprites or sprite.material == null:
 				continue
-			if sprite.material.has_method("get_shader_parameter") and sprite.material.get_shader_parameter("hint_color") != null:
+			if (
+				sprite.material.has_method("get_shader_parameter")
+				and sprite.material.get_shader_parameter("hint_color") != null
+			):
 				sprites.append(sprite)
 	return sprites
 

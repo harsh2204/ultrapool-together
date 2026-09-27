@@ -9,6 +9,8 @@ const TITLE_TAG_CONTENT = [46, 9, 20, 12]
 const TITLE_EYE_POSITION = Vector2(16, 9)
 const TITLE_EYE_SIZE = Vector2(24, 24)
 const STATUS_RIBBON_CONTENT = [44, 8, 44, 12]
+const TableEffectsView = preload("table_effects_view.gd")
+const TableVisualFxView = preload("table_visual_fx_view.gd")
 
 var watched_table: int:
 	get:
@@ -37,6 +39,9 @@ var _empty: Label
 var _table_picker: OptionButton
 var _bounds = Rect2(-320, -240, 640, 480)
 var _last_received = 0.0
+var _effects_view = TableEffectsView.new()
+var _visual_fx_view = TableVisualFxView.new()
+var _effects_frame: Dictionary = {}
 
 
 func setup(controller: Node) -> void:
@@ -131,9 +136,16 @@ func tick(_delta: float) -> void:
 	var duration: float = after.time - before.time
 	var weight = clampf((time - before.time) / duration, 0.0, 1.0) if duration > 0 else 1.0
 	_render_balls(before.data, after.data, weight)
+	# Apply each buffered descriptor once; interpolation ticks retain visual nodes.
+	if not is_same(_effects_frame, after):
+		_effects_frame = after
+		_effects_view.apply(after.data.get("effects", {}), after.data.table_position, _scene_key)
+		_visual_fx_view.apply(after.data.get("visual_fx", {}), after.data.table_position, _scene_key)
 	_update_pockets(after.data)
 	_update_table_ui(after.data)
 	_layout()
+	_effects_view.tick()
+	_visual_fx_view.tick()
 	if _now() - _last_received > STALE_SECONDS:
 		_status.text = "Waiting for table updates… · Your table keeps playing."
 
@@ -263,6 +275,8 @@ func _create_table(data: Dictionary) -> void:
 	_world.add_child(_table)
 	_table.position = Vector2.ZERO
 	_refresh_cosmetics()
+	_effects_view.setup(_world, game_scene)
+	_visual_fx_view.setup(_world, game_scene)
 	var points: Array[Vector2] = []
 	for pocket in data.pockets:
 		if pocket.base_index >= 0:
@@ -454,6 +468,7 @@ func _apply_item(visual: Dictionary, item: Dictionary, is_player: bool = false) 
 func _update_pockets(data: Dictionary) -> void:
 	var pockets: Array[Node] = _table.get_node("Pockets").get_children()
 	var present: Dictionary = {}
+	var effect_pockets: Dictionary = {}
 	for state in data.pockets:
 		var pocket: Node2D
 		if state.base_index >= 0:
@@ -465,6 +480,7 @@ func _update_pockets(data: Dictionary) -> void:
 				_world.add_child(_holes[state.id])
 				_holes[state.id].find_child("BlackHole", true, false).show()
 			pocket = _holes[state.id]
+		effect_pockets[state.id] = pocket
 		pocket.global_position = _world.to_global(state.position - data.table_position)
 		pocket.rotation = state.rotation
 		pocket.scale = state.scale
@@ -485,6 +501,7 @@ func _update_pockets(data: Dictionary) -> void:
 		if not present.has(id):
 			_holes[id].free()
 			_holes.erase(id)
+	_effects_view.apply_pockets(data.get("effects", {}), effect_pockets)
 
 
 func _layout() -> void:
@@ -505,6 +522,8 @@ func _update_status(data: Dictionary) -> void:
 
 
 func _clear_board() -> void:
+	_effects_view.dispose()
+	_visual_fx_view.clear()
 	for child in _world.get_children():
 		child.free()
 	_table = null
@@ -513,7 +532,13 @@ func _clear_board() -> void:
 	_balls.clear()
 	_holes.clear()
 	_frames.clear()
+	_effects_frame = {}
 	_scene_key = ""
+
+
+func _exit_tree() -> void:
+	_effects_view.dispose()
+	_visual_fx_view.clear()
 
 
 func _hide_named(root: Node, node_name: String) -> void:

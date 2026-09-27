@@ -1,6 +1,6 @@
 # Code map and change routes
 
-Paths below are relative to the repository root. Locate functions with `rg -n` rather than relying on line numbers. This map describes merged v0.9.2; confirm the checked-out implementation before extending it.
+Paths below are relative to the repository root. Locate functions with `rg -n` rather than relying on line numbers. This map describes v0.9.4; confirm the checked-out implementation before extending it.
 
 ## Roles and native boundary
 
@@ -20,6 +20,7 @@ Paths below are relative to the repository root. Locate functions with `rg -n` r
 | Accepted shot | `main.gd::_take_shot` → `table_sync.capture/valid_capture` → `game_adapter.shoot` → reliable `shot_start` | Validate actor, turn and baseline before physics or ability callbacks; one accepted shot. |
 | Active shot and settlement | `game_adapter.gd::_process/_raw_settled`, `main.gd::_process/_finish_shot`, `multiplayer_balls.gd`, `expansion_balls.gd` | Native settlement, effect ordering, score/shot budgets, one turn advance and reliable settled state. |
 | Table delivery | `main.gd::_publish_snapshot/_received_table`, `table_sync.gd::capture/apply_snapshot/_snapshot_problem` | Match/scene/phase ordering, strict bounds, spawn barrier, reliable topology changes; targeted resync does not advance broadcast caches. |
+| Native table effects | `table_effects_sync.gd`, `table_effects_view.gd`, `table_visual_fx.gd`, `table_visual_fx_view.gd`; `table_sync.effects_active`, `main._snapshot_refresh_due` | All six droplets, energy and WORMHOLE; cached allowlisted native visual catalog. Scriptless guests/spectators never run gameplay callbacks. Preserve bounded creation, latest-state cancellation, explicit overflow/recovery, reliable birth/removal and 100 ms updates while effects animate on a settled table. |
 | Guest rendering | `replica_game.gd::prepare_scene/apply_table/_update_pockets/_set_item`, `replica_ball.gd`, `replica_fx.gd` | Retained nodes, no native gameplay callbacks on guests, changed-data setters, bounded transient effects. See [effect coverage](../../../../docs/TABLE_EFFECTS.md). |
 | Payout and shop | `round_presentation.gd`, `shop_sync.gd`, `tests/round_flow_fixtures.gd` | Native payout/Continue, each client's acknowledgement, phase barriers; early shop data cannot skip payout. |
 | Finish and teardown | `main.gd::_end_table/_reset_match/_disconnected`, `run_controls.gd`, service `end_session`, `table_sync.end_guest` | Restore native scripts, signals, globals and menus; clear pending work, identities, effects, votes and caches. |
