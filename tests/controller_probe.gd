@@ -70,8 +70,10 @@ class AdapterStub:
 	func can_shoot() -> bool:
 		return ready_to_shoot
 
-	func shoot(_vector: Vector2) -> bool:
+	func shoot(_vector: Vector2, accepted: Callable = Callable()) -> bool:
 		if not ready_to_shoot:
+			return false
+		if accepted.is_valid() and not accepted.call():
 			return false
 		accepted_shots += 1
 		return true
@@ -143,12 +145,71 @@ class ShopStub:
 	func is_open() -> bool:
 		return state.open
 
+	func current_section() -> String:
+		return str(state.get("section", ""))
+
+	func host_focus_key() -> String:
+		return str(state.get("focus", ""))
+
+	func exclusive_shopper() -> int:
+		return int(state.get("exclusive_shopper", 0))
+
+	func set_exclusive_shopper(player_id: int) -> void:
+		state["exclusive_shopper"] = player_id
+
 	func end_session():
 		ended += 1
 
 	func apply_state(data: Dictionary) -> bool:
 		state = data.duplicate(true)
 		return true
+
+
+class BallsServiceStub:
+	extends Node
+	## Stand-in for multiplayer_balls / expansion_balls on the controller fixture.
+	## Real main._take_shot / _publish_state call these; without stubs the probe
+	## null-dereferences and fails the whole shot/shop publish suite (pre-existing
+	## at ba751ef, not introduced by #21/#22/#23).
+
+	func setup(_controller) -> bool:
+		return true
+
+	func blocks_shot_input() -> bool:
+		return false
+
+	func begin_shot(_shot_number: int, _player: int) -> bool:
+		return true
+
+	func finish_shot() -> void:
+		pass
+
+	func prepare_shop() -> void:
+		pass
+
+	func bounty_shot() -> bool:
+		return false
+
+	func capture() -> Dictionary:
+		return {}
+
+	func display_signature(_state: Dictionary) -> Array:
+		return []
+
+	func begin_session(_flags = null) -> void:
+		pass
+
+	func end_session() -> void:
+		pass
+
+	func apply_state(_data: Dictionary) -> void:
+		pass
+
+	func handle_call(_actor: int, _message: Dictionary) -> void:
+		pass
+
+	func catalog() -> Array:
+		return []
 
 
 class PresenceStub:
@@ -240,6 +301,8 @@ func _controller():
 	controller.shop_sync = ShopStub.new()
 	controller.presence = PresenceStub.new()
 	controller.run_setup = RunStub.new()
+	controller.multiplayer_balls = BallsServiceStub.new()
+	controller.expansion_balls = BallsServiceStub.new()
 	controller.panel = PanelStub.new()
 	controller.panel.hide()
 	controller.pass_button = Button.new()
@@ -252,6 +315,8 @@ func _controller():
 		controller.shop_sync,
 		controller.presence,
 		controller.run_setup,
+		controller.multiplayer_balls,
+		controller.expansion_balls,
 		controller.panel,
 		controller.pass_button,
 		controller.turn_label,

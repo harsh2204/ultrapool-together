@@ -414,9 +414,19 @@ func _capture_full_catalog(mod: Node, capture: Callable) -> void:
 		catalog.deck.all(func(entry): return SetRegistry.is_native_lobby_deck(entry.id)),
 		"full catalog decks are native base sets only"
 	)
+	# Native Ultrapool exposes five choosable difficulties; Together registers an
+	# additional single-table All Nighter clone (diff_together_nighter).
+	var DifficultyCatalog = load(
+		mod.get_script().resource_path.get_base_dir().path_join("difficulty_catalog.gd")
+	)
+	var expected_difficulties = 5 + int(DifficultyCatalog.is_registered(database))
 	_record(
-		catalog.difficulty.size() == 5,
-		"full native button fixture includes all five selectable difficulties"
+		catalog.difficulty.size() == expected_difficulties,
+		(
+			"full native button fixture includes all five selectable difficulties"
+			if expected_difficulties == 5
+			else "full difficulty fixture includes five native choices plus Together All Nighter"
+		)
 	)
 	if catalog.deck.is_empty() or catalog.difficulty.is_empty():
 		return
