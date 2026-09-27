@@ -373,7 +373,8 @@ func _capture_animation(mod: Node, view, capture: Callable, check: Callable) -> 
 	# Real viewport frames from the existing single-process harness. Static capture
 	# waits two frames and has no timestamp return, so this bounded sequence reads
 	# the same viewport at frame_post_draw and records its monotonic draw time.
-	# No queued images: at most one readback/PNG is held, 96 frames / 8 seconds.
+	# A fixed 96-frame / 384 MiB buffer defers PNG compression until after the
+	# eight-second recording, so disk encoding cannot stall the shown animation.
 	var owner = capture.get_object()
 	if not check.call(is_instance_valid(owner), "cue animation: capture owner exists"):
 		return
@@ -405,6 +406,8 @@ func _capture_animation(mod: Node, view, capture: Callable, check: Callable) -> 
 		{"at": 6.5, "action": "previous"},
 	]
 	var frames: Array = []
+	var images: Array[Image] = []
+	var buffered_bytes = 0
 	var events: Array = []
 	var observed = {"rack": false, "idle": false, "blink": false, "talk": false, "nudge": false}
 	var unchanged = true
@@ -431,14 +434,15 @@ func _capture_animation(mod: Node, view, capture: Callable, check: Callable) -> 
 		# Skip missed samples instead of queuing or fabricating intermediate frames.
 		next_sample = (floori(float(elapsed) / 83333.0) + 1) * 83333
 		var image = mod.get_viewport().get_texture().get_image()
-		var filename = "frame-%03d.png" % frames.size()
-		var path = directory.path_join(filename)
-		if not check.call(image.save_png(path) == OK, "cue animation: saved " + filename):
+		var image_bytes = image.get_data_size()
+		if not check.call(
+			buffered_bytes + image_bytes <= 384 * 1024 * 1024,
+			"cue animation: raw frames stay within the fixed memory budget"
+		):
 			break
-		var saved_file = FileAccess.open(path, FileAccess.READ)
-		if saved_file != null:
-			bytes_written += saved_file.get_length()
-			saved_file.close()
+		buffered_bytes += image_bytes
+		images.append(image)
+		var filename = "frame-%03d.png" % frames.size()
 		var displayed: Dictionary = view.confirmed_equipment()
 		unchanged = unchanged and displayed == confirmed
 		var seller_frame: int = view._seller._body.frame
@@ -472,17 +476,34 @@ func _capture_animation(mod: Node, view, capture: Callable, check: Callable) -> 
 				}
 			)
 		)
-		if bytes_written >= 192 * 1024 * 1024:
+	var recorded_elapsed = Time.get_ticks_usec() - started
+	for index in images.size():
+		var filename: String = frames[index].file
+		var path = directory.path_join(filename)
+		if not check.call(images[index].save_png(path) == OK, "cue animation: saved " + filename):
 			break
+		images[index] = null
+		var saved_file = FileAccess.open(path, FileAccess.READ)
+		if saved_file != null:
+			bytes_written += saved_file.get_length()
+			saved_file.close()
+		if not check.call(
+			bytes_written <= 192 * 1024 * 1024, "cue animation: disk budget respected"
+		):
+			break
+		await mod.get_tree().process_frame
+	images.clear()
 	var manifest = {
 		"schema": 1,
 		"source": "Actual Godot viewport after RenderingServer.frame_post_draw",
-		"timing_note": "Monotonic draw timestamps; PNG readback/write affects capture cadence.",
+		"timing_note":
+		"Monotonic draw timestamps; readback affects cadence, PNG encoding follows recording.",
 		"target_fps": 12,
 		"target_duration_seconds": 8,
 		"started_ticks_usec": started,
 		"started_unix_seconds": started_unix,
-		"elapsed_usec": Time.get_ticks_usec() - started,
+		"elapsed_usec": recorded_elapsed,
+		"buffered_bytes": buffered_bytes,
 		"bytes_written": bytes_written,
 		"events": events,
 		"observed": observed,
@@ -680,6 +701,11 @@ func _check_resize_layout(mod: Node, view, check: Callable) -> void:
 	var confirmed: Dictionary = view.confirmed_equipment()
 	var inventory_transform: Transform2D = native.inventory.transform
 	var focused = view.get_viewport().gui_get_focus_owner()
+	var case_art = view._equipped_case.get_node_or_null("CueCaseArt") as TextureRect
+	check.call(
+		case_art != null and case_art.texture != null,
+		"cue shop: resize checks the actual equipped-case texture control"
+	)
 	var background = native.inventory.get_node_or_null("BuildBack")
 	var inventory_rect = Rect2()
 	if check.call(background is Sprite2D, "cue shop: resize checks native inventory artwork"):
@@ -722,6 +748,30 @@ func _check_resize_layout(mod: Node, view, check: Callable) -> void:
 			not _cue_control_rect(view, view._equipped_case).intersects(inventory_rect),
 			"cue shop: %s keeps the case clear of native inventory" % viewport_size
 		)
+		if case_art != null:
+			# A small parent does not bound an oversized TextureRect descendant.
+			# Setting size before IGNORE_SIZE previously left the PNG at its native
+			# 522x1404 minimum, while all parent-only layout checks still passed.
+			var artwork_rect = _cue_control_rect(view, case_art)
+			check.call(
+				_cue_control_rect(view, view._equipped_case).grow(0.5).encloses(artwork_rect),
+				"cue shop: %s fits actual case artwork inside its case control" % viewport_size
+			)
+			check.call(
+				visible_rect.grow(0.5).encloses(artwork_rect),
+				"cue shop: %s keeps actual case artwork inside the viewport" % viewport_size
+			)
+			check.call(
+				not artwork_rect.intersects(inventory_rect),
+				"cue shop: %s keeps actual case artwork clear of native inventory" % viewport_size
+			)
+			check.call(
+				artwork_rect.grow(0.5).encloses(_cue_control_rect(view, view._equipped_preview)),
+				(
+					"cue shop: %s keeps the confirmed cue within the fitted case artwork"
+					% viewport_size
+				)
+			)
 		check.call(
 			is_equal_approx(view._seller.position.y + view._seller.scale.y * 409.0, 414.0),
 			"cue shop: resize keeps Rook at the countertop"

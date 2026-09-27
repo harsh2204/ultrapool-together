@@ -378,10 +378,13 @@ func _build_equipped_case() -> void:
 		# is at 65% of the fitted silhouette, not the center of this panel.
 		cue_center = fitted.position.x + fitted.size.x * 0.65
 		var background = TextureRect.new()
+		background.name = "CueCaseArt"
+		# Suppress the texture's native minimum before assigning it. Otherwise
+		# the control retains the source PNG's size despite the fitted rectangle.
+		background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		background.texture = art
 		background.position = fitted.position
 		background.size = fitted.size
-		background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_equipped_case.add_child(background)
