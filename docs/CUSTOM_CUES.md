@@ -40,7 +40,7 @@ Ten free cosmetic finishes: Native, Emerald, Coral, Gold, Violet, Ice, Rose, Cha
 
 Score perks trigger only on the **first qualifying pot per shot**. Bonuses use positive **unmultiplied** ball value, retain fractions without rounding upward, and share a **+4-point cap per player per round across every cue**. Changing cues cannot reset that budget. Shielded respawns, virtual pockets, non-scoring pots, and duplicate callbacks cannot farm bonuses. The equipped cue is frozen at shot acceptance.
 
-Bonus score does not trigger native SCORE/SCORE-SELF chains. Crossing the native required-score threshold can still trigger REACH-SCORE. No cue grants extra shots, money, health, random outcomes, or persistent ball-stat changes.
+Bonus score is applied after the native pot completes and does not trigger native SCORE/SCORE-SELF chains. Crossing the native required-score threshold can still trigger REACH-SCORE and its normal effects. No cue directly grants extra shots, money, health, random outcomes, or persistent ball-stat changes.
 
 Finesse/Firm reshape power with `t=(length-50)/150`, then `t + bias*t*(1-t)*(1-2*t)`, bias −0.30/+0.30. They preserve direction, monotonicity, minimum/maximum input 50/200, midpoint 125, and maximum power. The largest adjustment is about 4.33 vector units, or 2.17% of full power. Other cues use native power.
 
@@ -50,9 +50,9 @@ These are initial tuning values. Balance review should compare identical seeds, 
 
 Existing reliable shop requests/results retain actor, table, match, scene, revision, eligibility, winner-only, shop-state, and balance checks. Ownership and the native wallet change synchronously. Duplicate buys cannot spend twice. Cue changes invalidate shop readiness.
 
-Reliable table state carries catalog-validated cue ownership and equipment for at most eight players. Only the table host applies perks. Accepted shot curves are applied once, with the identical vector sent to replicas. Gameplay ownership never comes from guest presence or cosmetic preferences.
+Reliable table state carries catalog-validated cue ownership and equipment for at most eight players. A run-scoped inventory revision prevents delayed table or shop state from undoing confirmed equipment and finishes. Only the table host applies perks. Accepted shot curves are applied once, with the identical vector sent to replicas. Gameplay ownership never comes from guest presence or cosmetic preferences.
 
-Fifteen generated cue sprites are shipped under `mod/assets/cues/`; native files and saves remain untouched. Art is cached at lifecycle boundaries, not loaded on packet/frame paths. Effect tracking is bounded to 128 balls and eight player budgets, cleared at shot/round/session boundaries. Relevant tracker items: PERF-010/026/034–038 and GAP-004.
+Fifteen generated cue sprites are shipped under `mod/assets/cues/`; native files and saves remain untouched. Art is cached at lifecycle boundaries, not loaded on packet/frame paths. Effect tracking is bounded to 128 balls and eight player budgets, cleared at shot/round/session boundaries. Initial or mid-shot overflow disables that shot's remaining perks without restoring spent bonus budget; incomplete pot history cannot activate Comeback or Relay. Fixed corner and side pocket roles follow table geometry in either orientation. Relevant tracker items: PERF-010/026/034–038 and GAP-004.
 
 ## Acceptance tracking
 

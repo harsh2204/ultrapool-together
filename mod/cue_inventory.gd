@@ -9,6 +9,7 @@ const CueCatalog = preload("cue_catalog.gd")
 const MAX_PLAYERS = 8
 
 var _players: Dictionary = {}
+var _revision = 0
 
 
 ## Call at match start/rematch or disconnect teardown, never on shop transitions.
@@ -16,6 +17,7 @@ var _players: Dictionary = {}
 ## their commands. Malformed trusted roster input clears the old run and fails shut.
 func reset(players: Array = []) -> bool:
 	_players.clear()
+	_revision = 0
 	if players.size() > MAX_PLAYERS:
 		return false
 	var next: Dictionary = {}
@@ -44,11 +46,13 @@ func snapshot() -> Dictionary:
 	ids.sort()
 	for id in ids:
 		result.append(_players[id].duplicate(true))
-	return {"players": result}
+	return {"revision": _revision, "players": result}
 
 
 static func valid_snapshot(value) -> bool:
-	if not value is Dictionary or value.size() != 1:
+	if not value is Dictionary or value.size() != 2:
+		return false
+	if typeof(value.get("revision")) != TYPE_INT or value.revision < 0:
 		return false
 	var players = value.get("players")
 	if not players is Array or players.size() > MAX_PLAYERS:
@@ -79,15 +83,20 @@ static func valid_snapshot(value) -> bool:
 	return true
 
 
-## Valid identical state is accepted without replacing retained records.
+## The outer table/match gate owns reset epochs. This inventory revision spans
+## both reliable shop replies and standalone table state within that same run.
+## Valid older/identical state is accepted without replacing newer retained data.
 func apply_snapshot(value) -> bool:
 	if not valid_snapshot(value):
 		return false
+	if value.revision < _revision:
+		return true
 	var next: Dictionary = {}
 	for member in value.players:
 		next[member.id] = member.duplicate(true)
 	if next != _players:
 		_players = next
+	_revision = value.revision
 	return true
 
 
@@ -140,6 +149,7 @@ func transact(actor: int, action: String, model: String, finish: String, money: 
 	var changed: bool = next != current
 	if changed:
 		_players[actor] = next
+		_revision += 1
 	return {"accepted": true, "error": "", "cost": cost, "changed": changed}
 
 

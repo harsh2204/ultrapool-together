@@ -36,11 +36,19 @@ class CuePreview:
 	func _draw() -> void:
 		var tint: Color = finish.get("modulate", Color.WHITE)
 		if art != null:
-			var target = Rect2(Vector2.ZERO, size)
-			var factor = minf(size.x / art.get_width(), size.y / art.get_height())
-			target.size = art.get_size() * factor
-			target.position = (size - target.size) * 0.5
-			draw_texture_rect(art, target, false, tint)
+			# The full stick establishes its silhouette; a second, magnified crop
+			# makes its wrap/inlays readable at native counter scale. Both draw the
+			# same cached texture, with no image allocation or resource work.
+			var detail_space = Rect2(6, 0, maxf(1.0, size.x - 12), size.y * 0.64)
+			var grip = Rect2(art.get_width() * 0.58, 0, art.get_width() * 0.42, art.get_height())
+			var detail = _fit_rect(grip.size, detail_space)
+			draw_texture_rect_region(detail, art, grip, tint)
+			var rule_y = size.y * 0.72
+			draw_line(
+				Vector2(8, rule_y), Vector2(size.x - 8, rule_y), Color(0.93, 0.78, 0.49, 0.16)
+			)
+			var full_space = Rect2(2, size.y * 0.78, maxf(1.0, size.x - 4), size.y * 0.22)
+			draw_texture_rect(art, _fit_rect(art.get_size(), full_space), false, tint)
 			return
 		# Readable fallback if optional loose-file artwork is absent.
 		var left = Vector2(12, size.y * 0.5)
@@ -58,6 +66,11 @@ class CuePreview:
 			for point in [0.1, 0.18, 0.26]:
 				var center = left.lerp(right, point)
 				draw_line(center - Vector2(2, 0), center + Vector2(2, 0), accent, 9)
+
+	func _fit_rect(source_size: Vector2, space: Rect2) -> Rect2:
+		var factor = minf(space.size.x / source_size.x, space.size.y / source_size.y)
+		var target_size = source_size * factor
+		return Rect2(space.position + (space.size - target_size) * 0.5, target_size)
 
 
 var _built = false
@@ -111,12 +124,6 @@ func _cache_art() -> void:
 		var art: Texture2D = CueVisuals.texture(str(entry.id))
 		if art != null:
 			_textures[str(entry.asset)] = art
-	var directory = get_script().resource_path.get_base_dir().path_join("assets/cues")
-	var path = directory.path_join("counter.png")
-	if FileAccess.file_exists(path):
-		var bitmap = Image.new()
-		if bitmap.load(path) == OK:
-			_textures["counter.png"] = ImageTexture.create_from_image(bitmap)
 
 
 func _build() -> void:
@@ -127,16 +134,6 @@ func _build() -> void:
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.theme = _theme()
 	add_child(_root)
-	if _textures.has("counter.png"):
-		var rack = TextureRect.new()
-		rack.name = "CueRackArt"
-		rack.texture = _textures["counter.png"]
-		rack.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		rack.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		rack.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_root.add_child(rack)
-		rack.position = Vector2(45, 16)
-		rack.size = Vector2(930, 236)
 
 	var sign = PanelContainer.new()
 	sign.position = Vector2(340, 0)

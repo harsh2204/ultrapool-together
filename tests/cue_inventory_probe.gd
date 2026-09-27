@@ -9,7 +9,7 @@ var failures: Array[String] = []
 func _initialize() -> void:
 	var script = load(get_script().resource_path.get_base_dir().path_join("../mod/cue_inventory.gd"))
 	var rack = script.new()
-	_check(rack.snapshot() == {"players": []}, "new inventory has no stale run members")
+	_check(rack.snapshot() == {"revision": 0, "players": []}, "new inventory has no stale run members")
 	_check(rack.model_for(99) == "house", "missing actors fall back to native handling")
 	_check(rack.finish_for(99) == "native", "missing actors fall back to the native finish")
 	var roster = [{"id": 20, "cue": "emerald"}, {"id": 10, "cue": "coral"}]
@@ -70,13 +70,21 @@ func _initialize() -> void:
 	exported.players.clear()
 	_check(guest.snapshot() == rack.snapshot(), "exported snapshot arrays are isolated")
 	_check_bad_snapshots(script, guest)
+	_check_reordered_snapshots(script)
 	_check_reset(rack)
 	_finish()
 
 
 func _check_bad_snapshots(script, rack) -> void:
 	var valid: Dictionary = rack.snapshot()
-	var cases: Array = [null, [], {}, {"players": {}}, {"players": [], "extra": true}]
+	var cases: Array = [
+		null, [], {}, {"players": []}, {"revision": 0, "players": {}},
+		{"revision": 0, "players": [], "extra": true},
+	]
+	for revision in [-1, 1.0, "1", null, true]:
+		var invalid_revision: Dictionary = valid.duplicate(true)
+		invalid_revision.revision = revision
+		cases.append(invalid_revision)
 	for field in ["id", "owned", "equipped", "finish"]:
 		var missing: Dictionary = valid.duplicate(true)
 		missing.players[0].erase(field)
@@ -97,7 +105,7 @@ func _check_bad_snapshots(script, rack) -> void:
 	var duplicate_actor: Dictionary = valid.duplicate(true)
 	duplicate_actor.players.append(duplicate_actor.players[0].duplicate(true))
 	cases.append(duplicate_actor)
-	var too_many = {"players": []}
+	var too_many = {"revision": valid.revision, "players": []}
 	for id in range(1, 10):
 		too_many.players.append({"id": id, "owned": ["house"], "equipped": "house", "finish": "native"})
 	cases.append(too_many)
@@ -105,12 +113,57 @@ func _check_bad_snapshots(script, rack) -> void:
 		_check(not script.valid_snapshot(malformed), "malformed cue snapshots are rejected at the boundary")
 		_check(not rack.apply_snapshot(malformed), "malformed cue snapshots cannot hydrate")
 		_check(rack.snapshot() == valid, "rejected snapshots preserve the last complete state")
-	_check(rack.apply_snapshot({"players": []}), "empty authoritative state clears stale run racks")
+	_check(
+		rack.apply_snapshot({"revision": valid.revision + 1, "players": []}),
+		"newer empty authoritative state clears stale run racks"
+	)
 	_check(rack.player(20).is_empty(), "disconnected-session racks do not survive explicit clear")
+
+
+func _check_reordered_snapshots(script) -> void:
+	var host = script.new()
+	var guest = script.new()
+	host.reset([{"id": 20, "cue": "native"}])
+	guest.reset([{"id": 20, "cue": "native"}])
+	var initial: Dictionary = host.snapshot()
+	host.transact(20, "cue_buy", "finesse", "gold", 50.0)
+	var bought: Dictionary = host.snapshot()
+	_check(bought.revision > initial.revision, "ownership changes advance the inventory revision")
+	_check(guest.apply_snapshot(bought), "a shop result imports the confirmed purchase revision")
+	_check(guest.apply_snapshot(initial), "a delayed initial table state is safely ignored")
+	_check(guest.snapshot() == bought, "delayed initial state cannot revoke a purchased cue")
+	host.transact(20, "cue_equip", "house", "ice", 50.0)
+	var equipped: Dictionary = host.snapshot()
+	_check(equipped.revision > bought.revision, "equipment changes advance the inventory revision")
+	guest.apply_snapshot(equipped)
+	guest.apply_snapshot(bought)
+	_check(guest.snapshot() == equipped, "delayed purchase state cannot rewind newer equipment")
+	host.transact(20, "cue_finish", "house", "amber", 50.0)
+	var finished: Dictionary = host.snapshot()
+	_check(finished.revision > equipped.revision, "finish changes advance the inventory revision")
+	guest.apply_snapshot(finished)
+	guest.apply_snapshot(equipped)
+	_check(guest.snapshot() == finished, "delayed equipment state cannot rewind a newer finish")
+	host.transact(20, "cue_finish", "house", "amber", 50.0)
+	host.transact(20, "cue_equip", "house", "amber", 50.0)
+	host.transact(20, "cue_buy", "finesse", "gold", 50.0)
+	_check(host.snapshot() == finished, "unchanged and rejected actions never advance inventory revision")
+	host.transact(20, "cue_equip", "finesse", "gold", 50.0)
+	var restored: Dictionary = host.snapshot()
+	_check(guest.apply_snapshot(restored), "newer state may deliberately return to an earlier appearance")
+	_check(guest.snapshot() == restored, "higher revision imports even when it resembles older state")
+	var newer_identical: Dictionary = restored.duplicate(true)
+	newer_identical.revision += 2
+	_check(guest.apply_snapshot(newer_identical), "newer identical rows still advance the accepted version")
+	guest.apply_snapshot(finished)
+	_check(guest.snapshot() == newer_identical, "an identical-row import still protects against later stale state")
+	_check(guest.apply_snapshot(newer_identical), "equal authoritative snapshots remain accepted no-ops")
+	_check(guest.snapshot() == newer_identical, "equal snapshots retain their revision and data")
 
 
 func _check_reset(rack) -> void:
 	_check(rack.reset([{"id": 20, "cue": "emerald"}]), "rematch resets with the current roster")
+	_check(rack.snapshot().revision == 0, "a new match starts its own inventory revision epoch")
 	_check(rack.player(20).owned == ["house"], "paid cues do not survive a rematch")
 	_check(rack.model_for(20) == "house", "rematch restores native handling")
 	_check(rack.finish_for(20) == "emerald", "rematch preserves only the cosmetic preference")
@@ -118,7 +171,7 @@ func _check_reset(rack) -> void:
 	_check(rack.reset([{"id": 20, "cue": "invalid"}]), "unknown saved cosmetics recover safely")
 	_check(rack.finish_for(20) == "native", "unknown saved cosmetics restore native appearance")
 	_check(not rack.reset([{"id": 20}, {"id": 20}]), "duplicate run identities reject reset")
-	_check(rack.snapshot() == {"players": []}, "a rejected reset cannot retain a previous run")
+	_check(rack.snapshot() == {"revision": 0, "players": []}, "a rejected reset cannot retain a previous run")
 	var roster: Array = []
 	for id in range(1, 9):
 		roster.append({"id": id})

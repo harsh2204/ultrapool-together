@@ -81,16 +81,39 @@ func begin_shot(
 
 
 ## Newly spawned native objects may join an active shot through node_added.
-## Overflow fails shut; it does not evict tracked objects or erase paid history.
+## Overflow makes the shot's remaining evidence unknown; never infer a dry shot
+## from a partial object set or erase bonuses already paid from its round budget.
 func register_ball(id: int) -> bool:
 	if not pending or id <= 0:
 		return false
 	if _balls.has(id):
 		return true
 	if _balls.size() >= MAX_BALLS:
+		invalidate_shot()
 		return false
 	_balls[id] = {"walls": 0, "hits": {}}
 	return true
+
+
+## Mid-shot overflow cannot undo score already awarded, so preserve spent budget
+## and accepted-shot count. Missing pots invalidate only this shooter's personal
+## predecessor and the table's immediate predecessor; other player history stays.
+func invalidate_shot() -> void:
+	if not pending:
+		return
+	_players[_actor].has_previous = false
+	_players[_actor].previous_pots = 0
+	_previous_actor = 0
+	_previous_pots = 0
+	_profile.clear()
+	_balls.clear()
+	_potted.clear()
+	_first_shot = false
+	_comeback = false
+	_relay = false
+	shot_pots = 0
+	perk_used = true
+	pending = false
 
 
 ## The native shot still plays when its board exceeds the supported cue bound.

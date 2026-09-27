@@ -637,12 +637,35 @@ func apply_state(data: Dictionary) -> bool:
 	_authoritative_state = data.duplicate(true)
 	if data.has("cues") and _controller != null and _controller.get("cue_inventory") != null:
 		_controller.cue_inventory.apply_snapshot(data.cues)
+		# Table state and shop replies have independent outer revisions. Keep
+		# presentation on the newest accepted cue revision too (PERF-010/035).
+		_authoritative_state.cues = _controller.cue_inventory.snapshot()
 		_save_confirmed_finish()
 	if not data.open:
 		_pending = false
 		_pending_message.clear()
-	_display_state(_predict_state(data, _pending_message) if _pending else data)
+	_display_state(
+		_predict_state(_authoritative_state, _pending_message) if _pending else _authoritative_state
+	)
 	return true
+
+
+## Refresh only the cue slice after a newer standalone table state. This event
+## path preserves local previews/focus and avoids snapshot copies in _process.
+func refresh_cue_inventory(revision: int) -> void:
+	if (
+		_controller == null
+		or _controller.get("cue_inventory") == null
+		or not is_open()
+		or revision <= int(_state.get("cues", {}).get("revision", -1))
+	):
+		return
+	var cues: Dictionary = _controller.cue_inventory.snapshot()
+	_state["cues"] = cues
+	if not _authoritative_state.is_empty():
+		_authoritative_state["cues"] = cues.duplicate(true)
+	_save_confirmed_finish()
+	_update_cue_ui()
 
 
 func _display_state(data: Dictionary):
@@ -1431,6 +1454,10 @@ func _save_confirmed_finish() -> void:
 	var finish: String = _controller.cue_inventory.finish_for(local_id)
 	if finish != _saved_finish:
 		_saved_finish = CuePrefs.set_cue_id(finish)
+		# Rematch seeds from the lobby roster. Keep that personal cosmetic in sync
+		# with confirmed preferences; it never grants run ownership or cue perks.
+		if _controller.has_method("_lobby_request"):
+			_controller._lobby_request({"action": "cue", "cue": finish})
 
 
 ## The fourth counter shares the native ShopCamera content slider. Native's enum

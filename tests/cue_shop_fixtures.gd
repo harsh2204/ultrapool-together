@@ -36,6 +36,9 @@ class Wire:
 	func host_id() -> int:
 		return 1
 
+	func send(message: Dictionary) -> void:
+		send_to(host_id(), message)
+
 	func send_to(recipient: int, message: Dictionary, unreliable = false) -> void:
 		packets.append(
 			{"recipient": recipient, "message": message.duplicate(true), "unreliable": unreliable}
@@ -50,7 +53,8 @@ func run_host(mod: Node, capture: Callable, check: Callable) -> void:
 	var saved = _save(mod)
 	var wire = Wire.new()
 	wire.id = 1
-	wire.is_host = true
+	# Table authority is mod._local_id/table_leader_id. Record room-lobby messages
+	# without applying them to the separate synthetic lobby-model fixture.
 	mod.transport = wire
 	mod.cue_inventory.reset(mod._members(mod.table_id))
 	sync.capture()
@@ -149,6 +153,11 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 		is_instance_valid(sync.native_shop()), "cue shop: guest native counter exists"
 	):
 		return
+	if not check.call(
+		not mod.get_node("/root/UIManager").is_popup_open() and not mod.get_tree().paused,
+		"cue shop: guest starts after the native cube popup releases input"
+	):
+		return
 	var saved = _save(mod)
 	var wire = Wire.new()
 	mod.transport = wire
@@ -160,7 +169,11 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 	initial.focus = ""
 	check.call(sync.apply_state(initial), "cue shop: guest imports authoritative personal racks")
 	await _settle(mod)
-	check.call(sync.show_section("cues"), "cue shop: guest enters the same adjoining counter")
+	if not check.call(
+		sync.show_section("cues"), "cue shop: guest enters the same adjoining counter"
+	):
+		_restore(mod, saved, wire)
+		return
 	await _settle(mod)
 	var view = sync._cue_view
 	if not check.call(is_instance_valid(view), "cue shop: guest rack is constructed"):
@@ -170,10 +183,12 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 	view._select_model("finesse")
 	view._select_finish("gold")
 	view._action.pressed.emit()
-	check.call(
+	if not check.call(
 		sync._pending and not wire.packets.is_empty(),
 		"cue shop: guest click sends a real bounded pending request"
-	)
+	):
+		_restore(mod, saved, wire)
+		return
 	var request_id: int = sync._pending_message.get("request_id", 0)
 	check.call(
 		sync._state.money == wallet and mod.cue_inventory.model_for(2) == "house",
@@ -213,8 +228,12 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 	view._select_model("finesse")
 	view._select_finish("gold")
 	view._action.pressed.emit()
+	if not check.call(sync._pending, "cue shop: a second guest purchase waits for authority"):
+		_restore(mod, saved, wire)
+		return
 	var accepted: Dictionary = initial.duplicate(true)
 	accepted.revision += 1
+	accepted.cues.revision += 1
 	accepted.money -= float(CueModels.entry("finesse").price)
 	accepted.section = "cues"
 	for row in accepted.cues.players:
@@ -239,6 +258,40 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 	await capture.call(
 		"cue-shop-guest-equipped",
 		"Guest cue purchase confirmed by the table · equipped model, finish, and wallet agree."
+	)
+	var latest_cues: Dictionary = mod.cue_inventory.snapshot()
+	latest_cues.revision += 1
+	for row in latest_cues.players:
+		if row.id == 2:
+			row.equipped = "house"
+			row.finish = "rose"
+	mod.cue_inventory.apply_snapshot(latest_cues)
+	sync.refresh_cue_inventory(int(latest_cues.revision))
+	check.call(
+		view._player.equipped == "house" and view._player.finish == "rose",
+		"cue shop: standalone cue confirmation refreshes the open rack"
+	)
+	check.call(
+		view._selected_model == "finesse" and view._selected_finish == "gold",
+		"cue shop: standalone equipment refresh preserves local preview"
+	)
+	var delayed_shop: Dictionary = accepted.duplicate(true)
+	delayed_shop.revision += 1
+	delayed_shop.money -= 1.0
+	check.call(sync.apply_state(delayed_shop), "cue shop: later outer shop state is accepted")
+	check.call(
+		(
+			mod.cue_inventory.model_for(2) == "house"
+			and sync._state.cues == latest_cues
+			and sync._authoritative_state.cues == latest_cues
+			and view._player.equipped == "house"
+			and view._player.finish == "rose"
+		),
+		"cue shop: stale nested cue revision cannot rewind rack or rollback state"
+	)
+	check.call(
+		sync._state.money == delayed_shop.money and view._action.text == "Equip cue · free",
+		"cue shop: newer wallet reconciles while cue ownership and action stay current"
 	)
 	_restore(mod, saved, wire)
 
@@ -335,6 +388,7 @@ func _save(mod: Node) -> Dictionary:
 func _restore(mod: Node, saved: Dictionary, wire: Node) -> void:
 	var sync = mod.shop_sync
 	sync.native_shop().player_info.money = saved.money
+	mod.cue_inventory.reset([])
 	mod.cue_inventory.apply_snapshot(saved.cues)
 	for field in SYNC_FIELDS:
 		sync.set(field, saved.sync[field])

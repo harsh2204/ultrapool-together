@@ -25,6 +25,7 @@ func _initialize() -> void:
 	_check_budget_and_swaps(script)
 	_check_rejection_and_bounds(script)
 	_check_skipped_shots(script)
+	_check_midshot_overflow(script)
 	_check_native_callback_guards(base)
 	_check_pocket_geometry(base)
 	_finish()
@@ -234,11 +235,12 @@ func _check_rejection_and_bounds(script) -> void:
 	for id in range(1, 129):
 		ids.append(id)
 	_check(rules.begin_shot(2, 10, "carom", 100.0, 128, ids), "the full supported object bound fits")
-	_check(not rules.register_ball(129), "spawn overflow cannot exceed the shot's bound")
 	for id in range(2, 129):
 		rules.hit(1, id)
 		rules.wall(1)
 	_check(rules.pocket(1, 50.0, "corner") > 0.0, "bounded contact saturation preserves qualification")
+	_check(not rules.register_ball(129), "spawn overflow cannot exceed the shot's bound")
+	_check(not rules.pending, "mid-shot overflow closes incomplete perk tracking")
 	rules.finish_shot()
 	ids.append(129)
 	_check(not rules.begin_shot(3, 10, "clean", 100.0, 129, ids), "oversized initial object lists reject")
@@ -297,15 +299,67 @@ func _check_skipped_shots(script) -> void:
 	_check(rules.pocket(1, 50.0, "corner") > 0.0, "known successful history resumes Relay after a skip")
 
 
+func _check_midshot_overflow(script) -> void:
+	var ids: Array = []
+	for id in range(1, 129):
+		ids.append(id)
+	var rules = _fresh(script)
+	_begin(rules, 1, 20, "house")
+	rules.finish_shot()
+	_check(rules.begin_shot(2, 10, "bankshot", 100.0, 128, ids), "a full tracked shot can start normally")
+	rules.wall(1)
+	_check(is_equal_approx(rules.pocket(1, 100.0, "corner"), 2.0), "pre-overflow scoring earns its bounded bonus")
+	_check(not rules.register_ball(129), "the first excess spawned object invalidates partial tracking")
+	_check(not rules.pending and rules.shot_index == 2, "overflow closes tracking without consuming an extra shot")
+	_check(is_equal_approx(rules.bonus_for(10), 2.0), "overflow preserves bonus already charged to the round cap")
+	rules.wall(2)
+	rules.hit(2, 3)
+	_check(rules.pocket(2, 100.0, "corner") == 0.0, "late tracked callbacks cannot score after overflow")
+	_check(not rules.register_ball(130), "additional spawns cannot reopen an invalidated shot")
+	rules.finish_shot()
+	_begin(rules, 3, 20, "comeback")
+	_check(rules.pocket(1, 50.0, "corner") > 0.0, "overflow preserves another player's known dry-shot history")
+	rules.finish_shot()
+	_begin(rules, 4, 10, "comeback")
+	_check(rules.pocket(1, 50.0, "corner") == 0.0, "partial pot evidence cannot enable Comeback for its shooter")
+	rules.finish_shot()
+	_begin(rules, 5, 10, "bankshot")
+	rules.wall(1)
+	_check(is_equal_approx(rules.pocket(1, 100.0, "corner"), 2.0), "normal perks resume with only the unspent budget")
+	rules.finish_shot()
+	_begin(rules, 6, 10, "corner")
+	_check(rules.pocket(1, 100.0, "corner") == 0.0, "overflow cannot replenish the original personal cap")
+	rules = _fresh(script)
+	_check(rules.begin_shot(1, 10, "opener", 100.0, 128, ids), "Opener's accepted first shot is tracked")
+	rules.register_ball(129)
+	_begin(rules, 2, 20, "opener")
+	_check(rules.pocket(1, 50.0, "corner") == 0.0, "mid-shot overflow cannot defer the round's first shot")
+	rules = _fresh(script)
+	_check(rules.begin_shot(1, 10, "house", 100.0, 128, ids), "a predecessor shot opens for Relay evidence")
+	rules.pocket(1, 50.0, "corner")
+	rules.register_ball(129)
+	rules.finish_shot()
+	_begin(rules, 2, 20, "relay")
+	_check(rules.pocket(1, 50.0, "corner") == 0.0, "incomplete predecessor history cannot enable Relay")
+	rules.finish_shot()
+	_begin(rules, 3, 10, "relay")
+	_check(rules.pocket(1, 50.0, "corner") > 0.0, "complete later pot history restores normal Relay behavior")
+
+
 func _check_native_callback_guards(base: String) -> void:
 	var service = load(base.path_join("cue_effects.gd")).new()
 	var controller = HostFixture.new()
 	service._controller = controller
 	service.begin_session()
+	_check(service._game() == null, "detached service lookup returns safely without absolute node queries")
 	# No accepted shot exists, so detached/malformed callback traffic must be inert.
 	service.record_hit(null, null)
 	service.record_wall(null)
 	service.record_pocket(null, null, NAN)
+	service.commit_pocket({})
+	var invalid_award = {"consumed": false, "points": INF}
+	service.commit_pocket(invalid_award)
+	_check(invalid_award.consumed, "invalid staged awards are consumed without native scoring")
 	_check(not service.rules.pending, "callbacks without an accepted shot remain inert")
 	_begin(service.rules, 1, 10, "clean")
 	var foreign = Node2D.new()
@@ -329,21 +383,42 @@ func _check_pocket_geometry(base: String) -> void:
 	var container = Node2D.new()
 	container.name = "Pockets"
 	game.table.add_child(container)
-	# Deliberately scramble child order: native indices are not pocket geometry.
-	for position in [
-		Vector2(100, 0), Vector2(-100, -200), Vector2(100, 200),
-		Vector2(-100, 0), Vector2(100, -200), Vector2(-100, 200),
-	]:
-		var pocket = Pocket.new()
-		pocket.position = position
-		container.add_child(pocket)
-	service._cache_pockets(game)
+	# Scramble both native orientations: side-pocket roles cannot depend on
+	# child order or assume the table's long axis is always vertical.
+	var layouts = [
+		[
+			Vector2(100, 0), Vector2(-100, -200), Vector2(100, 200),
+			Vector2(-100, 0), Vector2(100, -200), Vector2(-100, 200),
+		],
+		[
+			Vector2(300, 700), Vector2(700, 200), Vector2(-100, 700),
+			Vector2(300, 200), Vector2(700, 700), Vector2(-100, 200),
+		],
+	]
+	for index in layouts.size():
+		for child in container.get_children():
+			child.free()
+		for position in layouts[index]:
+			var pocket = Pocket.new()
+			pocket.position = position
+			container.add_child(pocket)
+		service._cache_pockets(game)
+		var middles = 0
+		for pocket in container.get_children():
+			var middle: bool = pocket.position.y == 0.0 if index == 0 else pocket.position.x == 300.0
+			var expected = "middle" if middle else "corner"
+			var classified: Dictionary = service._fixed_pockets.get(pocket.get_instance_id(), {})
+			_check(
+				classified.get("kind") == expected,
+				"fixed pocket role follows shuffled native orientation %d" % index
+			)
+			middles += int(classified.get("kind") == "middle")
+		_check(middles == 2, "either native orientation exposes exactly two side pockets")
+	# A collapsed or duplicate layout never leaves a partially usable cache.
 	for pocket in container.get_children():
-		var expected = "middle" if pocket.position.y == 0.0 else "corner"
-		_check(
-			service._fixed_pockets[pocket.get_instance_id()].kind == expected,
-			"fixed pocket role follows local geometry instead of child index"
-		)
+		pocket.position.y = 0.0
+	service._cache_pockets(game)
+	_check(service._fixed_pockets.is_empty(), "degenerate pocket geometry fails closed")
 	game.table.free()
 	service.free()
 

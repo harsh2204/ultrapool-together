@@ -90,9 +90,9 @@ func record_wall(body) -> void:
 		rules.wall(body.get_instance_id())
 
 
-func record_pocket(body, pocket, multiplier: float) -> void:
+func record_pocket(body, pocket, multiplier: float) -> Dictionary:
 	if not _recording() or not _known_object(body):
-		return
+		return {}
 	if (
 		not is_instance_valid(pocket) or not pocket is Pocket or pocket is VirtualPocket
 		or not _fixed_pockets.has(pocket.get_instance_id())
@@ -101,33 +101,67 @@ func record_pocket(body, pocket, multiplier: float) -> void:
 		or body.pocketed_this_frame or body.has_id("WEREWOLF") or body.has_id("POT")
 		or body.is_shielded() or (pocket.shielded and not body.is_shield_broken())
 	):
-		return
+		return {}
 	var game = _game()
 	if (
 		game == null or game.round_ended or game.in_shop or game.game_is_broken
 		or not game.pockets.has(pocket)
 	):
-		return
+		return {}
 	var pocket_entry: Dictionary = _fixed_pockets[pocket.get_instance_id()]
 	if pocket_entry.body.get_ref() != pocket:
-		return
+		return {}
 	var base_value: float = body.get_score()
 	var pocket_multiplier: float = pocket.get_multiplier()
 	if not is_finite(base_value) or base_value <= 0.0:
-		return
+		return {}
 	if not is_finite(pocket_multiplier) or pocket_multiplier <= 0.0:
-		return
+		return {}
 	var scored: float = (
 		pocket.get_score_imp(base_value) if body.has_id("IMP") else pocket.get_score(base_value)
 	)
 	var native_points: float = scored * multiplier
 	if not is_finite(native_points) or native_points <= 0.0:
-		return
+		return {}
 	var points: float = rules.pocket(body.get_instance_id(), base_value, pocket_entry.kind)
-	if points > 0.0:
-		# chains=false suppresses SCORE and SCORE-SELF recursion. Native REACH-SCORE
-		# still runs if this small bonus crosses the round target; that is intentional.
-		game.add_score(points, body.global_position, false, true, body, false)
+	if points <= 0.0:
+		return {}
+	# Reserve the capped award using pre-pot value/contact evidence, but do not
+	# score while the source is alive. A threshold-crossing bonus before native
+	# unalive would let a GAMEBALL trigger its own REACH-SCORE virtual pot.
+	return {
+		"points": points, "position": body.global_position,
+		"source": weakref(body), "game": weakref(game), "service": get_instance_id(),
+		"round": _round_key, "shot": rules.shot_index, "consumed": false,
+	}
+
+
+func commit_pocket(award: Dictionary) -> void:
+	if award.is_empty() or bool(award.get("consumed", true)):
+		return
+	# The callback-local payload is consumed before any native event can reenter.
+	award.consumed = true
+	if (
+		not _recording() or award.get("service") != get_instance_id()
+		or award.get("round") != _round_key or award.get("shot") != rules.shot_index
+		or not award.get("source") is WeakRef or not award.get("game") is WeakRef
+		or not award.get("position") is Vector2 or not award.position.is_finite()
+		or not (award.get("points") is float or award.get("points") is int)
+		or not is_finite(float(award.points)) or award.points <= 0.0
+	):
+		return
+	var game = _game()
+	var body = award.source.get_ref()
+	if (
+		game == null or game != award.game.get_ref() or not _known_object(body)
+		or body.alive or not body.pocketed_this_frame or body.is_shielded()
+		or game.round_ended or game.in_shop or game.game_is_broken
+	):
+		return
+	# Native super.pocket has now marked the source dead and delivered its normal
+	# score. Only other living GAMEBALLs may observe a bonus threshold crossing.
+	# chains=false prevents SCORE/SCORE-SELF recursion; keep the pre-graveyard point.
+	game.add_score(float(award.points), award.position, false, true, body, false)
 
 
 func _recording() -> bool:
@@ -135,6 +169,8 @@ func _recording() -> bool:
 
 
 func _game():
+	if not is_inside_tree():
+		return null
 	var global = get_node_or_null("/root/Global")
 	if global == null:
 		return null
@@ -162,6 +198,8 @@ func _hook_ball(body) -> void:
 	var id: int = body.get_instance_id()
 	if not _hooked.has(id):
 		if _hooked.size() >= Rules.MAX_BALLS:
+			if rules != null and rules.pending:
+				rules.invalidate_shot()
 			return
 		_hooked[id] = weakref(body)
 	if body.get_script() != _ball_script:
@@ -204,24 +242,43 @@ func _cache_pockets(game) -> void:
 	if container == null or container.get_child_count() > MAX_FIXED_POCKETS:
 		return
 	var fixed: Array = []
+	var min_x = INF
+	var max_x = -INF
 	var min_y = INF
 	var max_y = -INF
+	var positions: Dictionary = {}
 	for pocket in container.get_children():
 		if pocket is Pocket and not pocket is VirtualPocket:
-			if not pocket.position.is_finite():
+			if not pocket.position.is_finite() or positions.has(pocket.position):
 				return
+			positions[pocket.position] = true
 			fixed.append(pocket)
+			min_x = minf(min_x, pocket.position.x)
+			max_x = maxf(max_x, pocket.position.x)
 			min_y = minf(min_y, pocket.position.y)
 			max_y = maxf(max_y, pocket.position.y)
-	if fixed.is_empty() or is_equal_approx(min_y, max_y):
+	if fixed.is_empty() or is_equal_approx(min_x, max_x) or is_equal_approx(min_y, max_y):
 		return
+	var next: Dictionary = {}
+	var corners = 0
 	for pocket in fixed:
-		var extreme: bool = (
+		var extreme_x: bool = (
+			is_equal_approx(pocket.position.x, min_x) or is_equal_approx(pocket.position.x, max_x)
+		)
+		var extreme_y: bool = (
 			is_equal_approx(pocket.position.y, min_y) or is_equal_approx(pocket.position.y, max_y)
 		)
-		_fixed_pockets[pocket.get_instance_id()] = {
-			"body": weakref(pocket), "kind": "corner" if extreme else "middle",
+		if not extreme_x and not extreme_y:
+			return
+		var corner: bool = extreme_x and extreme_y
+		corners += int(corner)
+		next[pocket.get_instance_id()] = {
+			"body": weakref(pocket), "kind": "corner" if corner else "middle",
 		}
+	# Both rectangular orientations have four corners; a side pocket lies on
+	# exactly one extreme axis. Reject partial/degenerate geometry atomically.
+	if corners == 4:
+		_fixed_pockets = next
 
 
 func _prune_hooks(game) -> void:

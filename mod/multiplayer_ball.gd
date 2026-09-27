@@ -27,11 +27,15 @@ func hit_wall(normal):
 
 
 func pocket(which_pocket, extra_multiplier = 1):
+	var cue_service = cue_effects
+	var cue_award: Dictionary = {}
 	if not pocketed_this_frame and was_alive_one_frame_ago:
-		if is_instance_valid(cue_effects):
-			cue_effects.record_pocket(self, which_pocket, extra_multiplier)
+		if is_instance_valid(cue_service):
+			cue_award = cue_service.record_pocket(self, which_pocket, extra_multiplier)
 		if is_instance_valid(together_balls):
 			together_balls.record_pocket(self, which_pocket, extra_multiplier)
 		if is_instance_valid(expansion_balls):
 			expansion_balls.record_pocket(self, which_pocket, extra_multiplier)
 	super.pocket(which_pocket, extra_multiplier)
+	if is_instance_valid(cue_service):
+		cue_service.commit_pocket(cue_award)

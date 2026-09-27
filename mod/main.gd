@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.9.5"
+const VERSION = "0.10.0"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
@@ -422,7 +422,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.8 or v0.9 and a new UP8 room code.")
+		_status("Could not join. Everyone needs v0.10.0 and a new UP9 room code.")
 	_render_lobby()
 
 
@@ -1951,6 +1951,7 @@ func _received_table(actor: int, message: Dictionary):
 	elif kind == "state" and _valid_state(message, table_id):
 		if message.get("cues") is Dictionary:
 			cue_inventory.apply_snapshot(message.cues)
+			shop_sync.refresh_cue_inventory(int(message.cues.revision))
 		latest_state = message
 		turn_owner = message.turn_owner
 		shot_number = message.turn

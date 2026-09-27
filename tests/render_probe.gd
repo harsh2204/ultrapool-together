@@ -161,6 +161,14 @@ func _run():
 	await native_effects.check_host(mod, game, _check, _capture)
 	await native_visual_fx.check_host(mod, game, _check, _capture)
 	await _capture("10-host-table", "Host table · the selected native Classic starting set")
+	var cue_native_script = load(
+		get_script().resource_path.get_base_dir().path_join("cue_native_fixtures.gd")
+	)
+	if _check(
+		cue_native_script != null and cue_native_script.can_instantiate(),
+		"compiled native cue fixtures"
+	):
+		await cue_native_script.new().run(mod, game, _capture, _check)
 	await fixtures.capture_table_states(mod, _capture)
 	var snapshot = mod.table_sync.capture()
 	var spectator_fixtures = (
@@ -582,15 +590,11 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 	await get_tree().process_frame
 	var button = shop.get_node_or_null("%CubesButton")
 	_check(button != null and button.visible, "guest CubesButton visible with NEGATIVE cubes")
-	var popup = shop.get_node_or_null("%CubesPopup")
-	if popup == null:
-		popup = shop.find_child("CubesPopup", true, false)
-	# Open through the native shop handler (and force the CanvasItem visible). Emitting
-	# CubesButton.pressed alone can leave shop.%CubesPopup hidden while another layer
-	# paints the grid — ensure_cubes_popup_textures then no-ops and cubes stay black.
-	if shop.has_method("_on_cubes_button_pressed"):
-		shop._on_cubes_button_pressed()
-	elif button != null and button.has_signal("pressed"):
+	# CubesPopup belongs to UIManager, not the shop. Resolve the actual popup
+	# opened by the button so teardown also releases its modal pause/input lock.
+	var ui = get_node("/root/UIManager")
+	var popup = ui.cubes_popup
+	if button != null and button.has_signal("pressed"):
 		button.pressed.emit()
 	if popup is CanvasItem:
 		popup.visible = true
@@ -612,10 +616,14 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 		"54-guest-negative-cubes",
 		"Guest shop · CubesPopup with two textured NEGATIVE cubes (not black silhouettes) and snack tickets."
 	)
-	if popup is CanvasItem:
-		popup.visible = false
-	if popup != null and popup.has_method("hide"):
-		popup.hide()
+	if popup != null:
+		popup.just_opened_or_closed = false
+		popup.instant_close_menu()
+	ui.update_pause()
+	_check(
+		not ui.is_popup_open() and not get_tree().paused,
+		"guest cube fixture closes the native popup and releases input"
+	)
 	# Restore inventory so later hover/drag fixtures keep native input unlocked.
 	game.player_info.cubes.assign(previous_cubes)
 	if shop.has_method("refresh_inventory_hud"):
