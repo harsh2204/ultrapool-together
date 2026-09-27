@@ -105,6 +105,18 @@ class TableStub:
 	func _valid_snapshot(data: Dictionary) -> bool:
 		return data.get("available") is bool
 
+	func valid_capture(data: Dictionary) -> bool:
+		return _valid_snapshot(data)
+
+	func snapshot_problem(data: Dictionary) -> String:
+		return "" if _valid_snapshot(data) else "stub invalid"
+
+	func ball_ids(_data: Dictionary) -> Dictionary:
+		return {}
+
+	func spawn_barrier_active() -> bool:
+		return false
+
 	func apply_snapshot(data: Dictionary) -> bool:
 		return _valid_snapshot(data)
 
@@ -623,6 +635,9 @@ func _shop_capture_reuse_after_send():
 	_check(controller.shop_sync.captures == 0, "unchanged membership reuses the final capture")
 	_check(controller.last_shop_state == captured, "reused capture reaches the broadcast cache")
 	controller.transport.sent.clear()
+	# Dirty state_sig so the next publish actually sends and runs on_send before
+	# the shop reuse decision (otherwise an unchanged shop skips the send path).
+	controller.adapter.state.score = 11.0
 	controller.transport.on_send = func():
 		controller.lobby.revision += 1
 		controller.lobby.players[2].connected = false
@@ -645,6 +660,7 @@ func _shop_capture_reuse_after_send():
 		"disconnect recapture advances the broadcast cache to current consent"
 	)
 	controller.transport.sent.clear()
+	controller.adapter.state.score = 22.0
 	controller.transport.on_send = func(): controller.active = false
 	controller._publish_state(0, controller.shop_sync.state, 8)
 	_check(controller.shop_sync.captures == 1, "session ended during send avoids another capture")
