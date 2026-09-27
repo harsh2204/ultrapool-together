@@ -1,6 +1,6 @@
 # Rook cue counter integration
 
-Implementation record for [#20](https://github.com/harsh2204/ultrapool-together/issues/20) and [PR #45](https://github.com/harsh2204/ultrapool-together/pull/45), following the repository's shop-content change template. **Implemented, unmeasured; the revised presentation has static evidence only.**
+Implementation record for [#20](https://github.com/harsh2204/ultrapool-together/issues/20) and [PR #45](https://github.com/harsh2204/ultrapool-together/pull/45), following the repository's shop-content change template. **Implemented with bounded Windows native rendering/animation evidence; performance, live multiplayer and cross-platform acceptance remain open.**
 
 ## Behavior and scope
 
@@ -17,7 +17,7 @@ The native `ShopGirl` and `ShopBoy` instances and snack merchant remain intact. 
 
 `shop_sync._ensure_cue_view` attaches the view once per native shop. `cue_shop.setup` caches two shop textures through `cue_shop_art.gd` and retains all cards, tags, swatches and the equipped case. Forward navigation uses native raised-button scenes; rack/back arrows use the native arrow textures. Decorative controls ignore pointer input. Only Rook's bounded body button handles his nudge; it does not cover the rack, transaction button or inventory.
 
-At setup and viewport-size changes, the composition fits within the native camera's landscape/portrait bounds. Rook remains anchored to the counter edge, and the native inventory transform stays intact. Portrait layouts compact the case above the inventory. Returning to widescreen restores the full-size composition. This geometry is covered by authored assertions, not a rendering check.
+At setup and viewport-size changes, the composition fits within the native camera's landscape/portrait bounds. Rook remains anchored to the counter edge, and the native inventory transform stays intact. Portrait layouts compact the case above the inventory. Returning to widescreen restores the full-size composition. The native geometry assertions pass; the current visual capture is 1280×720, not a rendered sweep of narrower windows.
 
 Purchase input follows `cue_shop._submit → shop_sync._submit → handle_request/_apply_cue_action → apply_result`. Existing actor, scene, table, revision, ownership, wallet and eligibility checks remain authoritative. Pending requests retain immediate local browsing, and matching confirmation or rejection reconciles the UI. The case updates from the authoritative player row through `render`; model/finish preview does not call its update path.
 
@@ -41,15 +41,21 @@ There are no new packets or wire-supplied paths. Artwork decoding and native con
 
 | Scenario | Existing seam / expected outcome | Evidence for revised presentation |
 | --- | --- | --- |
-| Host/guest hydration and confirmed art | `cue_shop_fixtures`: case texture, tint and label match the authoritative model/finish | Authored, unrun |
-| Preview, pending, rejection, unrelated replies | Case stays confirmed while selection and pending UI can change | Authored, unrun |
-| Accepted/newer and stale nested revisions | Accepted equipment updates; stale data cannot rewind case | Authored, unrun |
-| Rapid next/previous input | One live tween, canceled predecessor, retained nodes, gated moving cards, responsive arrows | Authored, unrun |
-| Leave mid-transition and reopen | No rack/seller/speech work off-counter; retained node identities | Authored, unrun |
-| Fifteen cues and long descriptions | Every rack reachable; portrait texture identity and description/action bounds | Authored, unrun; native text fit remains open |
-| 16:9, 16:10, 4:3 and portrait resizing | Actual native camera/inventory bounds, no case overlap, fixed counter baseline, retained focus/art/nodes, return to full size | Authored, unrun; readability remains open |
-| Native aim/cue/score behavior | Existing `native_aim_fixture`, `cue_native_fixtures`, model/inventory/effect probes | Earlier evidence predates this rebase; not rerun |
+| Host/guest hydration and confirmed art | `cue_shop_fixtures`: case texture, tint and label match the authoritative model/finish | Windows fixture passed |
+| Preview, pending, rejection, unrelated replies | Case stays confirmed while selection and pending UI can change | Windows fixture passed |
+| Accepted/newer and stale nested revisions | Accepted equipment updates; stale data cannot rewind case | Windows fixture passed |
+| Rapid next/previous input | One live tween, canceled predecessor, retained nodes, gated moving cards, responsive arrows | Windows fixture passed |
+| Leave mid-transition and reopen | No rack/seller/speech work off-counter; retained node identities | Windows fixture passed |
+| Fifteen cues and long descriptions | Every rack reachable; portrait texture identity and description/action bounds | Windows fixture and 1280×720 review passed; narrower text fit remains open |
+| 16:9, 16:10, 4:3 and portrait resizing | Actual native camera/inventory bounds, no case overlap, fixed counter baseline, retained focus/art/nodes, return to full size | Windows geometry fixture passed; actual narrow-window rendering remains open |
+| Native aim/cue/score behavior | Existing `native_aim_fixture`, `cue_native_fixtures`, model/inventory/effect probes | Windows fixtures rerun and passed at `bb80925` |
 | Shared access, winner-only, Ready, simultaneous purchases, disconnect/rematch | Existing authority gates preserved; full live/platform acceptance remains open | Static integration review only |
-| Snack/mixer transactions | No transaction changes; upstream native fixtures retained | Not rerun |
+| Snack/mixer transactions | No transaction changes; upstream native fixtures retained | Windows fixtures passed |
 
-After integration onto `c07f6be`, all 109 GDScript files parsed, the five presentation/fixture files passed formatting checks, and all five Python and six PowerShell scripts parsed without execution. Image metadata/alpha/registration and whitespace were also inspected. These static checks are distinct from native runtime evidence. No game, capture harness or test suite was launched for this presentation update. No new installer behavior was needed: both package and installer paths already recurse through `mod` and record nested assets. The next independent verification is the existing bounded Capture-Screens fixture after runtime authorization, followed by live multiplayer/platform and performance acceptance. Keep #20 and applicable performance gaps open.
+After integration onto `c07f6be`, all 109 GDScript files parsed, the five presentation/fixture files passed formatting checks, and all five Python and six PowerShell scripts parsed without execution. Image metadata/alpha/registration and whitespace were also inspected. These static checks are distinct from native runtime evidence. Those initial static checks preceded the authorized native run recorded below. No new installer behavior was needed: both package and installer paths already recurse through `mod` and record nested assets. Remaining independent verification covers actual narrow-window rendering, live multiplayer/platform behavior, and performance/balance acceptance. Keep #20 and applicable performance gaps open.
+
+## Current native evidence
+
+Capture `20260927T104101Z-rook-animation`, gameplay/fixture commit `bb80925`: 2,175/2,175 checks, 79 native screenshots and 96 real viewport animation frames. One muted isolated Windows process used a 30 FPS cap and 180-second watchdog; it exited normally with no script errors, unchanged normal saves and unchanged installed game files. Existing engine shutdown resource warnings remain. All four Rook cels and rack motion appeared in the recorded frames; preview changes preserved the confirmed Finesse/Gold case throughout.
+
+Visual inspection of the preceding capture found that the case `TextureRect` kept the source image's minimum size despite its fitted parent bounds. Setting `EXPAND_IGNORE_SIZE` before texture assignment fixes that; the repeated fixture now measures the actual artwork control, not just its parent. The GIF uses captured frames and their recorded timing with palette/timing quantization, without synthetic interpolation. It demonstrates fixture callbacks and rendering, not human input, live networking or foreground performance.

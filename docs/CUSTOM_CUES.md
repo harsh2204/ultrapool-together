@@ -1,6 +1,6 @@
 # Cue Workshop
 
-Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. The cue mechanics and earlier shop layout have Windows native functional evidence. **The Rook seller, portrait rack animation, and equipped case are implemented with static checks only; current rendering, performance and balance remain unmeasured.** Source v0.10.0 uses protocol 9 / UP9 rooms, so every player needs the same compatible build.
+Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. The cue mechanics and Rook presentation have bounded Windows native functional evidence, including actual viewport animation frames. **Live multiplayer, macOS, performance and balance acceptance remain open.** Source v0.10.0 uses protocol 9 / UP9 rooms, so every player needs the same compatible build.
 
 ## Location and interaction
 
@@ -10,7 +10,7 @@ Fifteen distinct cue designs occupy five racks of three upright portrait cards. 
 
 The selected cue's paper placard contains a compact purchase/equip control and the effect details. Browse, preview, and customize a finish locally while a purchase awaits table-host confirmation. Rejections reconcile ownership and money and show their reason. The felt-lined case beside the inventory displays only the player's confirmed cue and finish; browsing and pending/rejected purchases never replace it. Rook blinks, talks, idles, and responds to a click using the native merchants' presentation pattern. Seller motion and rack transitions stop when leaving the counter.
 
-The composition fits narrower windows at resize boundaries while keeping Rook aligned with the counter and preserving the native inventory. Portrait windows use a smaller case above the inventory. Readability and rendering at these sizes remain pending native verification.
+The composition fits narrower windows at resize boundaries while keeping Rook aligned with the counter and preserving the native inventory. Portrait windows use a smaller case above the inventory. Native geometry assertions pass at these sizes; actual narrow/portrait window rendering and readability remain pending.
 
 ## Ownership and economy
 
@@ -65,13 +65,17 @@ Fifteen generated cue sprites are shipped under `mod/assets/cues/`; native files
 - [x] Native host/guest capture: navigation right of snacks, all racks, long descriptions, finishes, buy/equip, insufficient funds, pending/rejected transactions, and return.
 - [x] Native cue attachment/aim parity after current main-branch fixes; all fifteen textures, tip/shadow/fade preservation, House restoration, and equipped Bankshot capture.
 - [x] Native score/HUD callback boundary: fractional credit, per-shot cap, duplicate commit, post-pot ordering, and refusal to award against a still-living GAMEBALL source. Full physical special-ball pot scenarios remain part of live playtesting.
-- [ ] Repeat the final preservation audit with no concurrent use of the normal save profile.
-- [ ] Native verification of Rook cels/dialogue, portrait text fit, rapid rack navigation/focus, snack/cue counter composition, and the equipped case. New fixture assertions are present but have not been executed.
+- [x] Final Windows capture preserved normal saves and installed game files.
+- [x] Windows 1280×720 verification of Rook cels/dialogue, portrait cue text, rapid rack navigation/focus, snack/cue counter composition, and confirmed equipment. Actual viewport animation frames and strengthened case-art bounds checks passed.
+- [ ] Render and inspect actual narrow/portrait windows; current resize coverage checks transformed native bounds without resizing the window.
 - [ ] Live concurrent shoppers, delayed/reordered updates, sync-shop-off and winner-only behavior, disconnect/rematch.
 - [ ] Windows/macOS rendering plus measured responsiveness and balance.
 
 Windows capture `20260927T070455Z-1962c3ec` passed all 731 harness assertions and produced 67 screenshots. Embedded cue probes passed 226 catalog/curve, 189 inventory, and 204 effect checks. The game exited normally with no script errors; shutdown resource warnings match the earlier baseline. Installed game files were unchanged. The normal save profile changed during the capture, so the runner's overall preservation audit failed; that run does not establish save preservation. Earlier captures preserved normal saves and installed files, but had test failures that were subsequently fixed. The isolated Windows installer suite and source ZIP integrity/asset checks also passed.
 
-The branch has since been rebased onto main `c07f6be`, preserving native initial-click/charge behavior, opt-in shop-view following, client/spectator table-effect replication, and the localized difficulty/native-menu fixes. All 109 GDScript files parsed after integration; runtime tests were not rerun. The older captures do not verify the rebased Rook layout.
+The branch has since been rebased onto main `c07f6be`, preserving native initial-click/charge behavior, opt-in shop-view following, client/spectator table-effect replication, and the localized difficulty/native-menu fixes. All 109 GDScript files parsed after integration. The older captures do not verify the rebased Rook layout; the newer native run below does.
 
+The current Windows run `20260927T104101Z-rook-animation` at gameplay/fixture commit `bb80925` passed **2,175/2,175 harness checks**, produced **79 native screenshots** and **96 actual animation frames**, and preserved installed files and normal saves. It used one muted process, a 30 FPS cap and a 180-second watchdog, exiting normally in about 100 seconds with no script errors. Existing engine shutdown resource warnings remain. The sequence shows next/previous racks, seller idle/blink/talk/nudge, and finish previews while confirmed Finesse/Gold stays in the case. It uses fixture UI callbacks, not a recorded human or live network session.
+
+The first Rook capture exposed an oversized case despite passing parent-bound assertions. The production fix sets `TextureRect.EXPAND_IGNORE_SIZE` before assigning its texture, and the repeated run checks the actual artwork descendant against the case, viewport and native inventory. PNG encoding now follows the bounded recording so compression does not stall the shown animation. GIF palette conversion uses recorded frame timing; no generated or interpolated frames are used. This establishes rendering/callback correctness for this fixture, not foreground frame-time or input-latency performance.
 Runtime verification uses the existing bounded Capture-Screens harness after authorization. Keep #20 open until the remaining acceptance work is complete.

@@ -58,7 +58,7 @@ Six additional **expansion sets** (Phases, Morph, Tide, Relic, Tarot, Zodiac) us
 
 Visit the **Cue Workshop to the right of the snack bar** to browse fifteen distinct cues, preview ten free finishes, and buy or equip a personal cue. House is included; other cues cost 4€ from the shared run wallet and last for that run. Small handling changes or capped situational score perks add variety without extra shots or permanent upgrades. Finishes persist between runs, and teammates see the current shooter's cue. See the [full roster and balance rules](docs/CUSTOM_CUES.md). **Status: implemented, unmeasured.**
 
-Rook runs the counter with upright cue racks, a short next/previous slide animation, and a felt-lined case displaying your equipped cue. Purple icon-only arrows follow the native shop pattern. This revised presentation still needs native rendering verification.
+Rook runs the counter with upright cue racks, a short next/previous slide animation, and a felt-lined case displaying your equipped cue. Purple icon-only arrows follow the native shop pattern. The revised presentation has bounded Windows rendering and animation-capture coverage; live and cross-platform acceptance remains open.
 
 The personal finish picker remains available in **Mod settings → Your starting cue finish**. Finishes are free cosmetic choices, are not host-locked, and persist in the mod's isolated user folder; owning a cue model never carries into a new run.
 

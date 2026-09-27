@@ -152,3 +152,7 @@ The session probe uses the actual lobby scene signals and controller in two phas
 The probe drives UI signals rather than clicking rendered controls and takes no screenshots. It covers two local processes, not eight real players, Internet latency, Steam invitations, or a complete campaign.
 
 Multi-PC testing should cover lobby layout, Steam invitations, uneven groups, equal shot budgets, independent tables and shops, ball movement under latency, cursors and inspection, concurrent shop actions, disconnects, and rematches.
+
+## Rook animation capture
+
+Windows run `20260927T104101Z-rook-animation` at gameplay/fixture commit `bb80925` passed 2,175/2,175 harness checks, produced 79 native screenshots and 96 real viewport animation frames, and preserved installed files and normal saves. The muted process exited normally within the 180-second watchdog with no script errors; existing engine shutdown resource warnings remain. The cue probes additionally reported 226 catalog/curve, 189 inventory and 204 effect checks. The case-art descendant bounds check catches an overflow that the earlier parent-only check missed. Animation output and timing provenance are described in [screenshots.md](../docs/screenshots.md). This is fixture rendering/callback evidence at 1280×720, not live multiplayer, actual narrow-window rendering or a performance measurement.
