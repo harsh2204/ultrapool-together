@@ -98,6 +98,7 @@ var _sync_shop_help: Label
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_apply_theme()
+	_configure_mod_options_layout()
 	_ensure_expansion_toggles()
 	_ensure_sync_shop_toggle()
 	_ensure_cue_picker()
@@ -452,12 +453,14 @@ func _ensure_sync_shop_toggle() -> void:
 	)
 	_sync_shop_check.toggled.connect(func(enabled): sync_shop_requested.emit(enabled))
 	column.add_child(_sync_shop_check)
+	_fit_mod_options_child(_sync_shop_check)
 	_sync_shop_help = Label.new()
 	_sync_shop_help.text = "Default on. Applies for the whole match once started."
 	_sync_shop_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_sync_shop_help.add_theme_font_size_override("font_size", 12)
 	_sync_shop_help.add_theme_color_override("font_color", MUTED)
 	column.add_child(_sync_shop_help)
+	_fit_mod_options_child(_sync_shop_help)
 
 
 ## Additive ModOptions section: per-player cue cosmetics (Refs #20 / PERF-026).
@@ -477,11 +480,14 @@ func _ensure_cue_picker() -> void:
 	_cue_help.add_theme_font_size_override("font_size", 12)
 	_cue_help.add_theme_color_override("font_color", MUTED)
 	column.add_child(_cue_help)
+	_fit_mod_options_child(title)
+	_fit_mod_options_child(_cue_help)
 	var flow = HFlowContainer.new()
 	flow.name = "CuePicker"
 	flow.add_theme_constant_override("h_separation", 6)
 	flow.add_theme_constant_override("v_separation", 6)
 	column.add_child(flow)
+	_fit_mod_options_child(flow)
 	var group = ButtonGroup.new()
 	for entry in CueCatalog.entries():
 		var button = Button.new()
@@ -536,6 +542,7 @@ func _ensure_turn_banner_toggle() -> void:
 		func(enabled): turn_banner_requested.emit(enabled)
 	)
 	column.add_child(_turn_banner_check)
+	_fit_mod_options_child(_turn_banner_check)
 
 
 func _toggle_mod_options() -> void:
@@ -552,6 +559,35 @@ func _close_mod_options() -> void:
 		return
 	%ModOptions.hide()
 	_mod_options_open = false
+
+
+## Keep the options column fill-width with no horizontal growth (gated CloneRounds
+## used to widen past the panel and ScrollContainer offset left clipping).
+func _configure_mod_options_layout() -> void:
+	var scroll: ScrollContainer = %ModOptionsScroll
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.scroll_horizontal = 0
+	var column: VBoxContainer = %ModOptionsColumn
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.custom_minimum_size.x = 0
+	for child in column.get_children():
+		if child is Control:
+			_fit_mod_options_child(child as Control)
+	%CloneRoundsHint.add_theme_color_override("font_color", MUTED)
+	%CloneRoundsHint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	%ModOptionsTitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	%ModOptionsHelp.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+
+func _fit_mod_options_child(child: Control) -> void:
+	child.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	child.custom_minimum_size.x = 0
+	if child is BaseButton:
+		(child as BaseButton).clip_text = true
+	if child is Label:
+		(child as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if child is HFlowContainer:
+		child.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 
 ## Fit ModOptions inside the lobby body (below the header) at capture size and up (#14).
@@ -583,6 +619,19 @@ func _place_mod_options() -> void:
 	var height := maxi(160, bottom - y)
 	options.size = Vector2(width, height)
 	options.position = Vector2(x, y)
+	_reset_mod_options_scroll()
+
+
+func _reset_mod_options_scroll() -> void:
+	var scroll: ScrollContainer = %ModOptionsScroll
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.scroll_horizontal = 0
+	# Clamp the column to the scroll viewport so CheckBox min-widths cannot grow past it.
+	var column: VBoxContainer = %ModOptionsColumn
+	var visible_w := scroll.size.x
+	if visible_w > 1.0:
+		column.size.x = visible_w
+		column.custom_minimum_size.x = 0
 
 
 func _input(event: InputEvent) -> void:
@@ -615,18 +664,32 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 	# Vs / clone-table rounds are exclusive to Together All Nighter (PERF-026 path).
 	# Keep the control visible when gated so the off/disabled state is obvious in the UI
 	# and in Capture-Screens (hidden-only gating looked like "everything enabled").
+	# Keep the checkbox label short; a separate wrapped hint carries "All Nighter only"
+	# so gated text cannot widen the column past the panel (horizontal clip regression).
 	var clone_allowed: bool = bool(state.get("single_table_difficulty", false))
 	%CloneRounds.visible = true
+	%CloneRounds.text = "Clone-table rounds"
 	%CloneRounds.set_pressed_no_signal(clone_allowed and bool(state.get("clone_rounds", false)))
 	%CloneRounds.disabled = not is_host or started or not clone_allowed
+	%CloneRoundsHint.visible = not clone_allowed
 	if clone_allowed:
-		%CloneRounds.text = "Clone-table rounds"
 		%CloneRounds.tooltip_text = (
 			"Everyone plays the same layout at once; only the winner shops next. Together All Nighter only."
 		)
+		%CloneRoundsHint.text = ""
 	else:
-		%CloneRounds.text = "Clone-table rounds (All Nighter only)"
 		%CloneRounds.tooltip_text = "Available when the lobby picks All Nighter (One Table)."
+		%CloneRoundsHint.text = "All Nighter only."
+	_fit_mod_options_child(%CloneRounds)
+	_fit_mod_options_child(%CloneRoundsHint)
+	_fit_mod_options_child(%MultiplayerBalls)
+	_fit_mod_options_child(%ExpansionSetsEnabled)
+	if _sync_shop_check != null and is_instance_valid(_sync_shop_check):
+		_fit_mod_options_child(_sync_shop_check)
+	if _sync_shop_help != null and is_instance_valid(_sync_shop_help):
+		_fit_mod_options_child(_sync_shop_help)
+	if _turn_banner_check != null and is_instance_valid(_turn_banner_check):
+		_fit_mod_options_child(_turn_banner_check)
 	%MultiplayerBalls.set_pressed_no_signal(bool(state.get("multiplayer_balls", false)))
 	%MultiplayerBalls.disabled = not is_host or started
 	if _sync_shop_check != null:
