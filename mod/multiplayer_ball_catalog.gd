@@ -180,7 +180,7 @@ static func concepts_for(id: String) -> Array:
 			concepts = [
 				_concept(
 					"Teammate",
-					"Another player seated at your table. A contact must be from an [k]earlier accepted shot[/k]; the same shot cannot trigger Relay.",
+					"Another player at your table must touch this ball on an [k]earlier shot[/k]. Same-shot contact does not count.",
 					"friend"
 				)
 			]
@@ -188,7 +188,7 @@ static func concepts_for(id: String) -> Array:
 			concepts = [
 				_concept(
 					"Called pocket",
-					"After shooting, choose the Called Shot ball, then [k]click a fixed pocket[/k] before the next shot starts. Only that next shot can earn the bonus.",
+					"The previous shooter selects this ball and [k]clicks a fixed pocket[/k] before the next shot. One shot only.",
 					"pocket"
 				)
 			]
@@ -196,7 +196,7 @@ static func concepts_for(id: String) -> Array:
 			concepts = [
 				_concept(
 					"Charges",
-					"[k]One charge[/k] is stored after each completed shot that hits an object ball while Patience remains on the table. Its own pot cannot add a charge.",
+					"Store [k]one charge[/k] per completed shot that hits an object while Patience survives. Its own pot adds none.",
 					"lvl"
 				)
 			]
@@ -204,12 +204,12 @@ static func concepts_for(id: String) -> Array:
 			concepts = [
 				_concept(
 					"Match points",
-					"Score PvP compares the [k]accepted shot number[/k] on which each table pots Bounty. The earliest shot wins; tied tables each earn the reward.",
+					"Score PvP: the earliest Bounty pot by [k]shot number[/k] wins. Tied tables each receive 25.",
 					"star"
 				),
 				_concept(
 					"Run points",
-					"Co-op and Race add points to the current round instead. The pot must happen within the table's [k]first three accepted shots of the match[/k].",
+					"Co-op/Race: +10 round points if potted in this table's [k]first 3 accepted shots of the match[/k].",
 					"pocket"
 				)
 			]
@@ -217,7 +217,7 @@ static func concepts_for(id: String) -> Array:
 			concepts = [
 				_concept(
 					"Cushion",
-					"[k]Bankroll itself[/k] must touch the table rail before its pot in the same shot. A bounce by the cue ball or another ball does not count.",
+					"[k]Bankroll itself[/k] must hit a rail before its pot in the same shot. Another ball's bounce does not count.",
 					"pocket"
 				),
 				_round_limit()
@@ -228,7 +228,7 @@ static func concepts_for(id: String) -> Array:
 			concepts = [
 				_concept(
 					"Ordinary ball",
-					"An object ball [k]without a multiplayer-ball effect[/k]. Encore returns the most recent eligible non-fleeting pot; it never returns the cue ball or a snack.",
+					"Most recent non-fleeting object ball [k]without multiplayer effects[/k]. Excludes cue balls and snacks.",
 					"friend"
 				),
 				_round_limit()
@@ -237,7 +237,7 @@ static func concepts_for(id: String) -> Array:
 			concepts = [
 				_concept(
 					"Ordinary ball",
-					"An object ball [k]without a multiplayer-ball effect[/k]. Only the next eligible pot in this accepted shot receives Domino's bonus.",
+					"An object ball [k]without multiplayer effects[/k]. Only the next eligible pot in this shot gets the bonus.",
 					"friend"
 				),
 				_round_limit()
@@ -248,7 +248,7 @@ static func concepts_for(id: String) -> Array:
 static func _round_limit() -> Dictionary:
 	return _concept(
 		"Once per table per round",
-		"This reward is [k]shared by the whole table[/k]. Extra copies, mixes and different shooters cannot refresh it until the next round.",
+		"One reward per round for [k]the whole table[/k], including extra copies, mixes and other shooters.",
 		"lvl"
 	)
 

@@ -162,11 +162,27 @@ func attach_gallery(gallery: Node) -> bool:
 				slot.has_hover = false
 				slot.hide()
 				slot.set_process(false)
+	_layout_rows(slots)
 	_build_heading(page)
 	# Inherit the ShopBalls major tab's native visibility/process gating. The
 	# original major tabs, selector count and scroll behavior stay native-owned.
 	_pages.append(weakref(panel))
 	return true
+
+
+func _layout_rows(rows: Array) -> void:
+	# Keep the native ball scale, horizontal spacing and total row footprint.
+	# Center populated rarity rows instead of leaving holes from hidden slots.
+	var first: Vector2 = rows[0][0].position
+	var last: Vector2 = rows[3][0].position
+	var gap: float = absf(rows[0][1].position.x - first.x)
+	for rarity in rows.size():
+		var populated: Array = rows[rarity].filter(func(slot): return slot.visible)
+		for index in populated.size():
+			populated[index].position = Vector2(
+				last.x + (index - (populated.size() - 1) * 0.5) * gap,
+				lerpf(first.y, last.y, float(rarity) / 3.0)
+			)
 
 
 func _own_slots(page: Node) -> Array:

@@ -7,9 +7,14 @@ const SLOT_PROPERTIES = ["slots_common", "slots_uncommon", "slots_rare", "slots_
 const SET_LIST_PATH = "ShopBalls/ScrollContainer/MarginContainer/VBoxContainer"
 const SET_DISPLAY_PATH = "Control/GallerySetDisplay"
 const INSPECT_CAPTURES = {
+	"TOGETHER_RELAY": "collection-together-relay",
+	"TOGETHER_CALL": "collection-together-called-shot",
+	"TOGETHER_PATIENCE": "collection-together-patience",
 	"TOGETHER_BANKROLL": "collection-together-bankroll",
 	"TOGETHER_BOUNTY": "collection-together-bounty",
+	"TOGETHER_LIFELINE": "collection-together-lifeline",
 	"TOGETHER_ENCORE": "collection-together-encore",
+	"TOGETHER_DOMINO": "collection-together-domino",
 }
 
 
@@ -156,6 +161,7 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 	)
 	var slot_processing = _suspend_collection_processing(container)
 	global.clear_hovered_item()
+	_check_collection_bounds(set_panel, page, slots, check)
 	await capture.call(
 		"collection-together",
 		"Together collection · all eight balls visible with Multiplayer balls disabled"
@@ -168,7 +174,10 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 		var slot = slots[id]
 		global.clear_hovered_item()
 		slot.on_hover()
-		await _frames(mod, 6)
+		check.call(
+			await _wait_inspection(mod, info),
+			"collection: " + id + " inspection settles at full size"
+		)
 		check.call(
 			info.ball_item == slot.ball_item and info.showing,
 			"collection: " + id + " native hover opens its inspection"
@@ -193,6 +202,7 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 				if panel.visible and panel.l_name.text.contains(concept.title):
 					found = panel.l_desc.text == TextFormatter.format(concept.description)
 			check.call(found, "collection: " + id + " explains " + concept.title)
+		_check_inspection_bounds(info, check, id)
 		if INSPECT_CAPTURES.has(id):
 			await capture.call(
 				INSPECT_CAPTURES[id],
@@ -213,17 +223,28 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 		var mixed_slot = slots.TOGETHER_BOUNTY
 		mixed_slot.ball_item.mixed_data = database.get_ball_by_id("TOGETHER_ENCORE")
 		mixed_slot.on_hover()
-		await _frames(mod, 6)
+		check.call(
+			await _wait_inspection(mod, info), "collection: four-helper mixed inspection settles"
+		)
 		check.call(
 			info.keyword_panels.filter(func(panel): return panel.visible).size() == 4,
 			"collection: two multiplayer effects fill at most four retained helpers"
 		)
+		_check_inspection_bounds(info, check, "Bounty + Encore mix")
+		await capture.call(
+			"collection-together-mixed-four-helpers",
+			"Bounty + Encore · complete mixed inspection and four native concept panels"
+		)
 		mixed_slot.ball_item.mixed_data = mixed_slot.ball_item.data
 		info.update()
+		check.call(
+			await _wait_inspection(mod, info), "collection: same-ball mixed inspection settles"
+		)
 		check.call(
 			info.keyword_panels.filter(func(panel): return panel.visible).size() == 2,
 			"collection: a same-ball mix deduplicates concept helpers"
 		)
+		_check_inspection_bounds(info, check, "Bounty + Bounty mix")
 		for resource in database.balls:
 			if Catalog.BALLS.has(str(resource.id)):
 				continue
@@ -237,6 +258,10 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 				continue
 			mixed_slot.ball_item.mixed_data = resource
 			info.update()
+			check.call(
+				await _wait_inspection(mod, info),
+				"collection: native-keyword mixed inspection settles"
+			)
 			for title in native_titles:
 				check.call(
 					info.keyword_panels.any(
@@ -248,6 +273,7 @@ func run(mod: Node, capture: Callable, check: Callable) -> bool:
 				info.keyword_panels.filter(func(panel): return panel.visible).size() <= 4,
 				"collection: native and multiplayer mixed helpers stay within four panels"
 			)
+			_check_inspection_bounds(info, check, "Bounty + " + str(resource.id))
 			break
 		mixed_slot.ball_item.mixed_data = null
 		global.clear_hovered_item()
@@ -400,6 +426,153 @@ func _all_drop(database: Node, expected: bool) -> bool:
 	return true
 
 
+func _rendered_bounds(item: CanvasItem) -> Rect2:
+	var local_bounds = Rect2()
+	if item is Control:
+		local_bounds = Rect2(Vector2.ZERO, item.size)
+	elif item is Sprite2D:
+		local_bounds = item.get_rect()
+	# Includes the native CanvasLayer offset and camera transform. Global
+	# positions alone would compare the gallery and inspector in different spaces.
+	return item.get_global_transform_with_canvas() * local_bounds
+
+
+func _check_enclosed(outer: Rect2, inner: Rect2, check: Callable, label: String) -> void:
+	var fits = inner.size.x > 0.0 and inner.size.y > 0.0 and outer.grow(1.0).encloses(inner)
+	if not fits:
+		print("COLLECTION_BOUNDS ", label, " rendered=", inner, " enclosing=", outer)
+	check.call(fits, "collection: " + label)
+
+
+func _check_collection_bounds(
+	section: Control, page: Node, slots: Dictionary, check: Callable
+) -> void:
+	var section_bounds = _rendered_bounds(section)
+	check.call(
+		section.size.is_equal_approx(Vector2(400.0, 400.0)),
+		"collection: Together retains the native 400 by 400 set section"
+	)
+	_check_enclosed(
+		section.get_viewport().get_visible_rect(),
+		section_bounds,
+		check,
+		"Together section fits viewport"
+	)
+	var heading: Label = page.get_node("TogetherCollectionTitle")
+	var heading_bounds = _rendered_bounds(heading)
+	_check_enclosed(
+		section_bounds, heading_bounds, check, "actual heading stays within its set section"
+	)
+	_check_enclosed(
+		_rendered_bounds(page.get_node("Poster")),
+		heading_bounds,
+		check,
+		"actual heading stays within the native poster footprint"
+	)
+	_check_text_fit(heading, check, "Together heading")
+	var ball_bounds: Dictionary = {}
+	for id in slots:
+		for path in ["visuals/ball", "visuals/edge"]:
+			var art = slots[id].get_node(path)
+			check.call(art.is_visible_in_tree(), "collection: " + id + " renders " + path)
+			_check_enclosed(
+				section_bounds,
+				_rendered_bounds(art),
+				check,
+				id + " actual " + path + " stays within its set section"
+			)
+			if path == "visuals/ball":
+				ball_bounds[id] = _rendered_bounds(art)
+		_check_separated(
+			heading_bounds,
+			ball_bounds[id],
+			check,
+			id + " art does not overlap the Together heading"
+		)
+	var ids = ball_bounds.keys()
+	for first in ids.size():
+		for second in range(first + 1, ids.size()):
+			_check_separated(
+				ball_bounds[ids[first]],
+				ball_bounds[ids[second]],
+				check,
+				ids[first] + " and " + ids[second] + " artwork do not overlap"
+			)
+
+
+func _check_separated(first: Rect2, second: Rect2, check: Callable, label: String) -> void:
+	var separated = not first.intersects(second)
+	if not separated:
+		print("COLLECTION_OVERLAP ", label, " first=", first, " second=", second)
+	check.call(separated, "collection: " + label)
+
+
+func _wait_inspection(mod: Node, info: Node) -> bool:
+	# Native inspection waits 0.1 seconds, grows in, then repositions after
+	# container layout. Check the final scale, never a temporarily shrunken panel.
+	for _frame in 32:
+		await mod.get_tree().process_frame
+		if (
+			info.showing
+			and info.delay <= 0.0
+			and info.reposition_frames == 0
+			and info.scale_value >= 0.999
+			and info.main_panel.is_visible_in_tree()
+		):
+			return true
+	return false
+
+
+func _check_inspection_bounds(info: Node, check: Callable, label: String) -> void:
+	var viewport_bounds: Rect2 = info.get_viewport().get_visible_rect()
+	var main_bounds = _rendered_bounds(info.main_panel)
+	_check_enclosed(viewport_bounds, main_bounds, check, label + " main inspector fits viewport")
+	for text_label in [info.name_label, info.desc_label]:
+		_check_enclosed(
+			main_bounds,
+			_rendered_bounds(text_label),
+			check,
+			label + " " + str(text_label.name) + " stays within main inspector"
+		)
+		_check_text_fit(text_label, check, label + " " + str(text_label.name))
+	for index in info.keyword_panels.size():
+		var helper = info.keyword_panels[index]
+		if not helper.visible:
+			continue
+		var helper_label = label + " helper " + str(index + 1)
+		check.call(helper.is_visible_in_tree(), "collection: " + helper_label + " is rendered")
+		var helper_bounds = _rendered_bounds(helper)
+		_check_enclosed(viewport_bounds, helper_bounds, check, helper_label + " fits viewport")
+		for text_label in [helper.l_name, helper.l_desc]:
+			_check_enclosed(
+				helper_bounds,
+				_rendered_bounds(text_label),
+				check,
+				helper_label + " " + str(text_label.name) + " stays within its panel"
+			)
+			_check_text_fit(text_label, check, helper_label + " " + str(text_label.name))
+
+
+func _check_text_fit(text_label: Control, check: Callable, label: String) -> void:
+	var minimum = text_label.get_minimum_size()
+	var required_height: float = minimum.y
+	if text_label is RichTextLabel:
+		required_height = maxf(required_height, text_label.get_content_height())
+	var fits = minimum.x <= text_label.size.x + 1.0 and required_height <= text_label.size.y + 1.0
+	if not fits:
+		print(
+			"COLLECTION_TEXT_FIT ",
+			label,
+			" size=",
+			text_label.size,
+			" minimum=",
+			minimum,
+			" content_height=",
+			required_height
+		)
+	check.call(fits, "collection: " + label + " text fits without clipping")
+
+
 func _check_native_materials(container: Node, added: Node, database: Node, check: Callable) -> void:
 	for page in _set_displays(container):
 		if page == added:
@@ -437,7 +610,7 @@ func _check_vanilla_cleanup(
 	slot.set_data(slot.display_resource, true)
 	global.clear_hovered_item()
 	slot.on_hover()
-	await _frames(mod, 6)
+	check.call(await _wait_inspection(mod, info), "collection: vanilla control inspection settles")
 	var expected = TextFormatter.format(slot.ball_item.get_formatted_description())
 	check.call(
 		info.desc_label.text == expected, "collection: vanilla inspection retains native formatting"
@@ -453,6 +626,7 @@ func _check_vanilla_cleanup(
 					not panel.l_name.text.contains(title),
 					"collection: vanilla clears helper " + title
 				)
+	_check_inspection_bounds(info, check, "vanilla control")
 	await capture.call(
 		"collection-vanilla-after-together",
 		"Native collection inspection · multiplayer concept panels cleared"
