@@ -182,6 +182,7 @@ func _initialize() -> void:
 	_check_run_votes(model_script)
 	_check_clone_rounds_gate(model_script)
 	_check_expansion_master(model_script)
+	_check_custom_cues(model_script)
 	print("LOBBY_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
 		push_error(failure)
@@ -465,6 +466,30 @@ func _check_expansion_master(model_script) -> void:
 	_check(not lobby.set_expansion_sets_enabled(20, true), "guest cannot change expansion master")
 	_check(lobby.set_expansion_sets_enabled(10, true), "host can restore master")
 	_check(lobby.effective_expansion_sets().PHASES, "restored master reactivates preserved set")
+
+
+func _check_custom_cues(model_script) -> void:
+	var lobby = model_script.new()
+	lobby.setup(10, "Host")
+	_configure(lobby)
+	lobby.add_player(20, "Guest")
+	lobby.choose_slot(20, 0, 1)
+	_check(_find(lobby, 10).cue == "native", "players default to the native cue")
+	_check(lobby.set_cue(20, "emerald"), "guest can choose a personal cue")
+	_check(_find(lobby, 20).cue == "emerald", "guest cue is stored on their roster entry")
+	_check(_find(lobby, 10).cue == "native", "host cue stays independent of guest choice")
+	_check(not lobby.set_cue(20, "unknown-stick"), "unknown cue ids are rejected")
+	_check(_find(lobby, 20).cue == "emerald", "rejected cue leaves the prior choice")
+	_ready_all(lobby)
+	var ready_revision: int = lobby.revision
+	_check(lobby.set_cue(10, "gold"), "host can change cue while ready")
+	_check(
+		_find(lobby, 10).ready and _find(lobby, 20).ready and lobby.revision == ready_revision + 1,
+		"cue changes bump revision without clearing readiness"
+	)
+	_check(lobby.start(10), "match can start with custom cues selected")
+	_check(lobby.set_cue(20, "ice"), "cue can change during a started match")
+	_check(_find(lobby, 20).cue == "ice", "in-match cue updates are stored")
 
 
 func _find(lobby, id: int) -> Dictionary:
