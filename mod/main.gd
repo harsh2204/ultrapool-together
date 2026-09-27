@@ -23,6 +23,7 @@ var run_setup: Node
 var spectator: Node
 var run_controls: Node
 var multiplayer_balls: Node
+var expansion_balls: Node
 var set_voting: Node
 var bounty_race: Script
 var lobby_model: RefCounted
@@ -107,6 +108,7 @@ func _ready():
 	spectator = load(base.path_join("table_spectator.gd")).new()
 	run_controls = load(base.path_join("run_controls.gd")).new()
 	multiplayer_balls = load(base.path_join("multiplayer_balls.gd")).new()
+	expansion_balls = load(base.path_join("expansion_balls.gd")).new()
 	set_voting = load(base.path_join("set_voting.gd")).new()
 	bounty_race = load(base.path_join("bounty_race.gd"))
 	for service in [
@@ -117,6 +119,7 @@ func _ready():
 		presence,
 		run_setup,
 		multiplayer_balls,
+		expansion_balls,
 		spectator,
 		run_controls,
 		set_voting
@@ -130,6 +133,10 @@ func _ready():
 	if not multiplayer_balls.setup(self):
 		supported = false
 		_status("Multiplayer ball art is missing. Reinstall the complete mod package.")
+		return
+	if not expansion_balls.setup(self):
+		supported = false
+		_status("Expansion ball art is missing. Reinstall the complete mod package.")
 		return
 	presence.setup(self, transport, shop_sync)
 	shop_sync.request.connect(_shop_request)
@@ -224,6 +231,11 @@ func _build_ui():
 	)
 	panel.multiplayer_balls_requested.connect(
 		func(enabled): _lobby_request({"action": "multiplayer_balls", "enabled": enabled})
+	)
+	panel.expansion_set_requested.connect(
+		func(set_id, enabled): _lobby_request(
+			{"action": "expansion_set", "set": set_id, "enabled": enabled}
+		)
 	)
 	panel.watch_requested.connect(_watch_table)
 	panel.return_vote_requested.connect(
@@ -463,6 +475,9 @@ func _apply_lobby_request(sender: int, message: Dictionary):
 		"multiplayer_balls":
 			if message.get("enabled") is bool:
 				accepted = lobby_model.set_multiplayer_balls(sender, message.enabled)
+		"expansion_set":
+			if message.get("set") is String and message.get("enabled") is bool:
+				accepted = lobby_model.set_expansion_set(sender, message.set, message.enabled)
 		"start":
 			_start_match(sender)
 			return
@@ -519,6 +534,7 @@ func _start_match(sender: int):
 		return
 	run_config = run_setup.capture_config(lobby_model.resolved_run_selection())
 	run_config["multiplayer_balls"] = bool(lobby_model.multiplayer_balls)
+	run_config["expansion_sets"] = lobby_model.expansion_sets.duplicate(true)
 	run_config["clone_rounds"] = bool(lobby_model.clone_rounds)
 	if not run_setup.validate_config(run_config):
 		_status("The voted starting set or difficulty is unavailable. Recreate the lobby.")
@@ -609,6 +625,8 @@ func _begin_table(config: Dictionary):
 	else:
 		# Keep registration for probes, but leave can_drop/shop injection off.
 		multiplayer_balls.end_session()
+	var expansion_flags = lobby.get("expansion_sets", config.get("expansion_sets", {}))
+	expansion_balls.begin_session(expansion_flags)
 	if not is_table_host() and not table_sync.begin_guest(config):
 		_match_failed("Could not create the table view. Return to the main menu and try again.")
 		return
@@ -680,6 +698,7 @@ func _end_table():
 	set_voting.end_session()
 	shop_sync.end_session()
 	multiplayer_balls.end_session()
+	expansion_balls.end_session()
 	adapter.end_session()
 	table_sync.end_guest()
 	run_setup.cancel()
@@ -1093,7 +1112,11 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 	shot_start_score = adapter.score()
 	var starting_table = table_sync.capture()
 	if not adapter.shoot(
-		vector, multiplayer_balls.begin_shot.bind(used_shots + 1, player)
+		vector,
+		func():
+			if not multiplayer_balls.begin_shot(used_shots + 1, player):
+				return false
+			return expansion_balls.begin_shot(used_shots + 1, player)
 	):
 		return false
 	shot_pending = true
@@ -1115,6 +1138,7 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 
 func _finish_shot():
 	multiplayer_balls.finish_shot()
+	expansion_balls.finish_shot()
 	total_score += maxf(0.0, adapter.shot_score() - shot_start_score)
 	used_shots += 1
 	shot_pending = false
@@ -1278,6 +1302,7 @@ func _publish_state(
 	if not active or not is_table_host():
 		return
 	multiplayer_balls.prepare_shop()
+	expansion_balls.prepare_shop()
 	latest_state = adapter.game_data()
 	latest_state.run_won = latest_state.run_won and finished
 	latest_state.can_shoot = latest_state.can_shoot and run_setup.ready_for_input() and not finished
@@ -1291,6 +1316,7 @@ func _publish_state(
 			"used_shots": used_shots,
 			"bounty_shot": multiplayer_balls.bounty_shot(),
 			"multiplayer_balls": multiplayer_balls.capture(),
+			"expansion_balls": expansion_balls.capture(),
 			"clone_round": CloneRound.snapshot(
 				_clone_instances, _clone_active, _clone_winner, _clone_shop_armed
 			),
@@ -1300,6 +1326,7 @@ func _publish_state(
 		true
 	)
 	var balls_state: Dictionary = latest_state.get("multiplayer_balls", {})
+	var expansion_state: Dictionary = latest_state.get("expansion_balls", {})
 	var state_sig = [
 		latest_state.get("available"),
 		latest_state.get("settled"),
@@ -1314,7 +1341,8 @@ func _publish_state(
 		shot_pending,
 		used_shots,
 		finished,
-		multiplayer_balls.display_signature(balls_state)
+		multiplayer_balls.display_signature(balls_state),
+		expansion_balls.display_signature(expansion_state)
 	]
 	if target != 0 or state_sig != _last_state_sig:
 		if target == 0:
@@ -1551,6 +1579,7 @@ func _received_table(actor: int, message: Dictionary):
 			_table_send({"kind": "shot_result", "turn": message.turn, "accepted": accepted}, actor)
 		elif kind == "shop_request":
 			multiplayer_balls.prepare_shop()
+			expansion_balls.prepare_shop()
 			var accepted = not finished and shop_sync.handle_request(message, actor)
 			var shop_state = shop_sync.capture()
 			var captured_lobby_revision: int = lobby.get("revision", -1)
@@ -1619,6 +1648,8 @@ func _received_table(actor: int, message: Dictionary):
 		finish_reason = message.finish_reason
 		if message.get("multiplayer_balls") is Dictionary:
 			multiplayer_balls.apply_state(message.multiplayer_balls)
+		if message.get("expansion_balls") is Dictionary:
+			expansion_balls.apply_state(message.expansion_balls)
 		if message.get("clone_round") is Dictionary:
 			var clone: Dictionary = message.clone_round
 			_clone_active = bool(clone.get("active", false))
@@ -1713,6 +1744,11 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 	if (
 		message.has("multiplayer_balls")
 		and not multiplayer_balls.valid_state(message.get("multiplayer_balls"))
+	):
+		return false
+	if (
+		message.has("expansion_balls")
+		and not expansion_balls.valid_state(message.get("expansion_balls"))
 	):
 		return false
 	return (
