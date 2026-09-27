@@ -15,6 +15,9 @@ var shot_budget = DEFAULT_SHOT_BUDGET
 var match_mode = "race"
 var clone_rounds = false
 var multiplayer_balls = false
+## Host-authoritative shared shop (default ON). When false, each table host
+## shops independently — no remote replicas, shared shop cursors, or shop ui_nav.
+var sync_shop = true
 var expansion_sets_enabled = false
 var expansion_sets: Dictionary = {}
 var revision = 0
@@ -49,6 +52,7 @@ func clear() -> void:
 	match_mode = "race"
 	clone_rounds = false
 	multiplayer_balls = false
+	sync_shop = true
 	expansion_sets_enabled = false
 	expansion_sets = ExpansionRegistry.default_flags()
 	revision = 0
@@ -183,6 +187,21 @@ func set_multiplayer_balls(sender: int, enabled: bool) -> bool:
 		last_error = ""
 		return true
 	multiplayer_balls = enabled
+	_changed(true)
+	return true
+
+
+## Shared shop with the table host (Refs #34). Default ON. Locked once the match
+## starts like other ModOptions; exclusive/winner shop forces shared sync at runtime.
+func set_sync_shop(sender: int, enabled: bool) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can change shop sync.")
+	if started:
+		return _reject("Shop sync is locked during a match.")
+	if sync_shop == enabled:
+		last_error = ""
+		return true
+	sync_shop = enabled
 	_changed(true)
 	return true
 
@@ -477,6 +496,7 @@ func snapshot() -> Dictionary:
 		"match_mode": match_mode,
 		"clone_rounds": clone_rounds,
 		"multiplayer_balls": multiplayer_balls,
+		"sync_shop": sync_shop,
 		"expansion_sets_enabled": expansion_sets_enabled,
 		"expansion_sets": ExpansionRegistry.normalize_flags(expansion_sets),
 		"single_table_difficulty": _single_table_difficulty(),

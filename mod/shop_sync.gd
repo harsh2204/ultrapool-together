@@ -43,6 +43,9 @@ var _exclusive_shopper = 0
 # Host-driven shop counter / inspection follow (#16). Queued until drag/purchase settles.
 var _queued_nav: Dictionary = {}
 var _applied_nav: Dictionary = {}
+# Latched shared-shop flag (Refs #34). Exclusive shopper forces shared sync on.
+# Never flips while a shop view is open — refresh only at session start / shop close.
+var _shared_sync_latched = true
 
 
 func _ready():
@@ -72,6 +75,7 @@ func begin_session(controller: Node):
 	_exclusive_shopper = 0
 	_queued_nav.clear()
 	_applied_nav.clear()
+	_refresh_shared_sync_latch(true)
 	_was_finished = _controller.finished
 	if _controller.is_table_host():
 		var tutorial = get_node("/root/TutorialManager")
@@ -104,6 +108,7 @@ func end_session():
 	_actions_blocked = false
 	_queued_nav.clear()
 	_applied_nav.clear()
+	_shared_sync_latched = true
 	_panel.hide()
 
 
@@ -127,15 +132,71 @@ func exclusive_shopper() -> int:
 	return _exclusive_shopper
 
 
+## Shared shop overlay active? Exclusive/winner shop always wins over sync_shop=off
+## (Refs #34). Latched while a shop is open so mid-match flag changes never tear down
+## an in-progress session — refresh happens at begin_session / shop close.
+func shared_shop_sync_active() -> bool:
+	if _exclusive_shopper != 0:
+		return true
+	return _shared_sync_latched
+
+
+func _desired_shared_sync() -> bool:
+	if _controller == null:
+		return true
+	var lobby: Dictionary = _controller.lobby if _controller.lobby is Dictionary else {}
+	if lobby.has("sync_shop"):
+		return bool(lobby.get("sync_shop", true))
+	var config: Dictionary = (
+		_controller.run_config if _controller.run_config is Dictionary else {}
+	)
+	return bool(config.get("sync_shop", true))
+
+
+func _refresh_shared_sync_latch(force: bool = false) -> void:
+	if not force and is_open():
+		return
+	var want: bool = _desired_shared_sync()
+	if _shared_sync_latched == want:
+		return
+	_shared_sync_latched = want
+	if not want:
+		# Drop remote replicas / queued host nav so OFF never leaves stale shared UI.
+		_teardown_shared_overlay()
+
+
+func _teardown_shared_overlay() -> void:
+	_queued_nav.clear()
+	_applied_nav.clear()
+	if _controller != null and not _controller.is_table_host():
+		_restore_items()
+		_clear_guest_view()
+		_view = null
+		_view_slots.clear()
+		_actions_blocked = false
+		if _state.get("open", false):
+			_state = {"open": false, "revision": int(_state.get("revision", 0))}
+		if _authoritative_state.get("open", false):
+			_authoritative_state = {
+				"open": false, "revision": int(_authoritative_state.get("revision", 0))
+			}
+		_panel.hide()
+
+
 func is_open() -> bool:
 	return _controller != null and _state.get("open", false)
 
 
 func presence_rect() -> Rect2:
+	# No shared shop cursors while sync is off (PERF-029 / Refs #34).
+	if not shared_shop_sync_active():
+		return Rect2()
 	return get_viewport().get_visible_rect() if is_open() and _panel.visible else Rect2()
 
 
 func presence_target() -> String:
+	if not shared_shop_sync_active():
+		return ""
 	if not is_instance_valid(_view) or not _panel.visible:
 		return ""
 	return _slot_key(_view.get_hovered_slot())
@@ -301,6 +362,20 @@ func capture() -> Dictionary:
 	return data
 
 
+## Wire payload for shop_state / snapshot shop fields (Refs #34 / PERF-009/010).
+## When shared sync is off, publish a closed stub so guests tear down remotes and
+## never apply host slots — host still captures/applies locally via capture().
+func wire_shop_state(captured: Dictionary = {}) -> Dictionary:
+	if shared_shop_sync_active():
+		return captured
+	return {
+		"open": false,
+		"revision": int(captured.get("revision", _revision)),
+		"exclusive_shopper": _exclusive_shopper,
+		"winner_shop": false
+	}
+
+
 func _pack_slot(group: String, index: int, slot) -> Dictionary:
 	var passive = group in ["snack", "passive"]
 	var object = slot.item if passive else slot.ball
@@ -333,6 +408,9 @@ func handle_request(message: Dictionary, actor: int = 0) -> bool:
 		return _reject("Finish the set vote before shopping.")
 	if actor == 0:
 		actor = _controller.transport.local_id()
+	# Refs #34: with sync off, only the table host's local shop mutates the run.
+	if not shared_shop_sync_active() and actor != _controller.transport.local_id():
+		return _reject("Shop sync is off — only the table host can shop.")
 	if not message.get("revision") is int or not message.get("action") is String:
 		return _reject("Invalid shop action.")
 	var action: String = message.action
@@ -514,6 +592,19 @@ func apply_state(data: Dictionary) -> bool:
 		return false
 	if data.get("exclusive_shopper") is int:
 		_exclusive_shopper = maxi(0, int(data.exclusive_shopper))
+	if not data.open:
+		# Safe boundary to pick up lobby sync_shop changes (Refs #34).
+		_refresh_shared_sync_latch()
+	# Guests never apply an open shared shop while sync is off. Exclusive shopper
+	# forces shared_shop_sync_active() true above so winner-only shop still syncs.
+	if (
+		not shared_shop_sync_active()
+		and _controller != null
+		and not _controller.is_table_host()
+		and data.open
+	):
+		_teardown_shared_overlay()
+		return true
 	if data.get("revision", -1) < _authoritative_state.get("revision", -1):
 		return true
 	_authoritative_state = data.duplicate(true)
@@ -539,6 +630,7 @@ func _display_state(data: Dictionary):
 		_actions_blocked = false
 		_queued_nav.clear()
 		_applied_nav.clear()
+		_refresh_shared_sync_latch()
 		return
 	if not was_open:
 		get_viewport().gui_release_focus()
@@ -943,6 +1035,8 @@ func _local_focus_key() -> String:
 func _queue_host_nav(data: Dictionary) -> void:
 	if _controller == null or _controller.is_table_host() or not data.get("open", false):
 		return
+	if not shared_shop_sync_active():
+		return
 	var section = str(data.get("section", ""))
 	var focus = str(data.get("focus", ""))
 	if section == "" and focus == "":
@@ -1000,6 +1094,10 @@ func _ensure_view() -> bool:
 	if _controller.is_table_host():
 		_view = _shop()
 	else:
+		# Independent shops: guests never build remote_slots replicas (Refs #34).
+		if not shared_shop_sync_active():
+			_teardown_shared_overlay()
+			return false
 		var global_node = get_node("/root/Global")
 		var game = global_node.gameManager
 		if not is_instance_valid(game) or not game.has_method("apply_table"):
