@@ -15,6 +15,7 @@ const HUD_TINTS = {
 }
 const CrtStack = preload("crt_stack.gd")
 const UiNav = preload("ui_nav.gd")
+const CuePrefs = preload("cue_prefs.gd")
 
 var transport: Node
 var adapter: Node
@@ -255,6 +256,9 @@ func _build_ui():
 			{"action": "expansion_set", "set": set_id, "enabled": enabled}
 		)
 	)
+	panel.cue_requested.connect(
+		func(cue_id): _lobby_request({"action": "cue", "cue": cue_id})
+	)
 	panel.watch_requested.connect(_watch_table)
 	panel.return_vote_requested.connect(
 		func(ready):
@@ -384,6 +388,8 @@ func _room_ready():
 		return
 	_broadcast_lobby()
 	_set_panel(true)
+	# Seed local cue preference into the authoritative lobby roster (Refs #20).
+	_lobby_request({"action": "cue", "cue": CuePrefs.cue_id()})
 
 
 func _connected():
@@ -394,6 +400,8 @@ func _connected():
 		return
 	_set_panel(true)
 	_status("Connected. Choose an open seat, then ready up.")
+	# Seed local cue preference once the guest session is open (Refs #20).
+	_lobby_request({"action": "cue", "cue": CuePrefs.cue_id()})
 
 
 func _transport_name(id: int) -> String:
@@ -499,6 +507,9 @@ func _apply_lobby_request(sender: int, message: Dictionary):
 		"expansion_set":
 			if message.get("set") is String and message.get("enabled") is bool:
 				accepted = lobby_model.set_expansion_set(sender, message.set, message.enabled)
+		"cue":
+			if message.get("cue") is String:
+				accepted = lobby_model.set_cue(sender, message.cue)
 		"start":
 			_start_match(sender)
 			return

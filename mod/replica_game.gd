@@ -3,6 +3,7 @@ extends "res://Game.gd"
 const PlayerInventory = preload("player_inventory_sync.gd")
 const TableSync = preload("table_sync.gd")
 const ReplicaFx = preload("replica_fx.gd")
+const CueCatalog = preload("cue_catalog.gd")
 
 var remote_ready = false
 var remote_shots = 0
@@ -285,6 +286,13 @@ func apply_table(data: Dictionary) -> void:
 				active_balls.append(body)
 			active_balls_include_untargetable.append(body)
 	_fx.finish_apply(present)
+	# CUSTOM CUES (#20): tint the guest replica cue for the current turn owner.
+	if is_instance_valid(player_ball):
+		var controller = get_parent().get_parent() if get_parent() else null
+		if controller != null:
+			var lobby: Dictionary = controller.get("lobby") if controller.get("lobby") is Dictionary else {}
+			var turn_owner: int = int(controller.get("turn_owner"))
+			CueCatalog.apply(player_ball, CueCatalog.cue_for_player(lobby, turn_owner))
 	_sync_potted_rail(data.balls)
 	for id in replicas.keys():
 		if not present.has(id):
