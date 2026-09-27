@@ -1,8 +1,11 @@
 extends Node
 
 const MAX_BALLS = 128
+const MAX_TABLE_CAPTURE_BYTES = 192 * 1024
 const RoundPresentation = preload("round_presentation.gd")
 const PlayerInventory = preload("player_inventory_sync.gd")
+const TableEffects = preload("table_effects_sync.gd")
+const VisualFx = preload("table_visual_fx.gd")
 const ITEM_NUMBERS = {
 	"base_score": [-1.0e18, 1.0e18],
 	"temp_extra_score": [-1.0e18, 1.0e18],
@@ -12,6 +15,7 @@ const ITEM_NUMBERS = {
 const ITEM_FLAGS = ["flaming", "fleeting", "star_power", "shielded", "shield_broken", "locked"]
 const TABLE_FLAGS = ["ready", "in_menu", "in_shop", "round_ended", "game_over", "daily", "rotated"]
 const BALL_FLAGS = ["player", "visible", "alive", "spawned", "falling", "gone", "passive"]
+
 
 ## Guest potted-rail hover: pocketed object balls stay in the synced snapshot with
 ## full BallItem fields (id, scores, flags). The replica maps those onto bodies and
@@ -33,6 +37,57 @@ var _saved_shapes: Array = []
 var _saved_balls: Array = []
 var _saved_tutorial: Dictionary = {}
 var _results: Node
+var _visual_fx_capture: Node
+var _effects_game: WeakRef
+var _effects_were_active = false
+
+
+func _ready() -> void:
+	_visual_fx_capture = VisualFx.new()
+	add_child(_visual_fx_capture)
+
+
+func clear_effect_capture() -> void:
+	if is_instance_valid(_visual_fx_capture):
+		_visual_fx_capture.clear()
+	if _effects_game != null:
+		TableEffects.clear(_effects_game.get_ref())
+	_effects_game = null
+	_effects_were_active = false
+
+
+func effects_active() -> bool:
+	var global_node = get_node_or_null("/root/Global")
+	var game = global_node.gameManager if global_node != null else null
+	if not is_instance_valid(game) or not is_instance_valid(game.table) or game.in_shop:
+		return false
+	if _effects_were_active or not game.droplets.is_empty() or not game.energy_balls.is_empty():
+		return true
+	if is_instance_valid(_visual_fx_capture) and _visual_fx_capture.has_pending_or_active_effects():
+		return true
+	# WORMHOLE can finish after ordinary balls stop. Native fixed+dynamic pockets
+	# are capped at16; never turn this scheduler hint into an unbounded scan.
+	if game.pockets.size() > 16:
+		return true
+	for pocket in game.pockets:
+		if not is_instance_valid(pocket) or pocket.is_queued_for_deletion():
+			continue
+		var area = pocket.get_node_or_null("Area2D")
+		if area is Node2D and not area.scale.is_equal_approx(Vector2.ONE):
+			return true
+	return false
+
+
+func _prepare_effect_capture(game: Node) -> void:
+	if _effects_game != null and _effects_game.get_ref() == game:
+		return
+	if _effects_game != null:
+		TableEffects.clear(_effects_game.get_ref())
+	_effects_game = weakref(game)
+	_effects_were_active = false
+	# VisualFx observes native node_added before the first snapshot of a scene.
+	# Its own epoch handling keeps those new effects and discards the old scene;
+	# clearing that registry here would lose startup effects before delivery.
 
 
 func capture() -> Dictionary:
@@ -113,7 +168,42 @@ func capture() -> Dictionary:
 			}
 		)
 	data.pockets = _capture_pockets(game)
+	_prepare_effect_capture(game)
+	data.effects = TableEffects.capture(game)
+	data.visual_fx = (
+		_visual_fx_capture.capture(game) if is_instance_valid(_visual_fx_capture) else {}
+	)
+	_limit_effect_payload(data)
+	_effects_were_active = _active_effect_state(data)
 	return data
+
+
+static func _active_effect_state(data: Dictionary) -> bool:
+	var effects: Dictionary = data.get("effects", {})
+	if effects.get("status") == "overflow":
+		return true
+	if not effects.get("droplets", []).is_empty() or not effects.get("energy", []).is_empty():
+		return true
+	for pocket in effects.get("pockets", []):
+		if not pocket.suction_scale.is_equal_approx(Vector2.ONE) or pocket.suction_color.a > 0:
+			return true
+	var visual_fx: Dictionary = data.get("visual_fx", {})
+	return visual_fx.get("status") == "overflow" or not visual_fx.get("items", []).is_empty()
+
+
+static func _limit_effect_payload(data: Dictionary) -> void:
+	# Leave 64 KiB for controller/transport envelope data within its 256 KiB cap.
+	# Effects are additive, so exhaustion must never suppress balls, turn state or
+	# actions. First defer transient FX, then durable FX if the table is still big.
+	# This bounded encoding is necessary because independent descriptor limits do
+	# not guarantee a valid combined packet (PERF-008/019).
+	if var_to_bytes(data).size() <= MAX_TABLE_CAPTURE_BYTES:
+		return
+	data.visual_fx = {
+		"version": 1, "status": "overflow", "reason": "combined table bytes", "items": []
+	}
+	if var_to_bytes(data).size() > MAX_TABLE_CAPTURE_BYTES:
+		data.effects = TableEffects.overflow("bytes")
 
 
 func _capture_pockets(game: Node) -> Array:
@@ -467,7 +557,9 @@ func _snapshot_problem(data: Dictionary) -> String:
 	for key in TABLE_FLAGS:
 		if typeof(data.get(key)) != TYPE_BOOL:
 			return "table flag " + key
-	for key in ["scene_id", "round", "rounds_played", "shots", "shots_max", "shots_used", "hp", "max_hp"]:
+	for key in [
+		"scene_id", "round", "rounds_played", "shots", "shots_max", "shots_used", "hp", "max_hp"
+	]:
 		if typeof(data.get(key)) != TYPE_INT:
 			return "int field " + key
 	if (
@@ -532,6 +624,22 @@ func _snapshot_problem(data: Dictionary) -> String:
 		return "holes %d" % holes
 	if base_indices.size() != 6:
 		return "base pockets %d (need 6)" % base_indices.size()
+	# Absent on older peers; present fields remain strict before any native mutation.
+	if data.has("visual_fx"):
+		var visual_fx_problem = VisualFx.problem(data.visual_fx)
+		if visual_fx_problem != "":
+			return "visual fx " + visual_fx_problem
+	if data.has("effects"):
+		var effects_problem = TableEffects.problem(data.effects)
+		if effects_problem != "":
+			return "effects " + effects_problem
+		for effect in data.effects.pockets:
+			if not pocket_ids.has(effect.id):
+				return "effects unknown pocket"
+		for group in ["droplets", "energy"]:
+			for effect in data.effects[group]:
+				if ids.has(effect.id) or pocket_ids.has(effect.id):
+					return "effects identity collision"
 	return ""
 
 
@@ -646,7 +754,10 @@ func _ball_problem(body: Dictionary) -> String:
 	var resources: Dictionary = get_node("/root/BallDatabase").id_to_ball
 	if typeof(item.get("data")) != TYPE_STRING or not resources.has(item.data):
 		return "ball item data " + str(item.get("data"))
-	if typeof(item.get("mixed")) != TYPE_STRING or (item.mixed != "" and not resources.has(item.mixed)):
+	if (
+		typeof(item.get("mixed")) != TYPE_STRING
+		or (item.mixed != "" and not resources.has(item.mixed))
+	):
 		return "ball item mixed " + str(item.get("mixed"))
 	if body.player != (item.data == "PLAYER"):
 		return "ball cue role mismatch id=%d" % body.id

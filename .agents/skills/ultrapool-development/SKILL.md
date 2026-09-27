@@ -22,6 +22,7 @@ Use this skill from a checkout of this repository. Read [AGENTS.md](../../../AGE
 - Extend capture, validation, application, reliable transitions, resync, spectator behavior, and cleanup together when adding state. Define identity and bounded count/byte/time costs. Reject malformed or incompatible data before mutation. Never remove validation or silently truncate live identities to make a fixture pass.
 - Distinguish durable state from transient animation. A ball's `flaming` flag does not represent a fire patch on the floor. A dynamic hole is not a fixed pocket just because both occur in one native Array. Do not replay native scoring, spawning, collision effects, or saves on a replica.
 - Preserve existing native item nodes, focus, drags, animation, and immediate pending feedback. Update changed properties. Audit inherited setters, `_ready`, timers, signals, scene construction, and saves for side effects before calling them from packet/frame paths.
+- Treat arrays and resources returned by PackedScene/exported-property readers as borrowed. Copy mutable containers before retaining them, and replace owned references during teardown instead of clearing a native scene's shared array. Exercise setup → dispose → setup; a single successful first hydration misses these ownership bugs.
 - Define cache/queue bounds and invalidation at shot, round, scene, match, disconnect, and rematch boundaries as appropriate. A targeted resync must not consume a reliable broadcast still owed to other clients.
 
 ## Verify behavior at the right seam

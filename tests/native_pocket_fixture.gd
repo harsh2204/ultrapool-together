@@ -59,8 +59,7 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 		# 0.00001). Test visually collapsed birth and exact native capture parity,
 		# not an assumed representation of a singular Node2D transform.
 		record.call(
-			hole.scale.length() < 0.001,
-			"native blackhole: native birth starts visually collapsed"
+			hole.scale.length() < 0.001, "native blackhole: native birth starts visually collapsed"
 		)
 		record.call(
 			birth_state.get("multiplier") == 3.0,
@@ -71,8 +70,10 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 		_grown = sync.capture()
 		var grown_state = _pocket(_grown, _hole_id)
 		record.call(
-			sync.valid_capture(_grown)
-			and grown_state.get("scale", Vector2.ZERO).x > birth_state.scale.x,
+			(
+				sync.valid_capture(_grown)
+				and grown_state.get("scale", Vector2.ZERO).x > birth_state.scale.x
+			),
 			"native blackhole: growing native hole remains a valid table update"
 		)
 		await capture.call(
@@ -91,6 +92,7 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 		sync.valid_capture(clean) and sync.pocket_ids(clean) == before_ids,
 		"native blackhole: fixture cleanup restores the original native pocket identities"
 	)
+	await _check_physical_pot(mod, game, record)
 
 
 func check_guest(mod: Node, baseline: Dictionary, record: Callable, capture: Callable) -> void:
@@ -134,8 +136,7 @@ func check_guest(mod: Node, baseline: Dictionary, record: Callable, capture: Cal
 		"native blackhole: guest applies the authoritative native birth scale"
 	)
 	record.call(
-		hole.scale.length() < 0.001,
-		"native blackhole: guest birth starts visually collapsed"
+		hole.scale.length() < 0.001, "native blackhole: guest birth starts visually collapsed"
 	)
 	record.call(
 		hole.get_node("%BlackHole").visible,
@@ -206,3 +207,112 @@ func _pocket(snapshot: Dictionary, id: int) -> Dictionary:
 		if pocket.id == id:
 			return pocket
 	return {}
+
+
+func _check_physical_pot(mod: Node, game: Node, record: Callable) -> void:
+	var sync = mod.table_sync
+	var baseline: Dictionary = sync.capture()
+	var pocket_ids: Dictionary = sync.pocket_ids(baseline)
+	var events = mod.get_node("/root/Global").eventManager
+	var saved = {
+		"score": game.score,
+		"count": game.balls_pocketed,
+		"shot_count": game.ach_data_pocketed_balls_single_shot_count,
+		"events_count": events.pockets_after_last_shot,
+		"grave_timer": game.get_graveyard().position_timer
+	}
+	var item = BallItem.new()
+	item.data = mod.get_node("/root/BallDatabase").id_to_ball["BLACK-HOLE"]
+	item.level = 2
+	var pocket = game.table.get_node("Pockets").get_child(0)
+	var sensor: Area2D = pocket.get_node("Area2D")
+	var sensor_shapes = sensor.find_children("*", "CollisionShape2D", true, false)
+	var shape: CollisionShape2D = sensor_shapes[0] if not sensor_shapes.is_empty() else null
+	if not record.call(
+		is_instance_valid(shape) and sensor.monitoring and not pocket.closed,
+		"native blackhole: physical pot targets an open native sensor"
+	):
+		return
+	var ball = game.spawn_ball_from_item(item, "setup", game.get_random_free_position(), 0)
+	if not record.call(
+		is_instance_valid(ball), "native blackhole: physical pot fixture ball spawns"
+	):
+		return
+	# Preserve a live native rigid body and its detector layer. Only exclude rail
+	# collision and the scripted table clamp, then move the grown ball into the
+	# actual sensor shape, which need not be centered on the pocket's visual root.
+	# Area2D overlap, suction timer, Ball.pocket and BLACK-HOLE callbacks stay real.
+	ball.set_physics_process(false)
+	ball.collision_mask = 0
+	ball.gravity_scale = 0
+	await mod.get_tree().process_frame
+	await mod.get_tree().physics_frame
+	ball.global_position = shape.global_position
+	ball.linear_velocity = Vector2.ZERO
+	var detected = false
+	var deadline = Time.get_ticks_msec() + 3500
+	while game.hole_count == 0 and Time.get_ticks_msec() < deadline:
+		detected = detected or sensor.overlaps_body(ball) or pocket.pulled_objects.has(ball)
+		await mod.get_tree().process_frame
+	print(
+		(
+			"NATIVE_PHYSICAL_POT detected=%s ball_pos=%s sensor_pos=%s alive=%s falling=%s timer=%s layer=%s sensor_mask=%s shape_disabled=%s holes=%s"
+			% [
+				detected,
+				ball.global_position,
+				shape.global_position,
+				ball.alive,
+				ball.falling,
+				ball.pocket_timer,
+				ball.collision_layer,
+				sensor.collision_mask,
+				ball.collision_shape.disabled,
+				game.hole_count
+			]
+		)
+	)
+	record.call(detected, "native blackhole: real Area2D detects the fixture body")
+	record.call(
+		not ball.alive and game.balls_pocketed == saved.count + 1 and game.hole_count == 1,
+		"native blackhole: physical pocket overlap pots the ball and triggers one native hole"
+	)
+	var result: Dictionary = sync.capture()
+	var problem: String = sync.snapshot_problem(result)
+	if not problem.is_empty():
+		print("NATIVE_PHYSICAL_POT snapshot_problem=", problem)
+	record.call(
+		problem.is_empty(), "native blackhole: actual pot capture passes snapshot validation"
+	)
+	record.call(
+		sync.pocket_ids(result).size() == pocket_ids.size() + 1,
+		"native blackhole: actual pot adds exactly one pocket to the guest snapshot"
+	)
+	for hole in game.pockets.duplicate():
+		if not pocket_ids.has(hole.get_instance_id()):
+			game.pockets.erase(hole)
+			game.spawned_stuff.erase(hole)
+			hole.queue_free()
+	game.hole_count = 0
+	pocket.free_ball(ball)
+	game.get_graveyard().remove_ball(ball)
+	game.get_graveyard().position_timer = saved.grave_timer
+	mod.get_node("/root/GlobalPhysics").unregister_ball(ball)
+	events.unregister_ball(ball)
+	for field in ["balls", "active_balls", "active_balls_include_untargetable", "pocketed_balls"]:
+		game.get(field).erase(ball)
+	ball.queue_free()
+	game.score = saved.score
+	game.balls_pocketed = saved.count
+	game.ach_data_pocketed_balls_single_shot_count = saved.shot_count
+	events.pockets_after_last_shot = saved.events_count
+	game.table.update_score_display(game.score, game.get_required_score())
+	await mod.get_tree().process_frame
+	var clean: Dictionary = sync.capture()
+	record.call(
+		(
+			sync.valid_capture(clean)
+			and sync.pocket_ids(clean) == pocket_ids
+			and sync.ball_ids(clean) == sync.ball_ids(baseline)
+		),
+		"native blackhole: physical pot fixture restores original rack and pocket identities"
+	)

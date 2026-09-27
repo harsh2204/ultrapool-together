@@ -91,6 +91,10 @@ static func _visual_node(type: StringName) -> Node:
 			return CanvasGroup.new()
 		"Line2D":
 			return Line2D.new()
+		"GPUParticles2D":
+			return GPUParticles2D.new()
+		"CPUParticles2D":
+			return CPUParticles2D.new()
 		"Label":
 			return Label.new()
 		"TextureRect":

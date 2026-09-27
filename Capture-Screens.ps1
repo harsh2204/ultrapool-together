@@ -62,7 +62,7 @@ $fixtureFiles = @(
     'tests\team_vote_probe.gd', 'tests\lobby_probe.gd', 'tests\presence_probe.gd', 'tests\router_probe.gd', 'tests\controller_probe.gd', 'tests\shop_layout_probe.gd', 'tests\snapshot_probe.gd',
     'tests\transport_budget_probe.gd', 'tests\cue_probe.gd', 'tests\ui_nav_probe.gd',
     'tests\multiplayer_balls_probe.gd', 'tests\expansion_sets_probe.gd',
-    'tests\native_pocket_fixture.gd', 'tests\shop_probe.gd'
+    'tests\native_pocket_fixture.gd', 'tests\native_table_effects_fixture.gd', 'tests\native_visual_fx_fixture.gd', 'tests\table_effects_probe.gd', 'tests\shop_probe.gd'
 )
 foreach ($name in $fixtureFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $name) -PathType Leaf)) {

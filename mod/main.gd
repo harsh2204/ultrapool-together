@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.9.3"
+const VERSION = "0.9.4"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
@@ -18,6 +18,8 @@ const UiNav = preload("ui_nav.gd")
 const CuePrefs = preload("cue_prefs.gd")
 const HudPrefs = preload("hud_prefs.gd")
 const TurnBanner = preload("turn_banner.gd")
+const TableEffects = preload("table_effects_sync.gd")
+const VisualFx = preload("table_visual_fx.gd")
 
 var transport: Node
 var adapter: Node
@@ -110,6 +112,9 @@ var _spawn_barrier_held = false
 var _spawn_barrier_since_msec = -1
 var _published_ball_ids: Dictionary = {}
 var _published_pocket_ids: Dictionary = {}
+var _published_effect_ids: Dictionary = {}
+var _published_visual_fx_ids: Dictionary = {}
+var _effect_overflow_status = ""
 var _published_scene_id = 0
 
 
@@ -1067,15 +1072,23 @@ func _process(delta):
 		var snapshot_interval = SHOP_SNAPSHOT_INTERVAL if state.in_shop else SNAPSHOT_INTERVAL
 		if snapshot_time >= snapshot_interval:
 			snapshot_time = 0.0
-			if state.in_shop or not latest_state.get("settled", true):
-				_snapshot_idle_time = 0.0
+			if _snapshot_refresh_due(state.in_shop, latest_state.get("settled", true), snapshot_interval):
 				_publish_snapshot()
-			else:
-				_snapshot_idle_time += snapshot_interval
-				if _snapshot_idle_time >= SNAPSHOT_IDLE_HEARTBEAT:
-					_snapshot_idle_time = 0.0
-					_publish_snapshot()
 	_update_hud()
+
+
+func _snapshot_refresh_due(in_shop: bool, settled: bool, interval: float) -> bool:
+	var effects_active = (
+		table_sync.has_method("effects_active") and table_sync.effects_active()
+	)
+	if in_shop or not settled or effects_active:
+		_snapshot_idle_time = 0.0
+		return true
+	_snapshot_idle_time += interval
+	if _snapshot_idle_time >= SNAPSHOT_IDLE_HEARTBEAT:
+		_snapshot_idle_time = 0.0
+		return true
+	return false
 
 
 func _clone_member_ids() -> Array:
@@ -1155,6 +1168,11 @@ func _clear_spawn_barrier() -> void:
 	_spawn_barrier_since_msec = -1
 	_published_ball_ids.clear()
 	_published_pocket_ids.clear()
+	_published_effect_ids.clear()
+	_published_visual_fx_ids.clear()
+	_effect_overflow_status = ""
+	if is_instance_valid(table_sync) and table_sync.has_method("clear_effect_capture"):
+		table_sync.clear_effect_capture()
 	_published_scene_id = 0
 
 
@@ -1476,7 +1494,7 @@ func _annotate_shop_counters(shop_state: Dictionary) -> Dictionary:
 	# Probe fixtures and early boot lack /root/Global; skip annotation so the
 	# publish path still advances last_shop_state (PERF-010). native_shop falls
 	# back to local Global methods when wire flags are absent.
-	var global = get_node_or_null("/root/Global")
+	var global = get_node_or_null("/root/Global") if is_inside_tree() else null
 	if global == null:
 		return shop_state
 	var annotated: Dictionary = shop_state.duplicate(true)
@@ -1608,15 +1626,27 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 			_published_scene_id = scene_id
 			_published_ball_ids.clear()
 			_published_pocket_ids.clear()
+			_published_effect_ids.clear()
+			_published_visual_fx_ids.clear()
 			force_reliable = true
 		var ids: Dictionary = table_sync.ball_ids(scene)
 		var pocket_ids: Dictionary = table_sync.pocket_ids(scene)
-		if ids != _published_ball_ids or pocket_ids != _published_pocket_ids:
+		var effects: Dictionary = scene.get("effects", {})
+		var visual_fx: Dictionary = scene.get("visual_fx", {})
+		var effect_ids: Dictionary = TableEffects.topology(effects)
+		var visual_fx_ids: Dictionary = VisualFx.topology(visual_fx)
+		if (
+			ids != _published_ball_ids or pocket_ids != _published_pocket_ids
+			or effect_ids != _published_effect_ids or visual_fx_ids != _published_visual_fx_ids
+		):
 			force_reliable = true
 		if _spawn_barrier_held:
 			force_reliable = true
 		_published_ball_ids = ids
 		_published_pocket_ids = pocket_ids
+		_published_effect_ids = effect_ids
+		_published_visual_fx_ids = visual_fx_ids
+		_report_effect_capacity(effects, visual_fx)
 	if target == 0:
 		_spawn_barrier_held = false
 		_spawn_barrier_since_msec = -1
@@ -1625,6 +1655,20 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 	if not shop.is_empty():
 		message["shop"] = shop
 	_table_send(message, target, force_reliable)
+
+
+func _report_effect_capacity(effects: Dictionary, visual_fx: Dictionary) -> void:
+	var status = ""
+	for state in [effects, visual_fx]:
+		if state.get("status") == "overflow":
+			status += str(state.get("reason", "effect capacity")) + "; "
+	if status == _effect_overflow_status:
+		return
+	_effect_overflow_status = status
+	if status.is_empty():
+		print("Together: native effect replication recovered to a complete state")
+	else:
+		push_warning("Together: native effect replication capacity reached: " + status)
 
 
 func _shop_request(message: Dictionary):

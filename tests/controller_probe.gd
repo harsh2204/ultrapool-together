@@ -94,6 +94,7 @@ class AdapterStub:
 class TableStub:
 	extends Node
 	var ended = 0
+	var active_effects = false
 	var shots: Array[Vector2] = []
 	var captured: Dictionary = {"available": false}
 	var applied: Dictionary = {}
@@ -127,6 +128,9 @@ class TableStub:
 
 	func spawn_barrier_active() -> bool:
 		return false
+
+	func effects_active() -> bool:
+		return active_effects
 
 	func apply_snapshot(data: Dictionary) -> bool:
 		if not _valid_snapshot(data):
@@ -754,6 +758,12 @@ func _topology_keyframes():
 	var host = _controller()
 	host.active = true
 	host.adapter.state.available = true
+	_check(not host._snapshot_refresh_due(false, true, 0.1), "settled empty table retains idle cadence")
+	host.table_sync.active_effects = true
+	_check(host._snapshot_refresh_due(false, true, 0.1), "settled table publishes pending native effects at normal cadence")
+	_check(host._snapshot_idle_time == 0.0, "effect activity resets idle accumulator")
+	host.table_sync.active_effects = false
+	_check(not host._snapshot_refresh_due(false, true, 0.1), "empty settled table resumes idle suppression after removal")
 	host.table_sync.captured = {
 		"available": true,
 		"scene_id": 101,
@@ -818,10 +828,41 @@ func _topology_keyframes():
 	host.table_sync.captured.balls.append({"id": 13})
 	host._publish_snapshot()
 	_check(not host.transport.sent.back().unreliable, "new ball broadcasts reliably")
+	host.table_sync.captured["effects"] = {
+		"status": "complete", "reason": "", "droplets": [{"id": 41, "kind": 1}],
+		"energy": [{"id": 42}], "pockets": []
+	}
+	host.table_sync.captured["visual_fx"] = {
+		"status": "complete", "items": [{"id": 43, "kind": "wisp"}]
+	}
+	host._publish_snapshot(false, 30)
+	_check(host._published_effect_ids.is_empty() and not host._published_visual_fx_ids.has(43), "targeted effect resync preserves the reliable update owed to all peers")
+	host._publish_snapshot()
+	var with_effects: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	_check(not host.transport.sent.back().unreliable, "floor, projectile and transient births broadcast reliably")
+	host._publish_snapshot()
+	_check(host.transport.sent.back().unreliable, "stable native effect topology uses disposable updates")
+	host.table_sync.captured.effects.droplets.clear()
+	host.table_sync.captured.effects.energy.clear()
+	host.table_sync.captured.visual_fx.items.clear()
+	host._publish_snapshot()
+	var without_effects: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	_check(not host.transport.sent.back().unreliable, "floor, projectile and transient removals broadcast reliably")
+	var effect_guest = _controller()
+	effect_guest.active = true
+	effect_guest._local_id = 30
+	effect_guest.transport.id = 30
+	effect_guest._guest_phase = effect_guest._snapshot_phase(with_effects.scene)
+	effect_guest._received_table(20, with_effects)
+	effect_guest._received_table(20, without_effects)
+	effect_guest._received_table(20, with_effects)
+	_check(effect_guest.table_sync.applied.effects.droplets.is_empty() and effect_guest.table_sync.applied.visual_fx.items.is_empty(), "delayed effects cannot resurrect after a newer removal keyframe")
+	effect_guest.free()
 	host._clear_spawn_barrier()
 	_check(
-		host._published_ball_ids.is_empty() and host._published_pocket_ids.is_empty(),
-		"disconnect/rematch reset clears both bounded topology caches"
+		host._published_ball_ids.is_empty() and host._published_pocket_ids.is_empty()
+		and host._published_effect_ids.is_empty() and host._published_visual_fx_ids.is_empty(),
+		"disconnect/rematch reset clears every bounded topology cache"
 	)
 	host._publish_snapshot()
 	_check(not host.transport.sent.back().unreliable, "reset restores reliable initial topology")
