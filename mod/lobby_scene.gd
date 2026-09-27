@@ -613,10 +613,20 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 	_ensure_cue_picker()
 	_ensure_turn_banner_toggle()
 	# Vs / clone-table rounds are exclusive to Together All Nighter (PERF-026 path).
+	# Keep the control visible when gated so the off/disabled state is obvious in the UI
+	# and in Capture-Screens (hidden-only gating looked like "everything enabled").
 	var clone_allowed: bool = bool(state.get("single_table_difficulty", false))
-	%CloneRounds.visible = clone_allowed
+	%CloneRounds.visible = true
 	%CloneRounds.set_pressed_no_signal(clone_allowed and bool(state.get("clone_rounds", false)))
 	%CloneRounds.disabled = not is_host or started or not clone_allowed
+	if clone_allowed:
+		%CloneRounds.text = "Clone-table rounds"
+		%CloneRounds.tooltip_text = (
+			"Everyone plays the same layout at once; only the winner shops next. Together All Nighter only."
+		)
+	else:
+		%CloneRounds.text = "Clone-table rounds (All Nighter only)"
+		%CloneRounds.tooltip_text = "Available when the lobby picks All Nighter (One Table)."
 	%MultiplayerBalls.set_pressed_no_signal(bool(state.get("multiplayer_balls", false)))
 	%MultiplayerBalls.disabled = not is_host or started
 	if _sync_shop_check != null:

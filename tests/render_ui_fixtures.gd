@@ -665,6 +665,11 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	panel._mod_options_open = true
 	await mod.get_tree().process_frame
 	_record(panel.get_node("%CloneRounds").visible, "clone-table rounds shown on Together All Nighter")
+	_record(
+		panel.get_node("%CloneRounds").button_pressed and not panel.get_node("%CloneRounds").disabled,
+		"clone-table rounds enabled and checked on Together All Nighter"
+	)
+	_record(panel.get_node("%CloneRounds").text == "Clone-table rounds", "clone-table rounds label is ungated on Nighter")
 	_record(panel.get_node("%MultiplayerBalls").visible, "multiplayer balls toggle is in Together options")
 	_record(
 		panel.get_node("%ExpansionSetsEnabled").button_pressed
@@ -695,7 +700,7 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 		"Together options · scrolled panel below header · Multiplayer balls, Clone-table rounds, expansions, sync shop, turn banner, cue picker."
 	)
 
-	# Same popup away from Nighter → clone-table rounds gated off (#3).
+	# Same popup away from Nighter → clone-table rounds visible but gated off (#3).
 	var gated = nighter.duplicate(true)
 	gated.single_table_difficulty = false
 	gated.clone_rounds = false
@@ -707,10 +712,17 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	panel.get_node("%ModOptions").popup()
 	panel._mod_options_open = true
 	await mod.get_tree().process_frame
-	_record(not panel.get_node("%CloneRounds").visible, "clone-table rounds hidden off Together All Nighter")
+	var clone_gate = panel.get_node("%CloneRounds")
+	_record(clone_gate.visible, "clone-table rounds stays visible off Together All Nighter")
+	_record(clone_gate.disabled, "clone-table rounds disabled off Together All Nighter")
+	_record(not clone_gate.button_pressed, "clone-table rounds unchecked off Together All Nighter")
+	_record(
+		clone_gate.text.contains("All Nighter only"),
+		"clone-table rounds shows All Nighter only hint when gated"
+	)
 	await capture.call(
 		"lobby-together-options-gated",
-		"Together options with a non-Nighter difficulty · Clone-table rounds hidden."
+		"Together options on Chill Pool Night · Clone-table rounds visible, disabled, unchecked, All Nighter only."
 	)
 
 	panel.get_node("%ModOptions").hide()
