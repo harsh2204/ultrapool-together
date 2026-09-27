@@ -387,8 +387,8 @@ func _check_pocket_geometry(base: String) -> void:
 	# child order or assume the table's long axis is always vertical.
 	var layouts = [
 		[
-			Vector2(100, 0), Vector2(-100, -200), Vector2(100, 200),
-			Vector2(-100, 0), Vector2(100, -200), Vector2(-100, 200),
+			Vector2(552, 450), Vector2(50, 50), Vector2(550, 850),
+			Vector2(50, 450), Vector2(550, 50), Vector2(50, 850),
 		],
 		[
 			Vector2(300, 700), Vector2(700, 200), Vector2(-100, 700),
@@ -405,7 +405,7 @@ func _check_pocket_geometry(base: String) -> void:
 		service._cache_pockets(game)
 		var middles = 0
 		for pocket in container.get_children():
-			var middle: bool = pocket.position.y == 0.0 if index == 0 else pocket.position.x == 300.0
+			var middle: bool = pocket.position.y == 450.0 if index == 0 else pocket.position.x == 300.0
 			var expected = "middle" if middle else "corner"
 			var classified: Dictionary = service._fixed_pockets.get(pocket.get_instance_id(), {})
 			_check(

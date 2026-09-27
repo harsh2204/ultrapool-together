@@ -136,10 +136,9 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 	var body = _object_ball(game)
 	if not check.call(body != null, "native cue effects: a live ordinary object ball is available"):
 		return
-	if not check.call(
-		game.get_required_score() > 5.0, "native cue effects: scoring stays below target"
-	):
-		return
+	# The first round can target one point. A temporary negative score keeps
+	# both awards below that native target without changing difficulty or level.
+	var baseline: float = minf(0.0, float(game.get_required_score()) - 5.0)
 	var achievements = mod.get_node("/root/AchievementManager")
 	var saved = {
 		"score": game.score,
@@ -171,7 +170,7 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 	mod.add_child(effects)
 	check.call(effects.setup(mod), "native cue effects: adapter connects to real game services")
 	effects.begin_session()
-	game.set_score(0.0)
+	game.set_score(baseline)
 	var admitted: bool = effects.begin_shot(1, 1, Vector2(125, 0))
 	check.call(admitted and effects.rules.pending, "native cue effects: native shot boundary opens")
 	var pocket = _fixed_pocket(effects)
@@ -180,7 +179,7 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 		effects.record_wall(body)
 		var award: Dictionary = effects.record_pocket(body, pocket, 1.0)
 		check.call(
-			not award.is_empty() and game.score == 0.0 and body.alive,
+			not award.is_empty() and game.score == baseline and body.alive,
 			"native cue effects: staged award cannot score while its source is alive"
 		)
 		check.call(
@@ -193,13 +192,13 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 		body.pocketed_this_frame = true
 		effects.commit_pocket(award)
 		check.call(
-			is_equal_approx(game.score, points) and points > 0.0 and points < 1.0,
+			is_equal_approx(game.score, baseline + points) and points > 0.0 and points < 1.0,
 			"native cue effects: real native score boundary preserves fractional Bankshot credit"
 		)
 		effects.commit_pocket(award)
 		effects.commit_pocket(effects.record_pocket(body, pocket, 1.0))
 		check.call(
-			is_equal_approx(game.score, points), "native cue effects: repeated pot is deduplicated"
+			is_equal_approx(game.score, baseline + points), "native cue effects: repeated pot is deduplicated"
 		)
 		effects.finish_shot()
 		body.alive = true
@@ -212,7 +211,7 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 		body.pocketed_this_frame = true
 		effects.commit_pocket(award)
 		check.call(
-			is_equal_approx(game.score, points + 2.0),
+			is_equal_approx(game.score, baseline + points + 2.0),
 			"native cue effects: high native ball value respects the two-point shot cap"
 		)
 		effects.finish_shot()

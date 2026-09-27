@@ -42,7 +42,7 @@ class CuePreview:
 			var detail_space = Rect2(6, 0, maxf(1.0, size.x - 12), size.y * 0.64)
 			var grip = Rect2(art.get_width() * 0.58, 0, art.get_width() * 0.42, art.get_height())
 			var detail = _fit_rect(grip.size, detail_space)
-			draw_texture_rect_region(detail, art, grip, tint)
+			draw_texture_rect_region(art, detail, grip, tint)
 			var rule_y = size.y * 0.72
 			draw_line(
 				Vector2(8, rule_y), Vector2(size.x - 8, rule_y), Color(0.93, 0.78, 0.49, 0.16)

@@ -1517,7 +1517,7 @@ func _result_text() -> String:
 ## Additive wire fields — shop_sync validation allows extras so we avoid editing
 ## shop_sync.gd while PR #35 is in flight. Cleared when shop closes (open:false).
 func _annotate_shop_counters(shop_state: Dictionary) -> Dictionary:
-	if shop_state.is_empty() or not bool(shop_state.get("open", false)):
+	if not is_inside_tree() or shop_state.is_empty() or not bool(shop_state.get("open", false)):
 		return shop_state
 	# Probe fixtures and early boot lack /root/Global; skip annotation so the
 	# publish path still advances last_shop_state (PERF-010). native_shop falls

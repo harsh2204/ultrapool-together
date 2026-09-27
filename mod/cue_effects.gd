@@ -261,12 +261,18 @@ func _cache_pockets(game) -> void:
 		return
 	var next: Dictionary = {}
 	var corners = 0
+	# Native table.tscn places one side pocket at x=552 while the adjacent
+	# corners sit at x=550. Allow a small relative edge inset/outset; exact
+	# extrema would reject that real layout and disable every cue perk.
+	var tolerance: float = minf(max_x - min_x, max_y - min_y) * 0.01
 	for pocket in fixed:
 		var extreme_x: bool = (
-			is_equal_approx(pocket.position.x, min_x) or is_equal_approx(pocket.position.x, max_x)
+			absf(pocket.position.x - min_x) <= tolerance
+			or absf(pocket.position.x - max_x) <= tolerance
 		)
 		var extreme_y: bool = (
-			is_equal_approx(pocket.position.y, min_y) or is_equal_approx(pocket.position.y, max_y)
+			absf(pocket.position.y - min_y) <= tolerance
+			or absf(pocket.position.y - max_y) <= tolerance
 		)
 		if not extreme_x and not extreme_y:
 			return

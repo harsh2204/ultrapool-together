@@ -1,6 +1,6 @@
 # Cue Workshop
 
-Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. **Implemented, unmeasured:** static checks do not establish engine compatibility, responsiveness, or gameplay balance.
+Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. **Implemented with Windows native functional verification; performance and balance unmeasured.** Source v0.10.0 uses protocol 9 / UP9 rooms, so every player needs the same compatible build.
 
 ## Location and interaction
 
@@ -56,11 +56,15 @@ Fifteen generated cue sprites are shipped under `mod/assets/cues/`; native files
 
 ## Acceptance tracking
 
-- [ ] Static parsing, source package checks, and isolated installer tests.
-- [ ] Model fixtures: curves, all fifteen effects, ownership, sequential shared-wallet spending, malformed snapshots, duplicates, rejection, shared caps, swapping, and rematch reset.
-- [ ] Native host/guest capture: navigation right of snacks, all racks, long descriptions, finishes, buy/equip, insufficient funds, pending/rejected transactions, and return.
-- [ ] Native cue attachment/aim parity after current main-branch fixes.
+- [x] Static parsing, source package checks, and isolated Windows installer tests. macOS execution remains pending.
+- [x] Model fixtures: curves, all fifteen effects, ownership, sequential shared-wallet spending, malformed snapshots, duplicates, rejection, shared caps, swapping, and rematch reset.
+- [x] Native host/guest capture: navigation right of snacks, all racks, long descriptions, finishes, buy/equip, insufficient funds, pending/rejected transactions, and return.
+- [x] Native cue attachment/aim parity after current main-branch fixes; all fifteen textures, tip/shadow/fade preservation, House restoration, and equipped Bankshot capture.
+- [x] Native score/HUD callback boundary: fractional credit, per-shot cap, duplicate commit, post-pot ordering, and refusal to award against a still-living GAMEBALL source. Full physical special-ball pot scenarios remain part of live playtesting.
+- [ ] Repeat the final preservation audit with no concurrent use of the normal save profile.
 - [ ] Live concurrent shoppers, delayed/reordered updates, sync-shop-off and winner-only behavior, disconnect/rematch.
 - [ ] Windows/macOS rendering plus measured responsiveness and balance.
+
+Windows capture `20260927T070455Z-1962c3ec` passed all 731 harness assertions and produced 67 screenshots. Embedded cue probes passed 226 catalog/curve, 189 inventory, and 204 effect checks. The game exited normally with no script errors; shutdown resource warnings match the earlier baseline. Installed game files were unchanged. The normal save profile changed during the capture, so the runner's overall preservation audit failed; that run does not establish save preservation. Earlier captures preserved normal saves and installed files, but had test failures that were subsequently fixed. The isolated Windows installer suite and source ZIP integrity/asset checks also passed.
 
 Runtime verification uses the existing bounded Capture-Screens harness after authorization. Keep #20 open until the remaining acceptance work is complete.
