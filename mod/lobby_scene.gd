@@ -540,27 +540,71 @@ func _ensure_turn_banner_toggle() -> void:
 
 func _toggle_mod_options() -> void:
 	if _mod_options_open:
-		%ModOptions.hide()
-		_mod_options_open = false
+		_close_mod_options()
 		return
 	_place_mod_options()
 	%ModOptions.popup()
 	_mod_options_open = true
 
 
+func _close_mod_options() -> void:
+	if not _mod_options_open and not %ModOptions.visible:
+		return
+	%ModOptions.hide()
+	_mod_options_open = false
+
+
+## Fit ModOptions inside the lobby body (below the header) at capture size and up (#14).
+## Rows live in a ScrollContainer so every toggle stays reachable when content is tall.
 func _place_mod_options() -> void:
+	# Position in lobby-local coordinates. ModOptions is an embedded Panel (#19),
+	# not a Window — global/screen coords would place it off the CRT layer.
 	var button: Control = %ModOptionsButton
-	var origin = button.get_global_rect()
-	var width = maxi(320, int(origin.size.x))
-	var height = 440
-	%ModOptions.size = Vector2(width, height)
-	var x = int(origin.position.x)
-	var y = int(origin.position.y + origin.size.y + 4)
-	if x + width > int(size.x):
-		x = maxi(8, int(size.x) - width - 8)
-	if y + height > int(size.y):
-		y = maxi(8, int(origin.position.y) - height - 4)
-	%ModOptions.position = Vector2(x, y)
+	var options: Control = %ModOptions
+	var body: Control = %Body
+	var body_rect := Rect2(body.global_position - global_position, body.size)
+	var area := body_rect
+	if _skinned():
+		var felt := inlay_rect()
+		var clipped := body_rect.intersection(felt)
+		if clipped.has_area():
+			area = clipped
+	var width := clampi(maxi(300, int(button.size.x)), 300, mini(340, int(area.size.x)))
+	var gap := 4
+	var btn_local := button.global_position - global_position
+	var x := int(area.end.x) - width
+	x = clampi(x, int(area.position.x), maxi(int(area.position.x), int(area.end.x) - width))
+	var y := int(btn_local.y + button.size.y + gap)
+	y = maxi(y, int(area.position.y))
+	var bottom := int(area.end.y)
+	if %Actions.visible:
+		var actions_top := int((%Actions.global_position - global_position).y) - gap
+		bottom = mini(bottom, actions_top)
+	var height := maxi(160, bottom - y)
+	options.size = Vector2(width, height)
+	options.position = Vector2(x, y)
+
+
+func _input(event: InputEvent) -> void:
+	if not _mod_options_open:
+		return
+	if event.is_action_pressed("ui_cancel"):
+		_close_mod_options()
+		get_viewport().set_input_as_handled()
+		return
+	if (
+		event is InputEventMouseButton
+		and event.pressed
+		and event.button_index == MOUSE_BUTTON_LEFT
+	):
+		var pos: Vector2 = event.global_position
+		if %ModOptions.get_global_rect().has_point(pos):
+			return
+		# Let the toggle button handle open/close itself.
+		if %ModOptionsButton.get_global_rect().has_point(pos):
+			return
+		_close_mod_options()
+		get_viewport().set_input_as_handled()
 
 
 func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> void:
@@ -598,8 +642,7 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 	if _turn_banner_check != null:
 		_turn_banner_check.set_pressed_no_signal(HudPrefs.turn_banner_enabled())
 	if started and _mod_options_open:
-		%ModOptions.hide()
-		_mod_options_open = false
+		_close_mod_options()
 	elif _mod_options_open:
 		_place_mod_options()
 
@@ -940,6 +983,8 @@ func _apply_theme():
 	palette.set_color("font_color", "PopupMenu", INK)
 	palette.set_color("font_hover_color", "PopupMenu", Color.WHITE)
 	palette.set_color("font_disabled_color", "PopupMenu", MUTED)
+	# Embedded ModOptions Panel (#14 / #19) — opaque chalkboard, no lobby bleed-through.
+	palette.set_stylebox("panel", "Panel", _box(Color("102b30"), Color("36535a"), 1))
 	theme = palette
 	if _skinned():
 		_apply_skin(palette)
@@ -950,6 +995,7 @@ func _apply_theme():
 		button.add_theme_color_override("font_color", Color("08241f"))
 		button.add_theme_color_override("font_hover_color", Color("08241f"))
 	%Bench.add_theme_stylebox_override("panel", _box(Color("171f25"), Color("544a33"), 1))
+	%ModOptions.add_theme_stylebox_override("panel", _opaque_mod_options_style())
 
 
 func _skinned() -> bool:
@@ -981,6 +1027,7 @@ func _apply_skin(palette: Theme) -> void:
 	palette.set_stylebox("grabber_pressed", "VScrollBar", _chalk_bar(Color.WHITE))
 	palette.set_stylebox("panel", "PopupMenu", skin.style("panel_chalk", [18, 14, 18, 14]))
 	palette.set_stylebox("hover", "PopupMenu", skin.style("slot_chalk", [8, 4, 8, 4]))
+	palette.set_stylebox("panel", "Panel", skin.style("panel_chalk", [18, 14, 18, 14]))
 	for button in [%Host, %Ready, %Start]:
 		for state in ["normal", "hover", "pressed", "disabled"]:
 			button.add_theme_stylebox_override(
@@ -989,6 +1036,7 @@ func _apply_skin(palette: Theme) -> void:
 		button.add_theme_color_override("font_color", Color.WHITE)
 		button.add_theme_color_override("font_hover_color", Color.WHITE)
 	%Bench.add_theme_stylebox_override("panel", skin.style("panel_chalk", TABLE_CARD_CONTENT))
+	%ModOptions.add_theme_stylebox_override("panel", _opaque_mod_options_style())
 	var icons = {
 		%Copy: "icon_copy",
 		%Invite: "icon_invite",
@@ -1109,3 +1157,17 @@ func _box(background: Color, border: Color, width: int) -> StyleBoxFlat:
 	style.content_margin_top = 11
 	style.content_margin_bottom = 11
 	return style
+
+
+## Opaque ModOptions chrome (#14): chalk art when available, solid fill underneath so
+## lobby cards never bleed through semi-transparent 9-slice edges.
+func _opaque_mod_options_style() -> StyleBox:
+	var fill := _box(Color("0d2428"), Color("36535a"), 1)
+	fill.content_margin_left = 18
+	fill.content_margin_top = 14
+	fill.content_margin_right = 18
+	fill.content_margin_bottom = 14
+	if not _skinned():
+		return fill
+	var chalk: StyleBox = skin.style("panel_chalk", [18, 14, 18, 14])
+	return chalk if chalk != null else fill

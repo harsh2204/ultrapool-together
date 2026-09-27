@@ -38,7 +38,9 @@ func available_choices() -> Dictionary:
 			result.deck.append({"id": deck_id, "label": tr(str(resource.name))})
 	for resource in database.id_to_difficulty.values():
 		if _available_to_host(resource):
-			result.difficulty.append({"id": str(resource.id), "label": tr(str(resource.name))})
+			# Prefer catalog label so Together All Nighter is distinct from native (#13).
+			var label = DifficultyCatalog._resource_label(resource, str(resource.id))
+			result.difficulty.append({"id": str(resource.id), "label": tr(label)})
 	for field in result:
 		result[field].sort_custom(func(a, b): return a.id < b.id)
 	return result

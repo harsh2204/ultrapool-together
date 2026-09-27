@@ -661,13 +661,27 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 		"expansion master on reveals the six per-set toggles"
 	)
 	_record(panel.get_node("%ExpansionSets").get_child_count() >= 6, "six expansion set toggles present")
+	var options_rect: Rect2 = panel.get_node("%ModOptions").get_global_rect()
+	var header_rect: Rect2 = panel.get_node("%Close").get_global_rect()
+	_record(
+		not options_rect.intersects(header_rect),
+		"Together options stays below the header Close button"
+	)
+	_record(
+		panel.get_node("%ModOptions").size.y <= panel.get_node("%Body").size.y + 8,
+		"Together options height fits inside the lobby body"
+	)
+	_record(
+		panel._turn_banner_check != null and is_instance_valid(panel._turn_banner_check),
+		"Show turn banner toggle exists in Together options"
+	)
 	_record(
 		panel._turn_banner_check != null and panel._turn_banner_check.is_visible_in_tree(),
 		"Show turn banner toggle is visible in Together options"
 	)
 	await capture.call(
 		"lobby-together-options-nighter",
-		"Together options · Multiplayer balls, Clone-table rounds, expansions, sync shop, turn banner, cue picker."
+		"Together options · scrolled panel below header · Multiplayer balls, Clone-table rounds, expansions, sync shop, turn banner, cue picker."
 	)
 
 	# Same popup away from Nighter → clone-table rounds gated off (#3).
@@ -744,21 +758,30 @@ func capture_shop_presence(mod: Node, capture: Callable, input: Node) -> void:
 			"shop-mixing", "The native cocktail counter for mixing the table's balls."
 		)
 
-	# Independent shop (#35): sync_shop OFF suppresses shared presence cursors.
+	# Independent shop (#35): sync_shop OFF suppresses shared presence cursors
+	# and the HUD shop notice reads "Your shop" instead of "Shared shop".
 	mod.presence.clear()
 	mod.lobby["sync_shop"] = false
 	shop._refresh_shared_sync_latch(true)
+	mod.latest_state["in_shop"] = true
+	mod._update_hud()
 	_cursor(mod, 2, "shop", Vector2(0.3, 0.35))
 	_cursor(mod, 3, "shop", Vector2(0.72, 0.55))
 	shop.show_section("balls")
 	await mod.get_tree().create_timer(0.5).timeout
 	_record(not shop.presence_rect().has_area(), "sync_shop OFF clears shared shop presence rect")
+	_record(not shop.shared_shop_sync_active(), "sync_shop OFF clears shared_shop_sync_active")
+	_record(
+		str(mod.turn_label.text).begins_with("Your shop"),
+		"sync_shop OFF HUD notice reads Your shop"
+	)
 	await capture.call(
 		"shop-sync-off",
-		"Independent shop · sync_shop OFF so shared teammate cursors do not draw."
+		"Independent shop · Your shop label · sync_shop OFF so shared teammate cursors do not draw."
 	)
 	mod.lobby["sync_shop"] = true
 	shop._refresh_shared_sync_latch(true)
+	mod._update_hud()
 	shop.show_section(section)
 	await mod.get_tree().create_timer(0.4).timeout
 	_restore(mod, saved)

@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="lobby_scene.gd" id="1_lobby"]
+[ext_resource type="Script" path="mod_options_panel.gd" id="2_mod_options"]
 
 [node name="TogetherLobby" type="Control"]
 layout_mode = 3
@@ -396,43 +397,59 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Cancel vote"
 
-[node name="ModOptions" type="PopupPanel" parent="."]
+[node name="ModOptions" type="Panel" parent="."]
 unique_name_in_owner = true
-title = "Ultrapool Together"
-unresizable = true
+visible = false
+clip_contents = true
+custom_minimum_size = Vector2(300, 160)
+script = ExtResource("2_mod_options")
 
 [node name="ModOptionsBody" type="MarginContainer" parent="ModOptions"]
-theme_override_constants/margin_left = 16
-theme_override_constants/margin_top = 12
-theme_override_constants/margin_right = 16
-theme_override_constants/margin_bottom = 12
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 14
+theme_override_constants/margin_bottom = 10
 
-[node name="ModOptionsColumn" type="VBoxContainer" parent="ModOptions/ModOptionsBody"]
+[node name="ModOptionsScroll" type="ScrollContainer" parent="ModOptions/ModOptionsBody"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="ModOptionsColumn" type="VBoxContainer" parent="ModOptions/ModOptionsBody/ModOptionsScroll"]
 unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
 theme_override_constants/separation = 10
 
-[node name="ModOptionsTitle" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsColumn"]
+[node name="ModOptionsTitle" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
 theme_override_font_sizes/font_size = 16
 text = "Ultrapool Together"
 
-[node name="ModOptionsHelp" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsColumn"]
+[node name="ModOptionsHelp" type="Label" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
 theme_override_font_sizes/font_size = 13
 text = "Opt-in extras. Off by default. Host changes sync to the lobby."
 autowrap_mode = 3
 
-[node name="MultiplayerBalls" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsColumn"]
+[node name="MultiplayerBalls" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
 unique_name_in_owner = true
 text = "Multiplayer balls"
 
-[node name="CloneRounds" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsColumn"]
+[node name="CloneRounds" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
 unique_name_in_owner = true
 text = "Clone-table rounds"
 
-[node name="ExpansionSetsEnabled" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsColumn"]
+[node name="ExpansionSetsEnabled" type="CheckBox" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
 unique_name_in_owner = true
 text = "Expansion sets"
 
-[node name="ExpansionSets" type="HFlowContainer" parent="ModOptions/ModOptionsBody/ModOptionsColumn"]
+[node name="ExpansionSets" type="HFlowContainer" parent="ModOptions/ModOptionsBody/ModOptionsScroll/ModOptionsColumn"]
 unique_name_in_owner = true
 theme_override_constants/h_separation = 8
 theme_override_constants/v_separation = 4

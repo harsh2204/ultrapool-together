@@ -70,10 +70,11 @@ static func choosable_difficulties(database) -> Array:
 
 
 static func _apply_title(difficulty) -> void:
+	# Set every present label field. Lobby cards read `resource.name` via run_setup
+	# (#13); stopping after the first field left native "All Nighter" on `name`.
 	for field in ["title", "name", "display_name"]:
 		if _has_property(difficulty, field):
 			difficulty.set(field, TOGETHER_ALL_NIGHTER_TITLE)
-			return
 
 
 static func _resource_label(resource, fallback: String) -> String:

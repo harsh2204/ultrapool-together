@@ -1309,7 +1309,16 @@ func _update_hud():
 				else "Winner shops alone - watching %s" % _player_name(winner)
 			)
 		else:
-			turn_text = "Shared shop · Table %d" % (table_id + 1)
+			# Refs #35: label follows shared_shop_sync_active (sync_shop latch +
+			# exclusive/winner shopper), not the raw lobby flag.
+			var shared_shop: bool = (
+				shop_sync != null and shop_sync.shared_shop_sync_active()
+			)
+			turn_text = (
+				"Shared shop · Table %d" % (table_id + 1)
+				if shared_shop
+				else "Your shop · Table %d" % (table_id + 1)
+			)
 	elif not latest_state.get("table_active", false):
 		turn_text = "Waiting for the table"
 	else:
@@ -1963,6 +1972,7 @@ func _align_mod_ui_under_crt() -> void:
 
 
 ## #16: Queue host screen location; apply at a safe boundary (no mid-drag yank).
+## Latest target only — each new host nav replaces the queue (bounded).
 func _queue_host_ui_nav(nav: Dictionary) -> void:
 	if is_table_host() or is_spectating():
 		return
@@ -1973,9 +1983,39 @@ func _queue_host_ui_nav(nav: Dictionary) -> void:
 
 
 func _ui_nav_follow_blocked() -> bool:
-	if shop_sync != null and shop_sync.nav_follow_blocked():
+	# Defer while table balls are still moving (#16). Queue keeps the latest target.
+	if _ui_nav_balls_moving():
 		return true
-	return false
+	if shop_sync == null:
+		return false
+	var place = str(_queued_ui_nav.get("place", "table"))
+	# Shop drag/purchase/missing-view guard only for shop / snack_bar follow.
+	# For lobby / table / set_vote, a closed shop view must not block (#16/#35).
+	if place in ["shop", "snack_bar"]:
+		return shop_sync.nav_follow_blocked()
+	# Never yank a guest out of an active drag or pending purchase.
+	return shop_sync.nav_interaction_blocked()
+
+
+func _ui_nav_balls_moving() -> bool:
+	# Prefer the live native/replica balls_moving flag (same gate as settle checks).
+	# Skip when already in shop/menu — balls are frozen there.
+	if bool(latest_state.get("in_shop", false)):
+		return false
+	var global_node = get_node_or_null("/root/Global")
+	if global_node == null:
+		return false
+	var game = global_node.get("gameManager")
+	if not is_instance_valid(game):
+		return false
+	if bool(game.get("in_shop")) or bool(game.get("in_menu")) or bool(game.get("game_ended")):
+		return false
+	if not bool(game.get("balls_spawned")):
+		return false
+	if bool(game.get("balls_moving")):
+		return true
+	var player = game.get("player_ball")
+	return is_instance_valid(player) and player.has_method("is_moving") and bool(player.is_moving())
 
 
 func _try_follow_host_ui_nav() -> void:

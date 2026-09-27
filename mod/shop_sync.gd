@@ -1005,6 +1005,16 @@ func nav_follow_blocked() -> bool:
 	return _nav_follow_blocked()
 
 
+## Drag / pending-purchase guard for leaving the shop via ui_nav (#16).
+## A missing shop view is not blocked — guests must still follow to lobby/table/set_vote.
+func nav_interaction_blocked() -> bool:
+	if _pending:
+		return true
+	if not is_instance_valid(_view):
+		return false
+	return _nav_drag_active()
+
+
 func show_section(section: String) -> bool:
 	if not is_instance_valid(_view) or section not in ["balls", "mix", "snacks"]:
 		return false
@@ -1049,8 +1059,15 @@ func _queue_host_nav(data: Dictionary) -> void:
 
 
 func _nav_follow_blocked() -> bool:
+	# Shop section/focus follow requires a live view; missing view blocks shop-only nav.
 	if _pending or not is_instance_valid(_view):
 		return true
+	return _nav_drag_active()
+
+
+func _nav_drag_active() -> bool:
+	if not is_instance_valid(_view):
+		return false
 	if _view.moving():
 		return true
 	if is_instance_valid(_view.grabbed_ball) or is_instance_valid(_view.grabbed_passive):
