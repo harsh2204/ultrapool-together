@@ -56,7 +56,7 @@ Slot vocabulary is a protocol contract:
 
 Ready cannot finish with occupied cocktail slots. Transaction validation includes actor eligibility, phase/busy/finished/exclusive-shopper gates, revision, source and destination identity, type and affordability. One pending guest mutation is reconciled by matching request ID, authoritative result, timeout and resync. Prediction never awards currency or gameplay effects.
 
-Shop sections are `balls`, `mix`, `snacks`; the UI-navigation place is `snack_bar`. With sync off, guests cannot shop the leader's run; it does **not** create independent guest wallets. Winner-only/exclusive shopping overrides sync-off for that session. Read [SYNC_SHOP.md](../../../../docs/SYNC_SHOP.md).
+Shop sections are `balls`, `mix`, `snacks`; the UI-navigation place is `snack_bar`. Personal `HudPrefs.follow_shop_view_enabled()` defaults false and gates **both** shop-state navigation and controller `ui_nav`; clear queued follow immediately on opt-out. `settings_icon_button.gd` opens the slate via `main._open_mod_settings` / `lobby_scene.open_mod_options`, including during matches. The separately labeled **Shared shop access** is the existing host `sync_shop` rule. With access off, guests cannot shop the leader's run; it does **not** create independent guest wallets. Winner-only/exclusive shopping overrides access-off for that session, never the personal follow preference. Read [SYNC_SHOP.md](../../../../docs/SYNC_SHOP.md).
 
 ## Adding content
 

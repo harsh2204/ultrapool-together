@@ -16,6 +16,7 @@ signal expansion_sets_enabled_requested(enabled: bool)
 signal expansion_set_requested(set_id: String, enabled: bool)
 signal cue_requested(cue_id: String)
 signal turn_banner_requested(enabled: bool)
+signal follow_shop_view_requested(enabled: bool)
 signal start_requested
 signal return_requested
 signal return_vote_requested(approve: bool)
@@ -115,6 +116,7 @@ func _ready():
 	%MatchMode.item_selected.connect(func(index): _vote_selected("match_mode", %MatchMode, index))
 	%ModOptionsButton.pressed.connect(_toggle_mod_options)
 	%ModOptions.popup_hide.connect(func(): _mod_options_open = false)
+	%FollowShopView.toggled.connect(func(enabled): follow_shop_view_requested.emit(enabled))
 	%CloneRounds.toggled.connect(func(enabled): clone_rounds_requested.emit(enabled))
 	%MultiplayerBalls.toggled.connect(func(enabled): multiplayer_balls_requested.emit(enabled))
 	%ExpansionSetsEnabled.toggled.connect(
@@ -166,7 +168,7 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 		started and not summaries.is_empty() and summaries.all(func(table): return table.finished)
 	)
 	%Settings.visible = not started
-	%ModOptionsButton.visible = not started
+	%ModOptionsButton.visible = true
 	%VoteChoices.visible = not started
 	%Rules.visible = started
 	%RoomTitle.text = (
@@ -444,18 +446,19 @@ func _ensure_sync_shop_toggle() -> void:
 	column.add_child(divider)
 	_sync_shop_check = CheckBox.new()
 	_sync_shop_check.name = "SyncShop"
-	_sync_shop_check.text = "Sync shop with host"
+	_sync_shop_check.text = "Shared shop access"
 	_sync_shop_check.focus_mode = Control.FOCUS_ALL
 	_sync_shop_check.tooltip_text = (
-		"On (default): shared shop, remote slots, shared cursors, and shop navigation follow. "
-		+ "Off: each table host shops independently — no shop broadcast, remote replicas, "
-		+ "shared shop cursors, or shop/snack_bar ui_nav follow. Winner-only shop still forces shared sync."
+		"On (default): teammates use the shared shop, inventory and cursors. "
+		+ "Off: only the table host can shop. This host rule is fixed for the match. "
+		+ "Automatic screen following is a separate personal preference above. "
+		+ "Winner-only shops always keep shared access."
 	)
 	_sync_shop_check.toggled.connect(func(enabled): sync_shop_requested.emit(enabled))
 	column.add_child(_sync_shop_check)
 	_fit_mod_options_child(_sync_shop_check)
 	_sync_shop_help = Label.new()
-	_sync_shop_help.text = "Default on. Applies for the whole match once started."
+	_sync_shop_help.text = "Default on. Host rule; separate from automatic view following."
 	_sync_shop_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_sync_shop_help.add_theme_font_size_override("font_size", 12)
 	_sync_shop_help.add_theme_color_override("font_color", MUTED)
@@ -530,8 +533,6 @@ func _ensure_turn_banner_toggle() -> void:
 	if _turn_banner_check != null:
 		return
 	var column: VBoxContainer = %ModOptionsColumn
-	var divider = HSeparator.new()
-	column.add_child(divider)
 	_turn_banner_check = CheckBox.new()
 	_turn_banner_check.text = "Show turn banner"
 	_turn_banner_check.tooltip_text = (
@@ -542,6 +543,7 @@ func _ensure_turn_banner_toggle() -> void:
 		func(enabled): turn_banner_requested.emit(enabled)
 	)
 	column.add_child(_turn_banner_check)
+	column.move_child(_turn_banner_check, %FollowShopHelp.get_index() + 1)
 	_fit_mod_options_child(_turn_banner_check)
 
 
@@ -549,9 +551,26 @@ func _toggle_mod_options() -> void:
 	if _mod_options_open:
 		_close_mod_options()
 		return
+	open_mod_options()
+
+
+## Shared entry point for the lobby gear and the in-game HUD gear (PERF-026).
+## Personal controls remain available after the match starts; host rules stay locked.
+func open_mod_options() -> void:
+	_render_mod_options(_state, _is_host, bool(_state.get("started", false)))
 	_place_mod_options()
+	%ModOptionsScroll.scroll_vertical = 0
 	%ModOptions.popup()
 	_mod_options_open = true
+	%FollowShopView.grab_focus()
+
+
+func is_mod_options_open() -> bool:
+	return _mod_options_open and %ModOptions.is_visible_in_tree()
+
+
+func close_mod_options() -> void:
+	_close_mod_options()
 
 
 func _close_mod_options() -> void:
@@ -635,7 +654,7 @@ func _reset_mod_options_scroll() -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if not _mod_options_open:
+	if not is_mod_options_open():
 		return
 	if event.is_action_pressed("ui_cancel"):
 		_close_mod_options()
@@ -714,9 +733,9 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 		(_cue_buttons[id] as Button).disabled = _local_id <= 0
 	if _turn_banner_check != null:
 		_turn_banner_check.set_pressed_no_signal(HudPrefs.turn_banner_enabled())
-	if started and _mod_options_open:
-		_close_mod_options()
-	elif _mod_options_open:
+	%FollowShopView.set_pressed_no_signal(HudPrefs.follow_shop_view_enabled())
+	%FollowShopView.disabled = false
+	if _mod_options_open:
 		_place_mod_options()
 
 

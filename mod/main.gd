@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.9.2"
+const VERSION = "0.9.3"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
@@ -39,6 +39,7 @@ var panel: Control
 var turn_label: Label
 var score_label: Label
 var pass_button: Button
+var settings_button: Button
 var turn_banner: Control
 var _turn_banner_showing: bool = false
 var _hud_layer: CanvasLayer
@@ -213,6 +214,10 @@ func _build_ui():
 	if skin.has_art():
 		_tint_hud_button(lobby_button, "hud_tag_purple")
 	row.add_child(lobby_button)
+	settings_button = load(base.path_join("settings_icon_button.gd")).new()
+	settings_button.name = "ModSettingsButton"
+	settings_button.pressed.connect(_open_mod_settings)
+	row.add_child(settings_button)
 	turn_label = Label.new()
 	turn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dock.add_child(turn_label)
@@ -272,6 +277,7 @@ func _build_ui():
 	panel.turn_banner_requested.connect(
 		func(enabled): turn_banner.set_prefs_enabled(HudPrefs.set_turn_banner_enabled(enabled))
 	)
+	panel.follow_shop_view_requested.connect(_set_follow_shop_view)
 	panel.watch_requested.connect(_watch_table)
 	panel.return_vote_requested.connect(
 		func(ready):
@@ -331,6 +337,23 @@ func _toggle_panel():
 	_set_panel(not panel.visible)
 
 
+func _open_mod_settings() -> void:
+	_set_panel(true)
+	if panel.visible:
+		panel.open_mod_options()
+
+
+func _set_follow_shop_view(enabled: bool) -> void:
+	# PERF-010/026/035: local presentation preference, never shared shop authority.
+	if str(_queued_ui_nav.get("place", "")) in ["shop", "snack_bar"]:
+		_queued_ui_nav.clear()
+	if str(_applied_ui_nav.get("place", "")) in ["shop", "snack_bar"]:
+		_applied_ui_nav.clear()
+	shop_sync.set_follow_host_view(enabled)
+	# ShopSync resumes its newest authoritative view on opt-in. Do not overwrite
+	# it with an older ui_nav sample from a separate periodic table-state packet.
+
+
 func _set_panel(value: bool):
 	if value and is_spectating():
 		spectator.close()
@@ -342,6 +365,8 @@ func _set_panel(value: bool):
 	):
 		_status("Close the game's popup before opening the lobby.")
 		return
+	if not value and panel.has_method("close_mod_options"):
+		panel.close_mod_options()
 	panel.visible = value
 	if value:
 		_render_lobby()
@@ -2008,6 +2033,10 @@ func _align_mod_ui_under_crt() -> void:
 func _queue_host_ui_nav(nav: Dictionary) -> void:
 	if is_table_host() or is_spectating():
 		return
+	if str(nav.get("place", "")) in ["shop", "snack_bar"] and not HudPrefs.follow_shop_view_enabled():
+		if str(_queued_ui_nav.get("place", "")) in ["shop", "snack_bar"]:
+			_queued_ui_nav.clear()
+		return
 	if nav == _applied_ui_nav and _queued_ui_nav.is_empty():
 		return
 	_queued_ui_nav = nav.duplicate(true)
@@ -2015,6 +2044,13 @@ func _queue_host_ui_nav(nav: Dictionary) -> void:
 
 
 func _ui_nav_follow_blocked() -> bool:
+	# Never close a local settings slate because a host navigation sample arrived.
+	if (
+		is_instance_valid(panel)
+		and panel.has_method("is_mod_options_open")
+		and panel.is_mod_options_open()
+	):
+		return true
 	# Defer while table balls are still moving (#16). Queue keeps the latest target.
 	if _ui_nav_balls_moving():
 		return true
@@ -2052,6 +2088,12 @@ func _ui_nav_balls_moving() -> bool:
 
 func _try_follow_host_ui_nav() -> void:
 	if _queued_ui_nav.is_empty() or not active or is_table_host() or is_spectating():
+		return
+	if (
+		str(_queued_ui_nav.get("place", "")) in ["shop", "snack_bar"]
+		and not HudPrefs.follow_shop_view_enabled()
+	):
+		_queued_ui_nav.clear()
 		return
 	if _ui_nav_follow_blocked():
 		return

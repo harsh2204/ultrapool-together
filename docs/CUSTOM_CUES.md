@@ -21,7 +21,7 @@ All styles are parametric recolors of the native cue (modulate / tip color). No 
 
 ## Selection
 
-Open **Together options** in the lobby. The **Your cue** swatches are a personal setting (each player chooses their own), unlike host-only lobby toggles. The choice is written to `user://together_cue.cfg` inside the mod’s isolated `UltrapoolTogether` user folder so it survives restarts without touching vanilla saves.
+Open the **Mod settings** gear in the lobby or beside **Lobby · F8** during play. The **Your cue** swatches are a personal setting (each player chooses their own), unlike host-only lobby toggles. The choice is written to `user://together_cue.cfg` inside the mod’s isolated `UltrapoolTogether` user folder so it survives restarts without touching vanilla saves.
 
 ## Sync
 
