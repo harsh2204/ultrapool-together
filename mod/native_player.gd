@@ -1,5 +1,13 @@
 extends "res://player_ball.gd"
 
+## Native cue rest pose: CuePivot/Cue defaults to position (-426, 0) at rotation 0 — a
+## horizontal shaft whose tip sits on the ball. Leaving that visible while not aiming is
+## the "floating stick at table mid-left" artifact. Hide unless actively aiming; when the
+## local process loop is frozen (fixtures) or a teammate aims, drive pivot from the aim
+## vector so the shaft stays attached to the cue ball (#18).
+
+const CUE_REST_OFFSET := Vector2(-426, 0)
+
 var together_controller: Node
 var _remote_aim_active: bool = false
 
@@ -11,8 +19,19 @@ func _process(delta):
 		if is_instance_valid(game) and not game.playing:
 			game.playing = true
 		_remote_aim_active = false
-		super._process(delta)
-		_ensure_aim_chrome()
+		if preparing_shot:
+			super._process(delta)
+			_ensure_aim_chrome()
+			if shot is Vector2 and shot.is_finite() and shot.length() > 1.0:
+				_show_cue_aim(shot)
+		else:
+			# Same in_menu suppress the off-turn path uses — otherwise native leaves the
+			# packed rest shaft visible at the table's left edge (#18).
+			var was_in_menu: bool = game.in_menu
+			game.in_menu = true
+			super._process(delta)
+			game.in_menu = was_in_menu
+			_hide_cue_pivot()
 		return
 	# Off-turn: cancel local input aim, then optionally mirror teammate presence aim (#18).
 	pause_cancel_shot()
@@ -67,14 +86,17 @@ func _ensure_aim_chrome() -> void:
 		gauge = visuals.get_node_or_null("static/chargeGauge")
 	if gauge is CanvasItem and preparing_shot:
 		gauge.visible = true
+	# Always pose CuePivot while preparing — fixtures freeze process, and live play can
+	# leave the packed rest shaft visible until native aim writes a transform (#18).
+	if preparing_shot and shot is Vector2 and shot.is_finite() and shot.length() > 1.0:
+		_show_cue_aim(shot)
+	elif not preparing_shot:
+		_hide_cue_pivot()
 
 
 ## Non-controllers: drive CuePivot from the turn owner's presence aim vector (#18).
 ## Local input is already cancelled; this only sets visual transform.
 func _apply_teammate_aim_chrome() -> void:
-	var pivot = get_node_or_null("CuePivot")
-	if pivot == null:
-		return
 	var aim: Dictionary = {}
 	if is_instance_valid(together_controller) and together_controller.has_method("get"):
 		var presence = together_controller.get("presence")
@@ -98,13 +120,49 @@ func _apply_teammate_aim_chrome() -> void:
 		and vector.length() > 1.0
 	)
 	if not aiming:
-		if _remote_aim_active:
-			pivot.visible = false
-			_remote_aim_active = false
+		_hide_cue_pivot()
+		_remote_aim_active = false
 		return
+	_show_cue_aim(vector)
+	_remote_aim_active = true
+
+
+func _show_cue_aim(vector: Vector2) -> void:
+	var pivot = get_node_or_null("CuePivot")
+	if pivot == null:
+		return
+	# Glue the pivot to this ball in global space so a packed/animated offset cannot
+	# leave the shaft floating at table mid-left (#18).
+	pivot.global_position = global_position
 	pivot.visible = true
-	pivot.rotation = vector.angle() + PI
+	# Native packs Cue at (-426, 0) on local -X. rotation = aim.angle() puts -X behind
+	# the ball (opposite the shot), matching the vanilla aim pose.
+	pivot.rotation = vector.angle()
+	var cue = pivot.get_node_or_null("Cue")
+	if cue is Node2D:
+		# Aim pose uses the shoot-anim start offset, not the far RESET park.
+		cue.position = Vector2(-350, 0)
+		cue.visible = true
+		cue.modulate.a = 1.0
+		var shadow = cue.get_node_or_null("CueShadow")
+		if shadow is CanvasItem:
+			shadow.visible = true
+	var anim = pivot.get_node_or_null("AnimationPlayer")
+	if anim is AnimationPlayer:
+		anim.active = true
+
+
+func _hide_cue_pivot() -> void:
+	var pivot = get_node_or_null("CuePivot")
+	if pivot == null:
+		return
+	var anim = pivot.get_node_or_null("AnimationPlayer")
+	if anim is AnimationPlayer and anim.is_playing():
+		anim.stop()
+	if anim is AnimationPlayer:
+		anim.active = false
 	var cue = pivot.get_node_or_null("Cue")
 	if cue is CanvasItem:
-		cue.visible = true
-	_remote_aim_active = true
+		cue.visible = false
+		cue.modulate.a = 0.0
+	pivot.visible = false

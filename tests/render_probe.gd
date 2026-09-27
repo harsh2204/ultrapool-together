@@ -171,16 +171,53 @@ func _run():
 	mod._local_id = 2
 	mod.active = true
 	mod.latest_state.in_shop = false
+	# Guest seat owns the opening turn so the banner paints on first table entry (#30).
+	mod.turn_owner = 2
+	mod.shot_pending = false
+	mod.awaiting_shot_turn = -1
+	mod.finished = false
+	if mod.turn_banner != null:
+		mod.turn_banner.clear()
+	mod._turn_banner_showing = false
 	if not _check(mod.table_sync.begin_guest(fixture_config), "guest scene begins"):
 		_finish()
 		return
+	# Prove spent pips through snapshot → replica _update_shots (#29), not a post-apply poke.
+	var shots_max: int = maxi(int(snapshot.get("shots_max", 0)), int(snapshot.get("shots", 0)))
+	if shots_max < 1:
+		shots_max = maxi(int(snapshot.get("shots", 1)), 1)
+	snapshot["shots_max"] = shots_max
+	snapshot["shots"] = maxi(shots_max - 1, 0)
+	snapshot["shots_used"] = shots_max - int(snapshot["shots"])
 	_check(mod.table_sync.apply_snapshot(snapshot), "guest snapshot accepted")
 	await get_tree().create_timer(1.0).timeout
 	game = global_node.gameManager
+	mod._local_id = 2
+	mod.turn_owner = 2
 	mod.latest_state = mod.adapter.game_data()
+	mod.latest_state["shots_left"] = int(snapshot["shots"])
+	mod.latest_state["table_active"] = true
+	mod.latest_state["in_shop"] = false
+	# Hide parked cue before the idle guest table capture (#18).
+	if is_instance_valid(game) and is_instance_valid(game.player_ball):
+		var cue_ball = game.player_ball
+		if cue_ball.has_method("_hide_cue_pivot"):
+			cue_ball._hide_cue_pivot()
+		var pivot = cue_ball.get_node_or_null("CuePivot")
+		if pivot is CanvasItem:
+			pivot.visible = false
+			var cue = pivot.get_node_or_null("Cue")
+			if cue is CanvasItem:
+				cue.visible = false
+				cue.modulate.a = 0.0
 	mod._update_hud()
 	_check_run_config("guest")
 	_check_balls(game.replicas.values(), "guest")
+	await get_tree().process_frame
+	# Re-assert hide after a process tick in case native aim chrome revived the shaft.
+	if is_instance_valid(game) and is_instance_valid(game.player_ball):
+		if game.player_ball.has_method("_hide_cue_pivot"):
+			game.player_ball._hide_cue_pivot()
 	await _capture("30-guest-table", "Guest table · reconstructed from the host snapshot")
 	await _capture_guest_aim(game)
 	await _capture_ball_previews(game)
@@ -283,8 +320,8 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 
 
 func _capture_guest_aim(game) -> void:
-	# Guest local aim chrome (#18). Offline local_id is 0, so native_player's off-turn
-	# path would clear preparing_shot every frame — freeze the cue ball, force chrome.
+	# Guest local aim chrome (#18). Drive CuePivot from the shot vector while process is
+	# frozen so native_player can_control() cannot clear preparing_shot mid-capture.
 	if not is_instance_valid(game) or not is_instance_valid(game.player_ball):
 		_check(false, "guest aim fixture has a cue ball")
 		return
@@ -296,12 +333,9 @@ func _capture_guest_aim(game) -> void:
 	mod._local_id = 2
 	mod.panel.hide()
 	mod.latest_state["can_shoot"] = true
+	mod.latest_state["table_active"] = true
 	mod.shot_pending = false
 	mod.awaiting_shot_turn = -1
-	if is_instance_valid(game.table) and game.table.shots_info != null:
-		game.table.shots_info.shots_used = 1
-		if game.table.shots_info.has_method("update_visuals"):
-			game.table.shots_info.update_visuals(true)
 	var ball = game.player_ball
 	CueCatalog.apply(ball, "gold")
 	game.playing = true
@@ -326,13 +360,22 @@ func _capture_guest_aim(game) -> void:
 		gauge.visible = true
 	if ball.has_method("_ensure_aim_chrome"):
 		ball._ensure_aim_chrome()
+	if ball.has_method("_show_cue_aim"):
+		ball._show_cue_aim(Vector2(90, -140))
 	mod._update_hud()
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var shoot_ui = ball.get("shoot_ui")
 	var prediction = ball.get("prediction")
+	var pivot = ball.get_node_or_null("CuePivot")
+	var pivot_ok: bool = (
+		pivot is CanvasItem
+		and pivot.visible
+		and pivot.global_position.distance_squared_to(ball.global_position) < 16.0
+	)
 	_check(
 		bool(ball.get("preparing_shot"))
+		and pivot_ok
 		and (
 			(shoot_ui is CanvasItem and shoot_ui.visible)
 			or (prediction is CanvasItem and prediction.visible)
@@ -348,6 +391,8 @@ func _capture_guest_aim(game) -> void:
 	ball.set("holding_shot", false)
 	if ball.has_method("pause_cancel_shot"):
 		ball.pause_cancel_shot()
+	if ball.has_method("_hide_cue_pivot"):
+		ball._hide_cue_pivot()
 	ball.set_process_input(was_input)
 	ball.set_process(was_processing)
 
