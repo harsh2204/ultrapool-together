@@ -13,6 +13,8 @@ const HUD_TINTS = {
 	"pressed": Color(0.85, 0.85, 0.85),
 	"disabled": Color(0.6, 0.6, 0.6, 0.8)
 }
+const CrtStack = preload("crt_stack.gd")
+const UiNav = preload("ui_nav.gd")
 
 var transport: Node
 var adapter: Node
@@ -34,6 +36,9 @@ var panel: Control
 var turn_label: Label
 var score_label: Label
 var pass_button: Button
+var _hud_layer: CanvasLayer
+var _queued_ui_nav: Dictionary = {}
+var _applied_ui_nav: Dictionary = {}
 
 var supported = true
 var active = false
@@ -147,6 +152,8 @@ func _ready():
 		_status("Expansion ball art is missing. Reinstall the complete mod package.")
 		return
 	presence.setup(self, transport, shop_sync)
+	_align_mod_ui_under_crt()
+	call_deferred("_align_mod_ui_under_crt")
 	shop_sync.request.connect(_shop_request)
 	transport.connected.connect(_connected)
 	transport.peer_joined.connect(_peer_joined)
@@ -171,9 +178,9 @@ func _ready():
 func _build_ui():
 	var base = get_script().resource_path.get_base_dir()
 	skin = load(base.path_join("ui_skin.gd")).new(base.path_join("assets/ui"))
-	var hud = CanvasLayer.new()
-	hud.layer = 120
-	add_child(hud)
+	_hud_layer = CanvasLayer.new()
+	CrtStack.place_under(_hud_layer, self, CrtStack.OFFSET_HUD)
+	add_child(_hud_layer)
 	ui_root = Control.new()
 	ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_root.theme = Theme.new()
@@ -181,7 +188,7 @@ func _build_ui():
 	ui_root.theme.default_font_size = 18
 	if skin.has_art():
 		_apply_hud_skin(ui_root.theme)
-	hud.add_child(ui_root)
+	_hud_layer.add_child(ui_root)
 	ui_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var dock = VBoxContainer.new()
 	ui_root.add_child(dock)
@@ -639,6 +646,8 @@ func _begin_table(config: Dictionary):
 	_guest_phase.clear()
 	_last_state_sig.clear()
 	_snapshot_idle_time = 0.0
+	_queued_ui_nav.clear()
+	_applied_ui_nav.clear()
 	_clear_bad_snapshot_streak()
 	_clear_spawn_barrier()
 	presence.clear()
@@ -726,6 +735,8 @@ func _end_table():
 	multiplayer_balls.end_session()
 	expansion_balls.end_session()
 	adapter.end_session()
+	_queued_ui_nav.clear()
+	_applied_ui_nav.clear()
 	table_sync.end_guest()
 	run_setup.cancel()
 	shot_pending = false
@@ -964,6 +975,7 @@ func _process(delta):
 	presence.tick(delta, active and not is_spectating(), can_control())
 	if spectator != null:
 		spectator.tick(delta)
+	_try_follow_host_ui_nav()
 	roster_time += delta
 	if roster_time >= 1.0:
 		roster_time = 0.0
@@ -1361,12 +1373,19 @@ func _publish_state(
 				_clone_instances, _clone_active, _clone_winner, _clone_shop_armed
 			),
 			"finished": finished,
-			"finish_reason": finish_reason
+			"finish_reason": finish_reason,
+			# Host-authoritative screen location (#16). Dirty-gated via state_sig.
+			"ui_nav": UiNav.capture(
+				self,
+				shop_sync.current_section() if shop_sync != null else "",
+				shop_sync.host_focus_key() if shop_sync != null and shop_sync.is_open() else ""
+			)
 		},
 		true
 	)
 	var balls_state: Dictionary = latest_state.get("multiplayer_balls", {})
 	var expansion_state: Dictionary = latest_state.get("expansion_balls", {})
+	var ui_nav: Dictionary = latest_state.get("ui_nav", {})
 	var state_sig = [
 		latest_state.get("available"),
 		latest_state.get("settled"),
@@ -1382,7 +1401,8 @@ func _publish_state(
 		used_shots,
 		finished,
 		multiplayer_balls.display_signature(balls_state),
-		expansion_balls.display_signature(expansion_state)
+		expansion_balls.display_signature(expansion_state),
+		UiNav.signature(ui_nav)
 	]
 	if target != 0 or state_sig != _last_state_sig:
 		if target == 0:
@@ -1726,6 +1746,8 @@ func _received_table(actor: int, message: Dictionary):
 				shop_sync.set_exclusive_shopper(_clone_winner)
 			elif not _clone_shop_armed:
 				shop_sync.clear_exclusive_shopper()
+		if message.get("ui_nav") is Dictionary and UiNav.valid(message.ui_nav):
+			_queue_host_ui_nav(message.ui_nav)
 		if shot_pending or awaiting_shot_turn != shot_number:
 			awaiting_shot_turn = -1
 	elif (
@@ -1825,6 +1847,8 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 		and not expansion_balls.valid_state(message.get("expansion_balls"))
 	):
 		return false
+	if message.has("ui_nav") and not UiNav.valid(message.ui_nav):
+		return false
 	return (
 		_number(message.get("score"))
 		and _number(message.get("total_score"))
@@ -1841,3 +1865,58 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 		and message.get("finish_reason") is String
 		and message.finish_reason.length() <= 100
 	)
+
+
+## #19: Keep Together CanvasLayers under EffectManager.crt_overlay.
+func _align_mod_ui_under_crt() -> void:
+	CrtStack.place_under(_hud_layer, self, CrtStack.OFFSET_HUD)
+	if presence != null and presence.has_method("align_under_crt"):
+		presence.align_under_crt()
+	if shop_sync != null and shop_sync.has_method("align_under_crt"):
+		shop_sync.align_under_crt()
+	if spectator != null and is_instance_valid(spectator._layer):
+		CrtStack.place_under(spectator._layer, self, CrtStack.OFFSET_SPECTATOR)
+
+
+## #16: Queue host screen location; apply at a safe boundary (no mid-drag yank).
+func _queue_host_ui_nav(nav: Dictionary) -> void:
+	if is_table_host() or is_spectating():
+		return
+	if nav == _applied_ui_nav and _queued_ui_nav.is_empty():
+		return
+	_queued_ui_nav = nav.duplicate(true)
+	_try_follow_host_ui_nav()
+
+
+func _ui_nav_follow_blocked() -> bool:
+	if shop_sync != null and shop_sync.nav_follow_blocked():
+		return true
+	return false
+
+
+func _try_follow_host_ui_nav() -> void:
+	if _queued_ui_nav.is_empty() or not active or is_table_host() or is_spectating():
+		return
+	if _ui_nav_follow_blocked():
+		return
+	var place = str(_queued_ui_nav.get("place", "table"))
+	var section = str(_queued_ui_nav.get("section", ""))
+	match place:
+		"lobby":
+			if not panel.visible:
+				_set_panel(true)
+		"set_vote":
+			# Vote panel is driven by set_voting messages; only leave lobby if open.
+			if panel.visible:
+				_set_panel(false)
+		"shop", "snack_bar", "table":
+			if panel.visible:
+				_set_panel(false)
+			if place in ["shop", "snack_bar"] and shop_sync != null and shop_sync.is_open():
+				var want = section if section != "" else ("snacks" if place == "snack_bar" else "")
+				if want != "":
+					shop_sync._queue_host_nav(
+						{"open": true, "section": want, "focus": str(_queued_ui_nav.get("focus", ""))}
+					)
+	_applied_ui_nav = _queued_ui_nav.duplicate(true)
+	_queued_ui_nav.clear()

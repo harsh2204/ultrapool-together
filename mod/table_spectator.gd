@@ -152,7 +152,8 @@ func _input(event: InputEvent) -> void:
 
 func _build_ui() -> void:
 	_layer = CanvasLayer.new()
-	_layer.layer = 90
+	var CrtStack = preload("crt_stack.gd")
+	CrtStack.place_under(_layer, self, CrtStack.OFFSET_SPECTATOR)
 	add_child(_layer)
 	_root = Control.new()
 	_root.theme = _controller.ui_root.theme
