@@ -141,6 +141,9 @@ func refresh_inventory_hud() -> void:
 	if has_method("update_cocktail_tickets"):
 		update_cocktail_tickets()
 	_sync_cubes_button()
+	# When CubesPopup is already open, re-bind PassiveCube materials so guest inventory
+	# apply (bare BallItem + BallResource.texture) matches host cube rendering (#33).
+	ensure_cubes_popup_textures()
 
 
 func _sync_cubes_button() -> void:
@@ -150,6 +153,13 @@ func _sync_cubes_button() -> void:
 	# Guests previously always hid this control; show it when the shared inventory
 	# actually holds a debuff cube so CubesPopup can open against player_info.cubes.
 	button.visible = _player_has_cubes()
+	if not button.pressed.is_connected(_on_together_cubes_button_pressed):
+		button.pressed.connect(_on_together_cubes_button_pressed)
+
+
+func _on_together_cubes_button_pressed() -> void:
+	# Native `_on_cubes_button_pressed` rebuilds the grid first; bind textures after.
+	call_deferred("ensure_cubes_popup_textures")
 
 
 func _player_has_cubes() -> bool:
@@ -159,6 +169,71 @@ func _player_has_cubes() -> bool:
 		if item != null:
 			return true
 	return false
+
+
+## Native CubesPopup builds PassiveCube grid entries from player_info.cubes. Guests receive
+## BallItems rebuilt from BallDatabase ids; if the popup opened before textures bound, or
+## shared materials lost their `tex` param, entries render as black cube silhouettes.
+## Re-apply each inventory BallItem through set_item and force shader tex/hint_color from
+## the BallResource (same source host PassiveCube uses). No-op when the popup is closed.
+func ensure_cubes_popup_textures() -> void:
+	var popup = get_node_or_null("%CubesPopup")
+	if popup == null:
+		popup = find_child("CubesPopup", true, false)
+	if popup == null or not (popup is CanvasItem) or not popup.visible:
+		return
+	if player_info == null or not player_info.get("cubes") is Array:
+		return
+	var inventory: Array = []
+	for entry in player_info.cubes:
+		if entry != null:
+			inventory.append(entry)
+	if inventory.is_empty():
+		return
+	var passives: Array = _cubes_popup_passives(popup)
+	for index in mini(passives.size(), inventory.size()):
+		_bind_passive_cube(passives[index], inventory[index])
+
+
+func _cubes_popup_passives(popup: Node) -> Array:
+	var found: Array = []
+	for node in popup.find_children("*", "Node2D", true, false):
+		if node.get_node_or_null("%Cube") == null:
+			continue
+		if node.has_method("set_item") or node.get("ball_item") != null or node.get("item") != null:
+			found.append(node)
+	if not found.is_empty():
+		return found
+	# Fallback: any Node2D under the popup that owns a %Cube sprite.
+	for node in popup.find_children("*", "Node2D", true, false):
+		if node.get_node_or_null("%Cube") != null:
+			found.append(node)
+	return found
+
+
+func _bind_passive_cube(passive: Node, item) -> void:
+	if item == null or item.get("data") == null:
+		return
+	if passive.has_method("set_item"):
+		passive.set_item(item)
+	var sprite = passive.get_node_or_null("%Cube")
+	if sprite == null or not (sprite is CanvasItem):
+		return
+	var data = item.data
+	var texture = data.get("texture") if data != null else null
+	if texture == null:
+		return
+	var material = sprite.material
+	if material == null:
+		return
+	# PassiveCube materials are resource_local_to_scene; duplicate before writing so a
+	# shared default cannot leave every entry sampling a cleared/null tex.
+	if not material.resource_local_to_scene:
+		material = material.duplicate()
+		sprite.material = material
+	material.set_shader_parameter("tex", texture)
+	if data.get("main_color") != null:
+		material.set_shader_parameter("hint_color", data.main_color)
 
 
 func _counter_available(

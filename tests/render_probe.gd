@@ -401,37 +401,51 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 	if not is_instance_valid(shop) or not is_instance_valid(game) or game.player_info == null:
 		return
 	var database = get_node("/root/BallDatabase")
-	if database.cubes.is_empty():
-		_check(false, "BallDatabase exposes at least one NEGATIVE cube")
+	var cube_resources: Array = _fixture_negative_cubes(database)
+	if cube_resources.size() < 2:
+		_check(false, "BallDatabase exposes at least two textured NEGATIVE cubes")
 		return
-	var cube = BallItem.new()
-	cube.data = database.cubes[0]
-	_check(
-		str(cube.data.from_set) == "NEGATIVE",
-		"fixture cube comes from the NEGATIVE set for CubesButton (#33)"
-	)
+	var cubes: Array = []
+	for resource in cube_resources:
+		var cube = BallItem.new()
+		cube.data = resource
+		_check(str(cube.data.from_set) == "NEGATIVE", "fixture cube %s is NEGATIVE" % str(resource.id))
+		_check(cube.data.texture != null, "fixture cube %s has a BallResource.texture" % str(resource.id))
+		cubes.append(cube)
 	var previous_cubes = game.player_info.cubes.duplicate()
-	game.player_info.cubes.assign([cube])
+	game.player_info.cubes.assign(cubes)
 	if shop.has_method("refresh_inventory_hud"):
 		shop.refresh_inventory_hud()
 	elif shop.has_method("_sync_cubes_button"):
 		shop._sync_cubes_button()
 	await get_tree().process_frame
 	var button = shop.get_node_or_null("%CubesButton")
-	_check(button != null and button.visible, "guest CubesButton visible with a NEGATIVE cube")
+	_check(button != null and button.visible, "guest CubesButton visible with NEGATIVE cubes")
 	var popup = shop.get_node_or_null("%CubesPopup")
 	if popup == null:
 		popup = shop.find_child("CubesPopup", true, false)
-	# Prefer showing the popup without emitting pressed (avoids focus/input locks).
-	if popup is CanvasItem:
-		popup.visible = true
-	elif button != null and button.has_signal("pressed"):
+	# Open through the native CubesButton path so CubesPopup rebuilds PassiveCube entries
+	# from player_info.cubes (visible=true alone left a black unbound silhouette).
+	if button != null and button.has_signal("pressed"):
 		button.pressed.emit()
 		await get_tree().process_frame
-	await get_tree().create_timer(0.3).timeout
+		await get_tree().process_frame
+	elif popup != null and popup.has_method("popup"):
+		popup.popup()
+		await get_tree().process_frame
+	elif popup is CanvasItem:
+		popup.visible = true
+		await get_tree().process_frame
+	if shop.has_method("ensure_cubes_popup_textures"):
+		shop.ensure_cubes_popup_textures()
+	await get_tree().create_timer(0.35).timeout
+	_check(
+		_cubes_popup_textures_bound(popup, cubes),
+		"guest CubesPopup PassiveCube entries sample BallResource textures"
+	)
 	await _capture(
 		"54-guest-negative-cubes",
-		"Guest shop · CubesButton / CubesPopup with a NEGATIVE cube and snack ticket counters."
+		"Guest shop · CubesPopup with two textured NEGATIVE cubes (not black silhouettes) and snack tickets."
 	)
 	if popup is CanvasItem:
 		popup.visible = false
@@ -448,6 +462,54 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 		shop.selected_ball = null
 		shop.selected_passive = null
 	await get_tree().process_frame
+
+
+func _fixture_negative_cubes(database: Node) -> Array:
+	# Prefer iconic CUBERT plus a second distinct NEGATIVE id so the gallery proves
+	# two textured debuff cubes, not a single unbound silhouette.
+	var preferred = ["CUBERT", "DEMON", "GLITCH", "CEO", "ALARM-CLOCK", "BOUNCER"]
+	var picked: Array = []
+	var seen: Dictionary = {}
+	for id in preferred:
+		if not database.id_to_ball.has(id):
+			continue
+		var resource = database.id_to_ball[id]
+		if resource == null or str(resource.from_set) != "NEGATIVE" or resource.texture == null:
+			continue
+		if seen.has(str(resource.id)):
+			continue
+		seen[str(resource.id)] = true
+		picked.append(resource)
+		if picked.size() >= 2:
+			return picked
+	for resource in database.cubes:
+		if resource == null or str(resource.from_set) != "NEGATIVE" or resource.texture == null:
+			continue
+		if seen.has(str(resource.id)):
+			continue
+		seen[str(resource.id)] = true
+		picked.append(resource)
+		if picked.size() >= 2:
+			break
+	return picked
+
+
+func _cubes_popup_textures_bound(popup: Node, cubes: Array) -> bool:
+	if popup == null or cubes.is_empty():
+		return false
+	var bound = 0
+	for node in popup.find_children("*", "Node2D", true, false):
+		var sprite = node.get_node_or_null("%Cube")
+		if sprite == null or sprite.material == null:
+			continue
+		var tex = sprite.material.get_shader_parameter("tex")
+		if tex == null:
+			continue
+		for cube in cubes:
+			if cube != null and cube.data != null and tex == cube.data.texture:
+				bound += 1
+				break
+	return bound >= mini(2, cubes.size())
 
 
 func _check_shop_wallet_refresh(shop: Node, original: Dictionary) -> void:
