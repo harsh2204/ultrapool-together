@@ -68,6 +68,7 @@ func _run() -> void:
 		print("TRANSPORT TEST FAIL script did not compile")
 		get_tree().quit(1)
 		return
+	_check_protocol_boundary()
 	host_node = _transport_script.new()
 	add_child(host_node)
 	host_node.received.connect(_record.bind("host"))
@@ -96,7 +97,7 @@ func _run() -> void:
 	check(host_node.host_id() == host_node.local_id(), "host identity is separate from guest slots")
 	check(guests[0].host_id() == host_node.local_id(), "guest knows coordinator identity")
 	check(
-		guests[0].join_steam("UP9-123") == ERR_ALREADY_IN_USE, "invite preserves active connection"
+		guests[0].join_steam("UP10-123") == ERR_ALREADY_IN_USE, "invite preserves active connection"
 	)
 	for guest in guests:
 		guest.send({"kind": "input", "claimed_actor": first_id, "actual": guest.local_id()})
@@ -227,7 +228,8 @@ func _run() -> void:
 	check(host_node.connected_peers().size() == 5, "malformed packet isolates one peer")
 	check(host_disconnect_events == 0, "peer faults never end coordinator session")
 	for code in [
-		"invalid", "UP1-123-token", "UP2-123", "UP3-123", "UP4-123", "UP7-123", "UP8-123", "UP9-0"
+		"invalid", "UP1-123-token", "UP2-123", "UP3-123", "UP4-123", "UP7-123", "UP8-123",
+		"UP9-123", "UP10-0"
 	]:
 		check(
 			rejected.join_steam(code) == ERR_INVALID_PARAMETER, "reject old or malformed room code"
@@ -241,13 +243,47 @@ func _run() -> void:
 	_finish()
 
 
+func _check_protocol_boundary() -> void:
+	# Exercise the real decoder/handshake with no sockets attached. Protocol 9
+	# accepts unknown config keys and cannot honor a disabled cue shop.
+	var host = _transport_script.new()
+	host.is_host = true
+	host._token = "a".repeat(32)
+	var hello = {
+		"kind": "hello", "protocol": 9, "game_version": "0.15.7",
+		"token": host._token, "nonce": "b".repeat(32)
+	}
+	host._add_peer(42)
+	host._receive_wire(42, var_to_bytes(hello))
+	check(not host._peers.has(42), "older cue-shop-unaware hello cannot enter the room")
+	host._add_peer(42)
+	hello.protocol = host.PROTOCOL
+	host._receive_wire(42, var_to_bytes(hello))
+	check(
+		host._peers.has(42) and not host._peers[42].session.is_empty(),
+		"the equivalent current-protocol hello reaches session negotiation"
+	)
+	host.free()
+	var guest = _transport_script.new()
+	guest._token = "a".repeat(32)
+	guest._host_id = 42
+	guest._add_peer(42)
+	guest._receive_wire(42, var_to_bytes({
+		"kind": "welcome", "protocol": 9, "game_version": "0.15.7",
+		"token": guest._token, "nonce": guest._peers[42].nonce,
+		"session": "c".repeat(32)
+	}))
+	check(not guest._peers.has(42), "an older coordinator cannot welcome a current guest")
+	guest.free()
+
+
 func _steam_room_check() -> void:
 	check(host_node.host_steam() == OK, "actual Steam room request starts")
 	for _attempt in range(100):
 		if host_node.invite_ready() or not host_node.is_host:
 			break
 		await pause(0.2)
-	check(host_node.invite_ready() and host_node.room_code.begins_with("UP9-"), "Steam room ready")
+	check(host_node.invite_ready() and host_node.room_code.begins_with("UP10-"), "Steam room ready")
 	if host_node._lobby_id != 0:
 		check(
 			(

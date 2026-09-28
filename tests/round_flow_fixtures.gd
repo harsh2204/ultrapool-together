@@ -26,7 +26,7 @@ class Wire:
 	extends Node
 	var is_host = true
 	var id = 1
-	var room_code = "UP9-ROUND-FLOW"
+	var room_code = "UP10-ROUND-FLOW"
 	var packets: Array = []
 
 	func local_id() -> int:

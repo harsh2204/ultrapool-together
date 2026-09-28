@@ -7,6 +7,10 @@ var failures: Array[String] = []
 
 class HostFixture:
 	extends Node
+	var cues_enabled = true
+
+	func cue_shop_enabled() -> bool:
+		return cues_enabled
 
 	func is_table_host() -> bool:
 		return true
@@ -518,7 +522,21 @@ func _check_native_callback_guards(base: String) -> void:
 	var service = load(base.path_join("cue_effects.gd")).new()
 	var controller = HostFixture.new()
 	service._controller = controller
+	controller.cues_enabled = false
 	service.begin_session()
+	_check(
+		not service._active and service.rules == null and service._hooked.is_empty(),
+		"a disabled run does not create perk rules or native hooks"
+	)
+	_check(service.begin_shot(1, 10, Vector2(100, 0)), "disabled perks never block native shot admission")
+	service.record_hit(null, null)
+	service.record_wall(null)
+	_check(service.record_pocket(null, null, 1.0).is_empty(), "disabled callbacks cannot stage an award")
+	service.finish_shot()
+	_check(service.rules == null, "disabled callbacks cannot recreate perk history")
+	controller.cues_enabled = true
+	service.begin_session()
+	_check(service._active and service.rules != null, "a later enabled run starts fresh perk rules")
 	_check(
 		service._game() == null,
 		"detached service lookup returns safely without absolute node queries"

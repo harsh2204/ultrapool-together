@@ -18,6 +18,8 @@ var multiplayer_balls = false
 ## Host-authoritative shared shop (default ON). When false, each table host
 ## shops independently — no remote replicas, shared shop cursors, or shop ui_nav.
 var sync_shop = true
+## Host rule for the entire run; personal cue finishes remain cosmetic.
+var cue_shop_enabled = true
 var expansion_sets_enabled = false
 var expansion_sets: Dictionary = {}
 var revision = 0
@@ -53,6 +55,7 @@ func clear() -> void:
 	clone_rounds = false
 	multiplayer_balls = false
 	sync_shop = true
+	cue_shop_enabled = true
 	expansion_sets_enabled = false
 	expansion_sets = ExpansionRegistry.default_flags()
 	revision = 0
@@ -202,6 +205,19 @@ func set_sync_shop(sender: int, enabled: bool) -> bool:
 		last_error = ""
 		return true
 	sync_shop = enabled
+	_changed(true)
+	return true
+
+
+func set_cue_shop_enabled(sender: int, enabled: bool) -> bool:
+	if not _is_host(sender):
+		return _reject("Only the host can change the cue shop.")
+	if started:
+		return _reject("The cue shop is locked during a match.")
+	if cue_shop_enabled == enabled:
+		last_error = ""
+		return true
+	cue_shop_enabled = enabled
 	_changed(true)
 	return true
 
@@ -497,6 +513,7 @@ func snapshot() -> Dictionary:
 		"clone_rounds": clone_rounds,
 		"multiplayer_balls": multiplayer_balls,
 		"sync_shop": sync_shop,
+		"cue_shop_enabled": cue_shop_enabled,
 		"expansion_sets_enabled": expansion_sets_enabled,
 		"expansion_sets": ExpansionRegistry.normalize_flags(expansion_sets),
 		"single_table_difficulty": _single_table_difficulty(),

@@ -35,7 +35,7 @@ class OfflineTransport:
 
 	var people: Array = []
 	var is_host = true
-	var room_code = "UP9-RENDER-FIXTURE"
+	var room_code = "UP10-RENDER-FIXTURE"
 	var sent: Array = []
 
 	func session_open() -> bool:
@@ -76,6 +76,19 @@ func check_native_run_votes(mod: Node, capture: Callable) -> void:
 		mod.run_setup.validate_config(mod.run_setup.capture_config(defaults)),
 		"native menu defaults produce a valid shared run config"
 	)
+	var cue_config: Dictionary = mod.run_setup.capture_config(defaults)
+	for enabled in [true, false]:
+		cue_config["cue_shop_enabled"] = enabled
+		_record(
+			mod.run_setup.validate_config(cue_config),
+			"shared run config accepts cue shop boolean " + str(enabled)
+		)
+	for invalid in ["false", 0, 1]:
+		cue_config["cue_shop_enabled"] = invalid
+		_record(
+			not mod.run_setup.validate_config(cue_config),
+			"shared run config rejects non-boolean cue shop value " + var_to_str(invalid)
+		)
 	mod.lobby_model.setup(1, "Host")
 	mod.lobby_model.add_player(2, "Guest")
 	mod.lobby_model.set_table_count(1, 2)
@@ -138,8 +151,78 @@ func check_native_run_votes(mod: Node, capture: Callable) -> void:
 		await capture.call(
 			"lobby-native-vote-input", "Native run votes and Ready travel through the controller."
 		)
+		await _check_cue_shop_setting(mod, capture)
 	mod.lobby_model = previous_model
 	_restore(mod, saved)
+
+
+func _check_cue_shop_setting(mod: Node, capture: Callable) -> void:
+	var panel = mod.panel
+	var control: CheckBox = panel._cue_shop_check
+	if not _record(is_instance_valid(control), "cue shop setting exists in Together options"):
+		return
+	_record(
+		mod.lobby.cue_shop_enabled and control.button_pressed and not control.disabled,
+		"cue shop setting defaults on and is editable by the lobby host"
+	)
+	var generation: int = mod.lobby.ready_generation
+	control.set_pressed_no_signal(false)
+	control.toggled.emit(false)
+	_record(
+		not mod.lobby_model.cue_shop_enabled and not mod.lobby.cue_shop_enabled,
+		"host cue shop checkbox reaches the actual controller and published lobby state"
+	)
+	_record(
+		(
+			mod.lobby.ready_generation > generation
+			and mod.lobby.players.all(func(player): return not player.ready)
+		),
+		"changing cue shop invalidates Ready for the previous run rules"
+	)
+	panel._place_mod_options()
+	panel.get_node("%ModOptions").popup()
+	panel._mod_options_open = true
+	await mod.get_tree().process_frame
+	panel.get_node("%ModOptionsScroll").ensure_control_visible(control)
+	await mod.get_tree().process_frame
+	_record(
+		control.is_visible_in_tree() and not control.button_pressed and not control.disabled,
+		"host can see the disabled-for-next-run cue shop checkbox"
+	)
+	_assert_mod_options_no_horizontal_overflow(panel, "cue-shop-off")
+	await capture.call(
+		"lobby-cue-shop-disabled",
+		"Host Together options · Cue shop off · the next run uses House cues without cue perks."
+	)
+	panel.render(mod.lobby, 2, false)
+	_record(
+		control.disabled and not control.button_pressed,
+		"guest sees the host's cue shop setting but cannot toggle it"
+	)
+	mod._apply_lobby_request(2, {"action": "cue_shop_enabled", "enabled": true})
+	_record(
+		not mod.lobby_model.cue_shop_enabled and not mod.lobby.cue_shop_enabled,
+		"controller rejects a guest's crafted cue shop setting request"
+	)
+	# Seed the already-started phase without starting a game from a UI fixture.
+	mod.lobby_model.started = true
+	mod._broadcast_lobby()
+	_record(control.disabled, "cue shop checkbox locks for the host during an active match")
+	mod._apply_lobby_request(1, {"action": "cue_shop_enabled", "enabled": true})
+	_record(
+		not mod.lobby_model.cue_shop_enabled and not mod.lobby.cue_shop_enabled,
+		"controller rejects changing cue shop rules after the match starts"
+	)
+	mod.lobby_model.started = false
+	mod._broadcast_lobby()
+	control.set_pressed_no_signal(true)
+	control.toggled.emit(true)
+	_record(
+		mod.lobby.cue_shop_enabled and not control.disabled,
+		"host can re-enable cue shop after returning to the lobby"
+	)
+	panel.get_node("%ModOptions").hide()
+	panel._mod_options_open = false
 
 
 func _check_native_play_menu(mod: Node, capture: Callable) -> void:
@@ -402,7 +485,7 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 	coop.players[2].ready = false
 	coop.players[3].ready = false
 	coop.can_start = false
-	panel.set_connection("UP9-RENDER-FIXTURE", true, true)
+	panel.set_connection("UP10-RENDER-FIXTURE", true, true)
 	panel.render(coop, 1, true)
 	await capture.call("lobby-choosing-seats", "Four-player co-op with one player choosing a seat.")
 	var card_style = _first_table_card_style(panel)
@@ -962,6 +1045,14 @@ func capture_together_options(mod: Node, capture: Callable) -> void:
 	)
 	_record(
 		(
+			panel._cue_shop_check.is_visible_in_tree()
+			and panel._cue_shop_check.button_pressed
+			and not panel._cue_shop_check.disabled
+		),
+		"cue shop appears enabled by default in the native Together options layout"
+	)
+	_record(
+		(
 			panel.get_node("%ExpansionSetsEnabled").button_pressed
 			and panel.get_node("%ExpansionSets").visible
 		),
@@ -1263,6 +1354,7 @@ func _lobby(tables: Array, count: int) -> Dictionary:
 		"single_table_difficulty": false,
 		"clone_rounds": false,
 		"multiplayer_balls": false,
+		"cue_shop_enabled": true,
 		"sync_shop": true,
 		"expansion_sets_enabled": false,
 		"expansion_sets":

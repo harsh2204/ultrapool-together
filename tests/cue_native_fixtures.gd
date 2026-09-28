@@ -167,6 +167,7 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 	var achievements = mod.get_node("/root/AchievementManager")
 	var saved = {
 		"score": game.score,
+		"run_config": mod.run_config,
 		"pitch": game.pitch_score,
 		"combo": game.score_combo_time,
 		"children": game.get_children(),
@@ -196,10 +197,48 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 	var effects = CueEffects.new()
 	mod.add_child(effects)
 	check.call(effects.setup(mod), "native cue effects: adapter connects to real game services")
+	# This synchronous lifecycle check uses the actual native object without
+	# potting it or yielding while the fixture temporarily changes its run rule.
+	mod.run_config = saved.run_config.duplicate(true)
+	mod.run_config["cue_shop_enabled"] = false
+	effects.begin_session()
+	check.call(
+		not effects._active and effects.rules == null and effects._hooked.is_empty(),
+		"native cue effects: disabled run creates no perk rules or hooks"
+	)
+	var original_cue_service = body.cue_effects
+	effects._node_added(body)
+	effects._hook_ball(body)
+	check.call(
+		body.get_script() == wrapper and body.cue_effects == original_cue_service
+		and effects._hooked.is_empty(),
+		"native cue effects: disabled object discovery preserves the existing native wrapper"
+	)
+	check.call(
+		effects.begin_shot(1, 1, Vector2(125, 0)),
+		"native cue effects: disabled perks do not reject a valid shot"
+	)
+	var native_pocket = null
+	for candidate in game.pockets:
+		if candidate is Pocket and not candidate is VirtualPocket:
+			native_pocket = candidate
+			break
+	effects.record_wall(body)
+	var disabled_award: Dictionary = effects.record_pocket(body, native_pocket, 1.0)
+	effects.commit_pocket(disabled_award)
+	effects.finish_shot()
+	check.call(
+		disabled_award.is_empty() and effects.rules == null and game.score == saved.score,
+		"native cue effects: disabled wall and pocket callbacks cannot change score"
+	)
+	mod.run_config.cue_shop_enabled = true
 	effects.begin_session()
 	game.set_score(baseline)
 	var admitted: bool = effects.begin_shot(1, 1, Vector2(125, 0))
-	check.call(admitted and effects.rules.pending, "native cue effects: native shot boundary opens")
+	check.call(
+		admitted and effects.rules != null and effects.rules.pending,
+		"native cue effects: re-enabled native shot boundary opens fresh rules"
+	)
 	var pocket = _fixed_pocket(effects)
 	if check.call(pocket != null, "native cue effects: native fixed pockets are classified"):
 		var points: float = minf(3.0 * CueModels.entry("bankshot").bonus_rate, 2.0)
@@ -283,6 +322,7 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 		"native cue effects: teardown preserves another active service's shared wrapper"
 	)
 	effects.free()
+	mod.run_config = saved.run_config
 	body.together_balls = saved.together
 	body.expansion_balls = saved.expansion
 	body.ball_item = saved.item

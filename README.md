@@ -33,7 +33,7 @@ Use `--destination "/path/to/UltrapoolTogether"` for a different mod folder, or 
 4. The host chooses the number of tables. Vote for a **Starting set** using the shop's set cards and choose **Difficulty** from the buttons beside them. Player initials show live votes; hover for full names. A chalk check marks your vote, and a gold gem marks the current result. With multiple tables, everyone can also vote for **Race** or **Score PvP**.
 5. Join a table and select **Ready up**. The host selects **Start match** once everyone is ready and every table has a player.
 
-Everyone must use v0.10.0 and a **UP9** room code (protocol 9). Older versions cannot join these rooms. Changing seats, settings, or a vote clears readiness. Each connected player has one vote per choice; **No preference** abstains. The most votes wins, with ties resolved in the displayed option order. Without votes, the host's initial native selection applies. Choices use the host's unlocked standard sets and difficulties; every table receives the same frozen result and seed.
+Everyone must use v0.10.0 and a **UP10** room code (protocol 10). Older versions cannot join these rooms. Changing seats, settings, or a vote clears readiness. Each connected player has one vote per choice; **No preference** abstains. The most votes wins, with ties resolved in the displayed option order. Without votes, the host's initial native selection applies. Choices use the host's unlocked standard sets and difficulties; every table receives the same frozen result and seed.
 
 ## Match rules
 
@@ -56,7 +56,9 @@ Six additional **expansion sets** (Phases, Morph, Tide, Relic, Tarot, Zodiac) us
 
 ## Custom cues
 
-Visit the **Cue Workshop to the right of the snack bar** to browse fifteen distinct cues, preview ten free finishes, and buy or equip a personal cue. House is included; other cues cost 2–8€ from the shared run wallet, with reliable scoring perks priced above handling preferences and last for that run. Small handling changes or capped situational score perks add variety without extra shots or permanent upgrades. Finishes persist between runs, and teammates see the current shooter's cue. See the [full roster and balance rules](docs/CUSTOM_CUES.md). **Status: implemented, unmeasured.**
+The host can disable **Cue shop** in the lobby’s **Mod settings** before starting a match (on by default). With it off, everyone uses House cues without perks, the cue counter is absent, and personal cosmetic finishes remain available. The choice locks for the run.
+
+Visit the **Cue Workshop to the right of the snack bar** to browse fifteen distinct cues, preview ten free finishes, and buy or equip a personal cue. House is included; other cues cost 2–8€ from the shared run wallet, and last for that run. Reliable scoring perks cost more than handling preferences. Small handling changes or capped situational score perks add variety without extra shots or permanent upgrades. Finishes persist between runs, and teammates see the current shooter's cue. See the [full roster and balance rules](docs/CUSTOM_CUES.md). **Status: implemented, unmeasured.**
 
 Rook runs the counter with upright cue racks, a short next/previous slide animation, and a felt-lined case displaying your equipped cue. Purple icon-only arrows follow the native shop pattern. The revised presentation has bounded Windows rendering and animation-capture coverage; live and cross-platform acceptance remains open.
 

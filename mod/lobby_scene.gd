@@ -12,6 +12,7 @@ signal run_vote_requested(field: String, choice: String, catalog_revision: int)
 signal clone_rounds_requested(enabled: bool)
 signal multiplayer_balls_requested(enabled: bool)
 signal sync_shop_requested(enabled: bool)
+signal cue_shop_enabled_requested(enabled: bool)
 signal expansion_sets_enabled_requested(enabled: bool)
 signal expansion_set_requested(set_id: String, enabled: bool)
 signal cue_requested(cue_id: String)
@@ -94,6 +95,7 @@ var _cue_help: Label
 var _turn_banner_check: CheckBox
 var _sync_shop_check: CheckBox
 var _sync_shop_help: Label
+var _cue_shop_check: CheckBox
 
 
 func _ready():
@@ -102,6 +104,7 @@ func _ready():
 	_configure_mod_options_layout()
 	_ensure_expansion_toggles()
 	_ensure_sync_shop_toggle()
+	_ensure_cue_shop_toggle()
 	_ensure_cue_picker()
 	_ensure_turn_banner_toggle()
 	%Host.pressed.connect(func(): host_requested.emit())
@@ -201,6 +204,8 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 		%Rules.text = "Race to finish the run first. Each table has its own board and shared shop."
 	elif multiple_tables:
 		%Rules.text = "Highest score wins. Each table shares the same total shot allowance."
+	if not bool(state.get("cue_shop_enabled", true)):
+		%Rules.text += " Cue shop and cue perks are off for this run."
 	var local_player = _player(local_id)
 	var seated: bool = local_player.get("table", -1) >= 0
 	var ready: bool = local_player.get("ready", false)
@@ -466,6 +471,24 @@ func _ensure_sync_shop_toggle() -> void:
 	_fit_mod_options_child(_sync_shop_help)
 
 
+## PERF-026: retain one host-rule control and update it only when its state changes.
+func _ensure_cue_shop_toggle() -> void:
+	if is_instance_valid(_cue_shop_check):
+		return
+	_cue_shop_check = CheckBox.new()
+	_cue_shop_check.name = "CueShopEnabled"
+	_cue_shop_check.text = "Cue shop"
+	_cue_shop_check.focus_mode = Control.FOCUS_ALL
+	_cue_shop_check.set_pressed_no_signal(true)
+	_cue_shop_check.tooltip_text = (
+		"On by default. The host can disable the cue shop and cue perks for the entire run. "
+		+ "Your starting cue finish stays cosmetic. Locked once the match starts."
+	)
+	_cue_shop_check.toggled.connect(func(enabled): cue_shop_enabled_requested.emit(enabled))
+	%ModOptionsColumn.add_child(_cue_shop_check)
+	_fit_mod_options_child(_cue_shop_check)
+
+
 ## Additive ModOptions section: per-player cue cosmetics (Refs #20 / PERF-026).
 func _ensure_cue_picker() -> void:
 	if not _cue_buttons.is_empty():
@@ -678,6 +701,7 @@ func _input(event: InputEvent) -> void:
 func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> void:
 	_ensure_expansion_toggles()
 	_ensure_sync_shop_toggle()
+	_ensure_cue_shop_toggle()
 	_ensure_cue_picker()
 	_ensure_turn_banner_toggle()
 	# Vs / clone-table rounds are exclusive to Together All Nighter (PERF-026 path).
@@ -707,6 +731,7 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 		_fit_mod_options_child(_sync_shop_check)
 	if _sync_shop_help != null and is_instance_valid(_sync_shop_help):
 		_fit_mod_options_child(_sync_shop_help)
+	_fit_mod_options_child(_cue_shop_check)
 	if _turn_banner_check != null and is_instance_valid(_turn_banner_check):
 		_fit_mod_options_child(_turn_banner_check)
 	%MultiplayerBalls.set_pressed_no_signal(bool(state.get("multiplayer_balls", false)))
@@ -714,6 +739,19 @@ func _render_mod_options(state: Dictionary, is_host: bool, started: bool) -> voi
 	if _sync_shop_check != null:
 		_sync_shop_check.set_pressed_no_signal(bool(state.get("sync_shop", true)))
 		_sync_shop_check.disabled = not is_host or started
+	var cue_shop_enabled: bool = bool(state.get("cue_shop_enabled", true))
+	if _cue_shop_check.button_pressed != cue_shop_enabled:
+		_cue_shop_check.set_pressed_no_signal(cue_shop_enabled)
+	var cue_shop_locked = not is_host or started
+	if _cue_shop_check.disabled != cue_shop_locked:
+		_cue_shop_check.disabled = cue_shop_locked
+	var cue_help = (
+		"Free cosmetic finish. Buy and equip cues at the counter to the right of snacks."
+		if cue_shop_enabled
+		else "Free cosmetic finish. The cue shop and cue perks are off for this run."
+	)
+	if _cue_help.text != cue_help:
+		_cue_help.text = cue_help
 	var master: bool = bool(state.get("expansion_sets_enabled", false))
 	%ExpansionSetsEnabled.set_pressed_no_signal(master)
 	%ExpansionSetsEnabled.disabled = not is_host or started

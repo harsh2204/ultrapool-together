@@ -86,6 +86,12 @@ func _run_inventory(player_id: int):
 
 
 func _model_id_for(player_id: int) -> String:
+	if (
+		is_instance_valid(_controller)
+		and _controller.has_method("cue_shop_enabled")
+		and not _controller.cue_shop_enabled()
+	):
+		return CueModels.DEFAULT_ID
 	var inventory = _run_inventory(player_id)
 	if inventory != null and inventory.has_method("model_for"):
 		return str(inventory.model_for(player_id))

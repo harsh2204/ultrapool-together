@@ -1,6 +1,6 @@
 # Cue Workshop
 
-Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. The cue mechanics and Rook presentation have bounded Windows native functional evidence, including actual viewport animation frames. **Live multiplayer, macOS, performance and balance acceptance remain open.** Source v0.10.0 uses protocol 9 / UP9 rooms, so every player needs the same compatible build.
+Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. The cue mechanics and Rook presentation have bounded Windows native functional evidence, including actual viewport animation frames. **Live multiplayer, macOS, performance and balance acceptance remain open.** Source v0.10.0 uses protocol 10 / UP10 rooms, so every player needs the same compatible build.
 
 ## Location and interaction
 
@@ -13,6 +13,14 @@ The selected cue's paper placard contains a compact purchase/equip control and t
 The placard shows the cue name, effect, limits and action. The native inventory supplies the wallet display. Run ownership and free switching are explained in the action tooltip; idle shopping has no extra status prompt. Pending confirmation appears on the action, while rejection, blocked shopping and insufficient funds retain visible feedback.
 
 The composition fits narrower windows at resize boundaries while keeping Rook aligned with the counter and preserving the native inventory. Portrait windows use a smaller case above the inventory. Native geometry assertions pass at these sizes; actual narrow/portrait window rendering and readability remain pending.
+
+## Host lobby setting
+
+The host can turn **Cue shop** off in the lobby's **Mod settings** before starting a match. It is on by default. Changing the choice clears readiness; guests can inspect it but cannot change it, and the choice locks for the run. Returning to the same lobby preserves the choice; a fresh room starts with it on.
+
+With the option off, every table uses House cues without handling changes or scoring perks. The cue counter and its navigation controls are not constructed, and cue purchase/equip/finish requests are rejected without changing money or equipment. Personal starting finishes remain cosmetic and available. The setting is independent of shared shop access and multiplayer-ball drops; the balls, mixer and snack counters continue normally.
+
+The host sends the boolean in the frozen match configuration. Table leaders, guests and reconnecting peers use that same value; later lobby state cannot override it. Protocol 10 / UP10 rooms exclude earlier builds that would ignore the disabled rule.
 
 ## Ownership and economy
 

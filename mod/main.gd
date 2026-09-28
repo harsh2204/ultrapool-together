@@ -275,6 +275,9 @@ func _build_ui():
 	panel.sync_shop_requested.connect(
 		func(enabled): _lobby_request({"action": "sync_shop", "enabled": enabled})
 	)
+	panel.cue_shop_enabled_requested.connect(
+		func(enabled): _lobby_request({"action": "cue_shop_enabled", "enabled": enabled})
+	)
 	panel.expansion_sets_enabled_requested.connect(
 		func(enabled): _lobby_request({"action": "expansion_sets_enabled", "enabled": enabled})
 	)
@@ -422,7 +425,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.10.0 and a new UP9 room code.")
+		_status("Could not join. Everyone needs v0.10.0 and a new UP10 room code.")
 	_render_lobby()
 
 
@@ -554,6 +557,9 @@ func _apply_lobby_request(sender: int, message: Dictionary):
 		"sync_shop":
 			if message.get("enabled") is bool:
 				accepted = lobby_model.set_sync_shop(sender, message.enabled)
+		"cue_shop_enabled":
+			if message.get("enabled") is bool:
+				accepted = lobby_model.set_cue_shop_enabled(sender, message.enabled)
 		"expansion_sets_enabled":
 			if message.get("enabled") is bool:
 				accepted = lobby_model.set_expansion_sets_enabled(sender, message.enabled)
@@ -620,6 +626,7 @@ func _start_match(sender: int):
 	run_config = run_setup.capture_config(lobby_model.resolved_run_selection())
 	run_config["multiplayer_balls"] = bool(lobby_model.multiplayer_balls)
 	run_config["sync_shop"] = bool(lobby_model.sync_shop)
+	run_config["cue_shop_enabled"] = bool(lobby_model.cue_shop_enabled)
 	run_config["expansion_sets_enabled"] = bool(lobby_model.expansion_sets_enabled)
 	# Master-off defensively clears every set for registration/shop/rules.
 	run_config["expansion_sets"] = lobby_model.effective_expansion_sets()
@@ -669,6 +676,11 @@ func _start_match(sender: int):
 	_begin_table(run_config)
 
 
+## Frozen host rule: lobby edits cannot change a running table's cue economy.
+func cue_shop_enabled() -> bool:
+	return bool(run_config.get("cue_shop_enabled", true))
+
+
 func _begin_table(config: Dictionary):
 	if active or not lobby.get("started", false):
 		return
@@ -690,6 +702,7 @@ func _begin_table(config: Dictionary):
 	table_leader_id = _leader(table_id)
 	if table_id < 0 or table_leader_id == 0:
 		return
+	run_config = config.duplicate(true)
 	_set_panel(false)
 	turn_owner = table_leader_id
 	shot_number = 0
@@ -1263,7 +1276,8 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 	# PERF-013: validate the raw intent above, then apply host-owned handling once.
 	# Guests receive the identical effective vector for their shot-start prediction.
 	var raw_vector: Vector2 = vector
-	vector = CueModels.shot_vector(raw_vector, cue_inventory.model_for(player))
+	if cue_shop_enabled():
+		vector = CueModels.shot_vector(raw_vector, cue_inventory.model_for(player))
 	var starting_table = table_sync.capture()
 	# Validate before spending a shot: every guest must be able to accept its baseline.
 	if not table_sync.valid_capture(starting_table):
@@ -1846,13 +1860,13 @@ func _received(sender: int, message: Dictionary):
 			_status(message.get("reason", "The lobby is unavailable."))
 		"match_start":
 			if (
-				message.get("match") is int
+				not active
+				and message.get("match") is int
 				and message.match >= match_id
 				and message.get("config") is Dictionary
 			):
 				match_id = message.match
-				run_config = message.config
-				_begin_table(run_config)
+				_begin_table(message.config)
 		"match_stop":
 			if message.get("match") is int and message.match > match_id:
 				match_id = message.match
@@ -1949,7 +1963,7 @@ func _received_table(actor: int, message: Dictionary):
 			table_sync.begin_shot(message.vector)
 		last_started_turn = message.turn
 	elif kind == "state" and _valid_state(message, table_id):
-		if message.get("cues") is Dictionary:
+		if cue_shop_enabled() and message.get("cues") is Dictionary:
 			cue_inventory.apply_snapshot(message.cues)
 			shop_sync.refresh_cue_inventory(int(message.cues.revision))
 		latest_state = message

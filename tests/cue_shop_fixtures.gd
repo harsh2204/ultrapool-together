@@ -22,6 +22,13 @@ const SYNC_FIELDS = [
 	"_saved_finish",
 	"_continuing",
 	"_actions_blocked",
+	"_cue_shop_enabled",
+	"_tutorial_enabled",
+	"_tutorial_saved",
+	"_shared_sync_latched",
+	"_was_finished",
+	"_vote_hold",
+	"_exclusive_shopper",
 ]
 const VOTE_FIELDS = ["revision", "last_error", "_eligible", "_ready", "_context"]
 
@@ -176,6 +183,7 @@ func run_host(mod: Node, capture: Callable, check: Callable) -> void:
 	_check_confirmed(view, "finesse", "gold", "reopening preserves confirmed equipment", check)
 	check.call(sync.show_section("snacks"), "cue shop: reopened counter releases navigation")
 	_check_inactive(view, view._rack_tween, check)
+	await _check_disabled_session(mod, wire, capture, check, "host")
 	_restore(mod, saved, wire)
 
 
@@ -366,7 +374,170 @@ func run_guest(mod: Node, capture: Callable, check: Callable) -> void:
 		sync._state.money == delayed_shop.money and view._action.text == "Equip",
 		"cue shop: newer wallet reconciles while cue ownership and action stay current"
 	)
+	await _check_disabled_session(mod, wire, capture, check, "guest")
 	_restore(mod, saved, wire)
+
+
+func _check_disabled_session(
+	mod: Node, wire: Node, capture: Callable, check: Callable, role: String
+) -> void:
+	var sync = mod.shop_sync
+	var native = sync.native_shop()
+	var native_id: int = native.get_instance_id()
+	var old_rack_id: int = sync._cue_view.get_instance_id()
+	var native_art: Dictionary = sync._cue_art.duplicate(true)
+	var state: Dictionary = sync._authoritative_state.duplicate(true)
+	var cues: Dictionary = mod.cue_inventory.snapshot()
+	var finish: String = CuePrefs.cue_id()
+	var money: float = native.player_info.money
+	var prefix = "cue shop: " + role + " disabled session "
+	check.call(not native_art.is_empty(), prefix + "starts with extended counter artwork")
+	# Exercise the real session latch without destroying the native shop or guest
+	# context owned by the enclosing render fixture. The outer fixture restores all
+	# begin_session fields and the original frozen config/tutorial preference.
+	mod.run_config = mod.run_config.duplicate(true)
+	mod.run_config["cue_shop_enabled"] = false
+	sync.begin_session(mod)
+	check.call(not sync._cue_shop_enabled, prefix + "latches the frozen run setting")
+	state.section = "snacks"
+	state.focus = ""
+	if role == "host":
+		sync.capture()
+	else:
+		check.call(sync.apply_state(state), prefix + "hydrates ordinary shared shop state")
+	await _settle(mod)
+	check.call(
+		(
+			not is_instance_valid(sync._cue_view)
+			and not is_instance_valid(sync._cue_link)
+			and not is_instance_valid(sync._cue_shortcut)
+			and native.camera.get_node_or_null("TogetherCueShop") == null
+			and native.camera.get_node_or_null("TogetherMoveToCues") == null
+			and native.camera.get_node_or_null("TogetherCuesShortcut") == null
+		),
+		prefix + "constructs no rack or cue navigation controls"
+	)
+	check.call(sync._cue_art.is_empty(), prefix + "keeps no cue art extension")
+	for key in native_art:
+		var original: Dictionary = native_art[key]
+		var restored: bool = (
+			is_instance_valid(original.node)
+			and original.node.position.is_equal_approx(original.position)
+		)
+		if original.has("region"):
+			restored = restored and original.node.region_rect.is_equal_approx(original.region)
+		check.call(restored, prefix + "restores native artwork " + str(key))
+	check.call(not sync.show_section("cues"), prefix + "rejects cue counter navigation")
+	var before_packets: int = wire.packets.size()
+	var requests: Array = []
+	var remember_request = func(message): requests.append(message.duplicate(true))
+	sync.request.connect(remember_request)
+	for action in ["cue_buy", "cue_equip", "cue_finish"]:
+		var command = {
+			"action": action,
+			"model": "firm" if action == "cue_buy" else "house",
+			"finish": "native",
+			"scene": sync._state.scene,
+			"revision": sync._state.revision,
+		}
+		if role == "host":
+			for actor in [1, 2]:
+				check.call(
+					not sync.handle_request(command.duplicate(true), actor),
+					prefix + "rejects crafted " + action + " from actor " + str(actor)
+				)
+			check.call(
+				not sync._apply_cue_action(native, command.duplicate(true), wire.local_id()),
+				prefix + "guards direct " + action + " transaction application"
+			)
+		sync._submit(command.duplicate(true))
+		check.call(
+			(
+				mod.cue_inventory.snapshot() == cues
+				and native.player_info.money == money
+				and not sync._pending
+				and sync._pending_message.is_empty()
+			),
+			prefix + action + " preserves wallet/equipment and creates no pending transaction"
+		)
+	sync.request.disconnect(remember_request)
+	check.call(
+		requests.is_empty() and wire.packets.size() == before_packets,
+		prefix + "emits no cue request or transport packet"
+	)
+	# Even a newer valid cue slice is inert while the run disables cues.
+	var incoming: Dictionary = sync._authoritative_state.duplicate(true)
+	incoming.revision += 1
+	incoming.cues = cues.duplicate(true)
+	incoming.cues.revision += 1
+	for player in incoming.cues.players:
+		if not player.owned.has("firm"):
+			player.owned.append("firm")
+		player.equipped = "firm"
+		player.finish = "gold"
+	check.call(sync.apply_state(incoming), prefix + "accepts the ordinary shop snapshot")
+	check.call(
+		mod.cue_inventory.snapshot() == cues and CuePrefs.cue_id() == finish,
+		prefix + "ignores paid equipment and finish changes in a disabled cue snapshot"
+	)
+	for section in ["balls", "snacks"]:
+		check.call(sync.show_section(section), prefix + "can navigate to native " + section)
+		await _settle(mod)
+		check.call(sync.current_section() == section, prefix + "settles at native " + section)
+		var group = "offer:" if section == "balls" else "snack:"
+		var available = false
+		for key in sync._view_slots:
+			if str(key).begins_with(group):
+				var item = sync.slot_item(key)
+				if is_instance_valid(item) and sync._can_drag_item(item):
+					available = true
+					break
+		check.call(available, prefix + "retains native " + section + " item interaction")
+	check.call(
+		sync.native_shop().get_instance_id() == native_id,
+		prefix + "keeps the native shop instance and inventory"
+	)
+	await capture.call(
+		"cue-shop-" + role + "-disabled",
+		(
+			role.capitalize()
+			+ " · Cue shop off for this run · native snacks and wallet remain available."
+		)
+	)
+	mod.run_config["cue_shop_enabled"] = true
+	sync.begin_session(mod)
+	if role == "host":
+		sync.capture()
+	else:
+		state.cues = cues.duplicate(true)
+		check.call(sync.apply_state(state), prefix + "rehydrates the next enabled session")
+	await _settle(mod)
+	check.call(
+		(
+			sync._cue_shop_enabled
+			and is_instance_valid(sync._cue_view)
+			and sync._cue_view.get_instance_id() != old_rack_id
+			and is_instance_valid(sync._cue_link)
+			and is_instance_valid(sync._cue_shortcut)
+			and not sync._cue_art.is_empty()
+		),
+		prefix + "rebuilds the cue counter and links at the next enabled session"
+	)
+	check.call(sync.show_section("cues"), prefix + "can enter the re-enabled cue counter")
+	await _settle(mod)
+	check.call(
+		mod.cue_inventory.snapshot() == cues and native.player_info.money == money,
+		prefix + "leaves confirmed equipment and money intact across both boundaries"
+	)
+	if is_instance_valid(sync._cue_view):
+		_check_confirmed(
+			sync._cue_view,
+			mod.cue_inventory.model_for(wire.local_id()),
+			mod.cue_inventory.finish_for(wire.local_id()),
+			role + " re-enabled session restores the confirmed equipped display",
+			check
+		)
+	sync.show_section("snacks")
 
 
 func _capture_animation(mod: Node, view, capture: Callable, check: Callable) -> void:
@@ -897,6 +1068,8 @@ func _save(mod: Node) -> Dictionary:
 		"money": mod.shop_sync.native_shop().player_info.money,
 		"section": mod.shop_sync.current_section(),
 		"finish": CuePrefs.cue_id(),
+		"run_config": mod.run_config.duplicate(true),
+		"tutorial_enabled": mod.get_node("/root/TutorialManager").ENABLED,
 		"sync": {},
 		"vote": {},
 	}
@@ -909,6 +1082,8 @@ func _save(mod: Node) -> Dictionary:
 
 func _restore(mod: Node, saved: Dictionary, wire: Node) -> void:
 	var sync = mod.shop_sync
+	mod.run_config = saved.run_config
+	mod.get_node("/root/TutorialManager").ENABLED = saved.tutorial_enabled
 	sync.native_shop().player_info.money = saved.money
 	mod.cue_inventory.reset([])
 	mod.cue_inventory.apply_snapshot(saved.cues)

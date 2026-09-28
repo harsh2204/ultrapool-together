@@ -50,6 +50,8 @@ var _applied_nav: Dictionary = {}
 # Latched shared-shop flag (Refs #34). Exclusive shopper forces shared sync on.
 # Never flips while a shop view is open — refresh only at session start / shop close.
 var _shared_sync_latched = true
+# PERF-026/034: frozen per run; disabled shops never construct cue artwork or controls.
+var _cue_shop_enabled = true
 var _cue_view: Node2D
 var _cue_native: Node
 var _cue_link: Control
@@ -81,6 +83,7 @@ func begin_session(controller: Node):
 	HudPrefs.follow_shop_view_enabled()
 	_clear_cue_view()
 	_controller = controller
+	_cue_shop_enabled = bool(controller.run_config.get("cue_shop_enabled", true))
 	_cue_error = ""
 	_saved_finish = CuePrefs.cue_id()
 	_revision = 0
@@ -132,6 +135,7 @@ func end_session():
 	_queued_nav.clear()
 	_applied_nav.clear()
 	_shared_sync_latched = true
+	_cue_shop_enabled = true
 	_panel.hide()
 
 
@@ -438,6 +442,8 @@ func handle_request(message: Dictionary, actor: int = 0) -> bool:
 	if not message.get("revision") is int or not message.get("action") is String:
 		return _reject("Invalid shop action.")
 	var action: String = message.action
+	if action.begins_with("cue_") and not _cue_shop_enabled:
+		return _reject("The host disabled the cue shop for this run.")
 	if (
 		action == "ready"
 		and (not message.get("ready") is bool or not message.get("ready_generation") is int)
@@ -637,7 +643,12 @@ func apply_state(data: Dictionary) -> bool:
 	if data.get("revision", -1) < _authoritative_state.get("revision", -1):
 		return true
 	_authoritative_state = data.duplicate(true)
-	if data.has("cues") and _controller != null and _controller.get("cue_inventory") != null:
+	if (
+		_cue_shop_enabled
+		and data.has("cues")
+		and _controller != null
+		and _controller.get("cue_inventory") != null
+	):
 		_controller.cue_inventory.apply_snapshot(data.cues)
 		# Table state and shop replies have independent outer revisions. Keep
 		# presentation on the newest accepted cue revision too (PERF-010/035).
@@ -656,7 +667,8 @@ func apply_state(data: Dictionary) -> bool:
 ## path preserves local previews/focus and avoids snapshot copies in _process.
 func refresh_cue_inventory(revision: int) -> void:
 	if (
-		_controller == null
+		not _cue_shop_enabled
+		or _controller == null
 		or _controller.get("cue_inventory") == null
 		or not is_open()
 		or revision <= int(_state.get("cues", {}).get("revision", -1))
@@ -1309,6 +1321,8 @@ func _submit_item(action: String, source: String, target = ""):
 
 
 func _submit(message: Dictionary):
+	if str(message.get("action", "")).begins_with("cue_") and not _cue_shop_enabled:
+		return
 	if not is_open() or _pending or _controller.panel.visible or _controller.finished:
 		return
 	if _controller.is_spectating() or get_node("/root/UIManager").is_popup_open():
@@ -1426,6 +1440,8 @@ func _empty_prediction(slot: Dictionary):
 ## Cue purchases share the native wallet and the existing actor/revision gate.
 ## PERF-035/037: no client prices, ownership, or optimistic spending are trusted.
 func _apply_cue_action(shop, message: Dictionary, actor: int) -> bool:
+	if not _cue_shop_enabled:
+		return _reject("The host disabled the cue shop for this run.")
 	if (
 		not message.get("scene") is int
 		or message.scene != _state.get("scene")
@@ -1465,6 +1481,8 @@ func _save_confirmed_finish() -> void:
 ## The fourth counter shares the native ShopCamera content slider. Native's enum
 ## remains Balls/Cocktail/Tapas; only target_camera_x gains a fourth stop.
 func _ensure_cue_view() -> void:
+	if not _cue_shop_enabled:
+		return
 	if is_instance_valid(_cue_view) and _cue_view.get_parent() == _view.camera:
 		return
 	_clear_cue_view()
@@ -1576,6 +1594,8 @@ func _update_cue_layout() -> void:
 
 
 func _open_cues() -> bool:
+	if not _cue_shop_enabled:
+		return false
 	if not is_open() or not is_instance_valid(_cue_view) or not is_instance_valid(_view):
 		return false
 	if _nav_drag_active() or not _cue_controls_available():
@@ -1688,7 +1708,8 @@ func _clear_cue_view() -> void:
 
 func _cue_controls_available() -> bool:
 	return (
-		is_open()
+		_cue_shop_enabled
+		and is_open()
 		and is_instance_valid(_view)
 		and _view.is_open
 		and not _controller.panel.visible

@@ -334,6 +334,8 @@ func apply_table(data: Dictionary) -> void:
 					model_id = str(inventory.model_for(turn_owner))
 				if inventory.has_method("finish_for"):
 					finish_id = str(inventory.finish_for(turn_owner))
+			if controller.has_method("cue_shop_enabled") and not controller.cue_shop_enabled():
+				model_id = CueModels.DEFAULT_ID
 			CueVisuals.apply(player_ball, model_id, finish_id)
 		# Tint must not revive the packed rest-pose shaft (#18).
 		if not bool(player_ball.get("preparing_shot")) and player_ball.has_method("_hide_cue_pivot"):

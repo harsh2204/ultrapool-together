@@ -4,7 +4,7 @@ Native floor effects, energy projectiles, WORMHOLE pocket state, and catalogued 
 
 The supported native source is Ultrapool 0.15.7. Assets are read from the installed game; no native source or art is redistributed. Historical evidence below describes the exact revision tested, rather than verification of later additions.
 
-The optional `effects` and `visual_fx` fields originally preserved protocol 8 acceptance in v0.9.4; older leaders could not provide the descriptors and older clients ignored them. The current Cue Workshop build uses **v0.10.0 / protocol 9 / UP9**, so every participant must use that compatible build. Historical v0.9.4 evidence below remains specific to the revision tested.
+The optional `effects` and `visual_fx` fields originally preserved protocol 8 acceptance in v0.9.4; older leaders could not provide the descriptors and older clients ignored them. The current Cue Workshop build uses **v0.10.0 / protocol 10 / UP10**, so every participant must use that compatible build. Historical v0.9.4 evidence below remains specific to the revision tested.
 
 ## Coverage matrix
 

@@ -28,6 +28,8 @@ func setup(controller: Node) -> bool:
 
 func begin_session() -> void:
 	end_session()
+	if _controller == null or not _controller.cue_shop_enabled():
+		return
 	rules = Rules.new()
 	_active = true
 
