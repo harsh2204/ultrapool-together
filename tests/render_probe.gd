@@ -24,6 +24,7 @@ var native_aim = preload("native_aim_fixture.gd").new()
 var native_pocket = preload("native_pocket_fixture.gd").new()
 var native_effects = preload("native_table_effects_fixture.gd").new()
 var native_visual_fx = preload("native_visual_fx_fixture.gd").new()
+var cue_fixtures: RefCounted
 var fixture_config = {"deck": "1_CLASSIC", "difficulty": "diff_3", "seed": 24681}
 
 
@@ -69,6 +70,15 @@ func _run():
 		_finish()
 		return
 	round_flow = round_flow_script.new()
+	var cue_script = load(
+		get_script().resource_path.get_base_dir().path_join("cue_shop_fixtures.gd")
+	)
+	if not _check(
+		cue_script != null and cue_script.can_instantiate(), "compiled cue shop fixtures"
+	):
+		_finish()
+		return
+	cue_fixtures = cue_script.new()
 	var input_script = load(
 		get_script().resource_path.get_base_dir().path_join("shop_input_fixture.gd")
 	)
@@ -102,7 +112,10 @@ func _run():
 		"router_probe",
 		"controller_probe",
 		"transport_budget_probe",
-		"shop_layout_probe"
+		"shop_layout_probe",
+		"cue_models_probe",
+		"cue_inventory_probe",
+		"cue_effects_probe"
 	]:
 		_run_model_probe(probe)
 	_check_run_completion()
@@ -116,6 +129,18 @@ func _run():
 	)
 	await fixtures.check_native_run_votes(mod, _capture)
 	await fixtures.capture_all_menu(mod, _capture)
+	var collection_script = load(
+		get_script().resource_path.get_base_dir().path_join("multiplayer_collection_fixture.gd")
+	)
+	if not _check(
+		collection_script != null and collection_script.can_instantiate(),
+		"compiled multiplayer collection fixture"
+	):
+		_finish()
+		return
+	if not await collection_script.new().run(mod, _capture, _check):
+		_finish()
+		return
 	var global_node = get_node("/root/Global")
 	mod._local_id = 1
 	mod.table_leader_id = 1
@@ -148,6 +173,14 @@ func _run():
 	await native_effects.check_host(mod, game, _check, _capture)
 	await native_visual_fx.check_host(mod, game, _check, _capture)
 	await _capture("10-host-table", "Host table · the selected native Classic starting set")
+	var cue_native_script = load(
+		get_script().resource_path.get_base_dir().path_join("cue_native_fixtures.gd")
+	)
+	if _check(
+		cue_native_script != null and cue_native_script.can_instantiate(),
+		"compiled native cue fixtures"
+	):
+		await cue_native_script.new().run(mod, game, _capture, _check)
 	await fixtures.capture_table_states(mod, _capture)
 	var snapshot = mod.table_sync.capture()
 	var spectator_fixtures = (
@@ -170,6 +203,7 @@ func _run():
 		shop_report.store_string(JSON.stringify(shop_state, "\t"))
 		shop_report.close()
 		await fixtures.capture_shop_presence(mod, _capture, shop_input)
+		await cue_fixtures.run_host(mod, _capture, _check)
 		await round_flow.check_host_shop_drag(mod, _capture)
 		var shop_probe = (
 			load(get_script().resource_path.get_base_dir().path_join("shop_probe.gd")).new()
@@ -344,6 +378,7 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 	)
 	await round_flow.check_guest_snack_drag(mod, _capture)
 	await _capture_guest_negative_cubes(shop, game)
+	await cue_fixtures.run_guest(mod, _capture, _check)
 	mod.shop_sync.end_session()
 
 
@@ -567,15 +602,11 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 	await get_tree().process_frame
 	var button = shop.get_node_or_null("%CubesButton")
 	_check(button != null and button.visible, "guest CubesButton visible with NEGATIVE cubes")
-	var popup = shop.get_node_or_null("%CubesPopup")
-	if popup == null:
-		popup = shop.find_child("CubesPopup", true, false)
-	# Open through the native shop handler (and force the CanvasItem visible). Emitting
-	# CubesButton.pressed alone can leave shop.%CubesPopup hidden while another layer
-	# paints the grid — ensure_cubes_popup_textures then no-ops and cubes stay black.
-	if shop.has_method("_on_cubes_button_pressed"):
-		shop._on_cubes_button_pressed()
-	elif button != null and button.has_signal("pressed"):
+	# CubesPopup belongs to UIManager, not the shop. Resolve the actual popup
+	# opened by the button so teardown also releases its modal pause/input lock.
+	var ui = get_node("/root/UIManager")
+	var popup = ui.cubes_popup
+	if button != null and button.has_signal("pressed"):
 		button.pressed.emit()
 	if popup is CanvasItem:
 		popup.visible = true
@@ -597,10 +628,14 @@ func _capture_guest_negative_cubes(shop: Node, game) -> void:
 		"54-guest-negative-cubes",
 		"Guest shop · CubesPopup with two textured NEGATIVE cubes (not black silhouettes) and snack tickets."
 	)
-	if popup is CanvasItem:
-		popup.visible = false
-	if popup != null and popup.has_method("hide"):
-		popup.hide()
+	if popup != null:
+		popup.just_opened_or_closed = false
+		popup.instant_close_menu()
+	ui.update_pause()
+	_check(
+		not ui.is_popup_open() and not get_tree().paused,
+		"guest cube fixture closes the native popup and releases input"
+	)
 	# Restore inventory so later hover/drag fixtures keep native input unlocked.
 	game.player_info.cubes.assign(previous_cubes)
 	if shop.has_method("refresh_inventory_hud"):

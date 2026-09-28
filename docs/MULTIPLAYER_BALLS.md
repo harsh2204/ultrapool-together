@@ -2,16 +2,20 @@
 
 Opt-in lobby toggle (off by default). When enabled, eight balls may appear rarely in the shared shop — roughly one in six stocks or rerolls. The selected deck racks as-is; multiplayer balls are never injected into starting positions. Buying, selling, arranging, and mixing use the existing shared shop.
 
-| Ball | Effect |
-| --- | --- |
-| **Relay** | Touch it on one shot, then have a teammate pocket it on a later shot for **+50% ball value**. In Score PvP or at a solo table, any later shot qualifies. The first player's color marks the setup. |
-| **Called Shot** | The previous shooter clicks a pocket before the next shot. Pocketing the highlighted ball there on that shot earns **+100% ball value**. The call is visible to everyone at the table and expires when the shot ends. |
-| **Patience** | Survive a shot that hits any object ball to store **+25% ball value**, up to three charges. Visible pips show the stored bonus. Pocketing it pays the charges. |
-| **Bounty** | In Score PvP, pocketing it on the earliest completed shot earns **25 match points**. Compare shot counts across tables; tied tables each receive the full award after all tables finish. In Co-op and Race, pocket it within the match's first three shots for **10 run points**. One bounty per match. |
-| **Bankroll** | Bounce this ball off a cushion and pocket it on the same shot for **2 shared coins**. Once per table per round. |
-| **Lifeline** | Pocket it to recover **1 shared health**, up to the difficulty's normal maximum. Once per table per round. |
-| **Encore** | Pocket it after an ordinary ball to bring back the most recently pocketed eligible ball when movement settles. It returns to a free position and costs a normal shot to play again. Excludes multiplayer balls, passives, and fleeting balls. Once per table per round. |
-| **Domino** | Pocket it to give the **next ordinary ball pocketed on that same shot +100% ball value**. Once per table per round. |
+| Ball | Rarity | Level-one price | Effect |
+| --- | --- | ---: | --- |
+| **Relay** | Common | 3€ | Touch it on one shot, then have a teammate pocket it on a later shot for **+50% ball value**. In Score PvP or at a solo table, any later shot qualifies. The first player's color marks the setup. |
+| **Called Shot** | Common | 3€ | The previous shooter clicks a pocket before the next shot. Pocketing the highlighted ball there on that shot earns **+100% ball value**. The call is visible to everyone at the table and expires when the shot ends. |
+| **Patience** | Common | 3€ | Survive a shot that hits any object ball to store **+25% ball value**, up to three charges. Visible pips show the stored bonus. Pocketing it pays the charges. |
+| **Bounty** | Rare | 6€ | In Score PvP, pocketing it on the earliest completed shot earns **25 match points**. Compare shot counts across tables; tied tables each receive the full award after all tables finish. In Co-op and Race, pocket it within the match's first three shots for **10 run points**. One bounty per match. |
+| **Bankroll** | Uncommon | 4€ | Bounce this ball off a cushion and pocket it on the same shot for **2 shared coins**. Once per table per round. |
+| **Lifeline** | Rare | 6€ | Pocket it to recover **1 shared health**, up to the difficulty's normal maximum. Once per table per round. |
+| **Encore** | Legendary | 9€ | Pocket it after an ordinary ball to bring back the most recently pocketed eligible ball when movement settles. It returns to a free position and costs a normal shot to play again. Excludes multiplayer balls, passives, and fleeting balls. Once per table per round. |
+| **Domino** | Uncommon | 4€ | Pocket it to give the **next ordinary ball pocketed on that same shot +100% ball value**. Once per table per round. |
+
+The native collection always contains a **Together** set with all eight balls, even before discovery and while the multiplayer-ball option is off. Viewing it does not mark balls seen, change achievements, enable shop drops or add a starting deck. Native rarity colors and prices apply to each ball. The rarer tiers reflect shared health, match rewards and replay utility; the existing opt-in offer chance remains unchanged.
+
+Descriptions use the native highlighted-text formatter. Extra native helper panels explain teammate setup, called pockets, stored charges, match bounty and shared per-round limits where relevant. They share the native four-panel bound with ordinary keyword explanations and clear when inspecting another ball.
 
 Each ball has distinct Fal-generated art and native inspection text. To change a call, click another pocket. If several Called Shot balls are in play, click the ball first; matching highlights identify the ball and pocket.
 
@@ -20,3 +24,22 @@ Passing does not charge abilities, advance the bounty deadline, or create a new 
 The table host applies effects and shares their state with teammates. Ball trajectories still simulate locally on each player's machine. Ability state resets between rounds or matches; multiplayer runs start fresh from the lobby.
 
 Shop-only expansion sets (Phases, Morph, Tide, Relic, Tarot, Zodiac) follow the same opt-in pattern with separate lobby toggles. See [EXPANSION_SETS.md](EXPANSION_SETS.md). **Implemented, unmeasured.**
+
+## Collection integration and verification
+
+The `TOGETHER` resource set is registered at catalog startup for native 0.15.7 / mod 0.10.0. `multiplayer_collection.gd` adds one set section to the native balls collection list when the gallery becomes ready, using the existing rarity rows, slot inspection and scrolling. The section owns copies of exported slot arrays and mutable preview materials. It retains eight populated slots, centers the occupied rarity rows using the native ball size and spacing, and hides unused placeholders. The set label fits the native poster area and explains the shop-only option. Registration never appends to the native Play-menu's parallel option arrays; this is a collection set, not a starting deck.
+
+`multiplayer_info_display.gd` extends the existing inspector at its description-update boundary. Native keyword parsing runs first; at most two extra concepts per multiplayer resource fill unused panels, with four panels total. Native initialized fields and panel references survive script installation and restoration. Vanilla resources use the original parsing path. Host, guest and spectator presentation share these local resources; no new packet or authority field is introduced.
+
+Catalog artwork and the native page are created at lifecycle boundaries. There is no gallery polling, recurring filesystem access or tooltip panel construction. The native page clone and initial texture upload remain synchronous costs to measure under **PERF-026/027/030 and GAP-004**. Existing gameplay enablement, authoritative shop transactions, table effects and round reset rules are preserved.
+
+The shared native capture fixture checks always-visible entries while drops are disabled, all four rarities and native prices, unchanged discovery state, unchanged native tab navigation, idempotent registration, teardown/reopen and native/custom tooltip cleanup. Every ball has an inspection capture; actual ball, label and tooltip bounds are checked, including a mixed ball with four helpers. Live multiplayer, macOS, controller navigation and foreground frame timing remain separate acceptance work.
+
+
+## Native evidence
+
+Windows capture `20260927T121822Z-clean-cue-placard` at gameplay/fixture commit `9541e71` passed **2,797/2,797 checks**, including **610 collection checks**, and produced **90 native screenshots** plus **96 actual viewport animation frames**. One muted isolated process used the compatibility renderer, 1280×720, a 30 FPS cap and a 180-second watchdog. It exited normally in about 105 seconds with no script errors; normal saves and installed files were unchanged. Engine shutdown resource warnings remain.
+
+All eight ball inspections, native rarity prices and highlighted descriptions, the four-helper Bounty/Encore mix, level badges, label/ball/tooltip bounds, retained outline geometry, no-overlap checks, unchanged discovery records, native tabs/scrolling and close/reopen passed. Every individual tooltip and the mixed tooltip were visually reviewed. The final native rows are centered within the original set footprint. Cue probes passed 226 catalog/curve, 206 inventory and 209 effect checks, including mixed-price spending and the shared bonus budget. The final cue placard removes duplicate wallet text and idle prompts; the native inventory wallet remains. Pending confirmation stays on the action button, while rejection, blocked shopping and insufficient funds retain visible feedback. Host/guest transaction, preview and description/control-separation checks passed with the compact layout.
+
+This is native fixture rendering and callback evidence, not live networking or a foreground performance/balance measurement. Actual narrow/portrait rendering, macOS, controller hardware, simultaneous shoppers, delayed/reordered network updates and long-run balance remain open.

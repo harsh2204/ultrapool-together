@@ -77,6 +77,7 @@ func capture_config(selection: Dictionary = {}) -> Dictionary:
 func validate_config(config: Dictionary) -> bool:
 	if (
 		config.get("run_mode", "normal") != "normal"
+		or (config.has("cue_shop_enabled") and not config.cue_shop_enabled is bool)
 		or not config.get("deck") is String
 		or not config.get("difficulty") is String
 		or not config.get("seed") is int

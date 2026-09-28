@@ -183,6 +183,7 @@ func _initialize() -> void:
 	_check_clone_rounds_gate(model_script)
 	_check_expansion_master(model_script)
 	_check_sync_shop(model_script)
+	_check_cue_shop_enabled(model_script)
 	_check_custom_cues(model_script)
 	print("LOBBY_PROBE %s: %d checks" % ["PASS" if failures.is_empty() else "FAIL", checks])
 	for failure in failures:
@@ -488,6 +489,62 @@ func _check_sync_shop(model_script) -> void:
 	_check(lobby.start(10), "lobby can start with sync shop enabled")
 	_check(not lobby.set_sync_shop(10, false), "started match locks shop sync")
 	_check(lobby.sync_shop, "locked match preserves sync shop setting")
+
+
+func _check_cue_shop_enabled(model_script) -> void:
+	var lobby = model_script.new()
+	_check(lobby.cue_shop_enabled, "cue shop defaults on before setup")
+	lobby.setup(10, "Host")
+	lobby.add_player(20, "Partner")
+	lobby.choose_slot(20, 0, 1)
+	_configure(lobby)
+	_check(lobby.snapshot().cue_shop_enabled, "new lobby snapshots include cue shop enabled")
+	_ready_all(lobby)
+	var before: Dictionary = lobby.snapshot()
+	_check(not lobby.set_cue_shop_enabled(20, false), "guest cannot disable the cue shop")
+	_check(not lobby.set_cue_shop_enabled(999, false), "unknown actor cannot change the cue shop")
+	_check(lobby.snapshot() == before, "rejected cue shop requests preserve ready lobby state")
+	_check(lobby.set_cue_shop_enabled(10, true), "host can repeat the current cue shop choice")
+	_check(lobby.snapshot() == before, "unchanged cue shop choice preserves readiness and revision")
+	_check(lobby.set_cue_shop_enabled(10, false), "host can disable the cue shop")
+	_check(not lobby.snapshot().cue_shop_enabled, "snapshot reflects disabled cue shop")
+	_check(
+		lobby.revision == before.revision + 1
+		and lobby.ready_generation == before.ready_generation + 1
+		and not _find(lobby, 10).ready
+		and not _find(lobby, 20).ready,
+		"changed cue shop rule advances revision and clears every player's readiness"
+	)
+	_check(
+		not lobby.set_ready(20, true, before.ready_generation),
+		"delayed readiness cannot approve a changed cue shop rule"
+	)
+	var copied: Dictionary = lobby.snapshot()
+	copied.cue_shop_enabled = true
+	_check(not lobby.cue_shop_enabled, "cue shop snapshot does not mutate the lobby")
+	_check(lobby.set_cue(20, "emerald"), "disabled cue shop still allows a personal finish")
+	_check(_find(lobby, 20).cue == "emerald", "cosmetic finish survives with cue shop disabled")
+	_ready_all(lobby)
+	_check(lobby.start(10), "ready lobby can start with cue shop disabled")
+	before = lobby.snapshot()
+	_check(not lobby.set_cue_shop_enabled(10, true), "active match locks the cue shop rule")
+	_check(
+		not lobby.set_cue_shop_enabled(10, false),
+		"active match rejects even a repeated cue shop setting"
+	)
+	_check(lobby.snapshot() == before, "locked cue shop requests preserve the running match")
+	_check(lobby.reset_lobby(10, true), "completed run can reopen the lobby")
+	_check(
+		not lobby.cue_shop_enabled and not _find(lobby, 10).ready and not _find(lobby, 20).ready,
+		"reopened lobby keeps host cue shop choice and requires fresh readiness"
+	)
+	_check(lobby.set_cue_shop_enabled(10, true), "host can restore the cue shop before a new run")
+	_check(lobby.snapshot().cue_shop_enabled, "restored cue shop is reflected in snapshots")
+	lobby.set_cue_shop_enabled(10, false)
+	lobby.clear()
+	_check(lobby.cue_shop_enabled, "clearing a room restores the cue shop default")
+	lobby.setup(30, "New host")
+	_check(lobby.snapshot().cue_shop_enabled, "fresh room setup starts with the cue shop enabled")
 
 
 func _check_custom_cues(model_script) -> void:

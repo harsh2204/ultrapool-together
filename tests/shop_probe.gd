@@ -7,6 +7,7 @@ var _transaction_record: Callable
 
 class ShopController:
 	extends Node
+	var run_config: Dictionary = {}
 	var finished = false
 	var panel: Control
 	var table_id = 0

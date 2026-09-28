@@ -4,6 +4,8 @@ const PlayerInventory = preload("player_inventory_sync.gd")
 const TableSync = preload("table_sync.gd")
 const ReplicaFx = preload("replica_fx.gd")
 const CueCatalog = preload("cue_catalog.gd")
+const CueModels = preload("cue_models.gd")
+const CueVisuals = preload("cue_visuals.gd")
 const BallLevelFx = preload("ball_level_fx.gd")
 const ShotsPips = preload("shots_pips.gd")
 const TableEffectsView = preload("table_effects_view.gd")
@@ -102,6 +104,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	CueVisuals.restore(player_ball)
 	_fx.clear()
 	effects_view.dispose()
 	_visual_fx_view.clear()
@@ -310,13 +313,30 @@ func apply_table(data: Dictionary) -> void:
 				active_balls.append(body)
 			active_balls_include_untargetable.append(body)
 	_fx.finish_apply(present)
-	# CUSTOM CUES (#20): tint the guest replica cue for the current turn owner.
+	# Run-owned cue model/finish follows the authoritative turn owner.
 	if is_instance_valid(player_ball):
 		var controller = get_parent().get_parent() if get_parent() else null
 		if controller != null:
 			var lobby: Dictionary = controller.get("lobby") if controller.get("lobby") is Dictionary else {}
 			var turn_owner: int = int(controller.get("turn_owner"))
-			CueCatalog.apply(player_ball, CueCatalog.cue_for_player(lobby, turn_owner))
+			var model_id: String = CueModels.DEFAULT_ID
+			var finish_id: String = CueCatalog.cue_for_player(lobby, turn_owner)
+			var inventory = controller.get("cue_inventory")
+			var has_record = false
+			if is_instance_valid(inventory):
+				if inventory.has_method("has_player"):
+					has_record = bool(inventory.has_player(turn_owner))
+				elif inventory.has_method("player"):
+					var record = inventory.player(turn_owner)
+					has_record = record is Dictionary and not record.is_empty()
+			if has_record:
+				if inventory.has_method("model_for"):
+					model_id = str(inventory.model_for(turn_owner))
+				if inventory.has_method("finish_for"):
+					finish_id = str(inventory.finish_for(turn_owner))
+			if controller.has_method("cue_shop_enabled") and not controller.cue_shop_enabled():
+				model_id = CueModels.DEFAULT_ID
+			CueVisuals.apply(player_ball, model_id, finish_id)
 		# Tint must not revive the packed rest-pose shaft (#18).
 		if not bool(player_ball.get("preparing_shot")) and player_ball.has_method("_hide_cue_pivot"):
 			player_ball._hide_cue_pivot()
@@ -431,6 +451,8 @@ func _update_pockets(states: Array, locale_changed: bool = false) -> void:
 
 func _create_ball(state: Dictionary) -> void:
 	var body = (player_ball_scene if state.player else ball_scene).instantiate()
+	if state.player:
+		CueVisuals.remember(body)
 	if not state.player:
 		body.set_script(
 			load(get_script().resource_path.get_base_dir().path_join("replica_ball.gd"))

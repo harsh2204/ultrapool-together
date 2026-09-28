@@ -1,6 +1,6 @@
 extends Node
 
-const VERSION = "0.9.5"
+const VERSION = "0.10.0"
 const GAME_VERSION = "0.15.7"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
@@ -16,6 +16,9 @@ const HUD_TINTS = {
 const CrtStack = preload("crt_stack.gd")
 const UiNav = preload("ui_nav.gd")
 const CuePrefs = preload("cue_prefs.gd")
+const CueInventory = preload("cue_inventory.gd")
+const CueModels = preload("cue_models.gd")
+const CueVisuals = preload("cue_visuals.gd")
 const HudPrefs = preload("hud_prefs.gd")
 const TurnBanner = preload("turn_banner.gd")
 const TableEffects = preload("table_effects_sync.gd")
@@ -32,6 +35,7 @@ var run_controls: Node
 var multiplayer_balls: Node
 var expansion_balls: Node
 var set_voting: Node
+var cue_effects: Node
 var bounty_race: Script
 var lobby_model: RefCounted
 var router: RefCounted
@@ -47,6 +51,7 @@ var _turn_banner_showing: bool = false
 var _hud_layer: CanvasLayer
 var _queued_ui_nav: Dictionary = {}
 var _applied_ui_nav: Dictionary = {}
+var cue_inventory = CueInventory.new()
 
 var supported = true
 var active = false
@@ -122,6 +127,8 @@ func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_native_ui = get_node("/root/UIManager")
 	var base = get_script().resource_path.get_base_dir()
+	# PERF-027: loose PNG decoding stays at startup, never on turn/snapshot paths.
+	CueVisuals.warm(base.path_join("assets/cues"))
 	lobby_model = load(base.path_join("lobby_state.gd")).new()
 	router = load(base.path_join("table_router.gd")).new()
 	transport = load(base.path_join("transport.gd")).new()
@@ -135,6 +142,7 @@ func _ready():
 	multiplayer_balls = load(base.path_join("multiplayer_balls.gd")).new()
 	expansion_balls = load(base.path_join("expansion_balls.gd")).new()
 	set_voting = load(base.path_join("set_voting.gd")).new()
+	cue_effects = load(base.path_join("cue_effects.gd")).new()
 	bounty_race = load(base.path_join("bounty_race.gd"))
 	for service in [
 		transport,
@@ -147,7 +155,8 @@ func _ready():
 		expansion_balls,
 		spectator,
 		run_controls,
-		set_voting
+		set_voting,
+		cue_effects
 	]:
 		add_child(service)
 	_build_ui()
@@ -155,6 +164,7 @@ func _ready():
 	spectator.watch_changed.connect(_watch_changed)
 	run_controls.setup(self)
 	set_voting.setup(self)
+	cue_effects.setup(self)
 	if not multiplayer_balls.setup(self):
 		supported = false
 		_status("Multiplayer ball art is missing. Reinstall the complete mod package.")
@@ -264,6 +274,9 @@ func _build_ui():
 	)
 	panel.sync_shop_requested.connect(
 		func(enabled): _lobby_request({"action": "sync_shop", "enabled": enabled})
+	)
+	panel.cue_shop_enabled_requested.connect(
+		func(enabled): _lobby_request({"action": "cue_shop_enabled", "enabled": enabled})
 	)
 	panel.expansion_sets_enabled_requested.connect(
 		func(enabled): _lobby_request({"action": "expansion_sets_enabled", "enabled": enabled})
@@ -412,7 +425,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.8 or v0.9 and a new UP8 room code.")
+		_status("Could not join. Everyone needs v0.10.0 and a new UP10 room code.")
 	_render_lobby()
 
 
@@ -544,6 +557,9 @@ func _apply_lobby_request(sender: int, message: Dictionary):
 		"sync_shop":
 			if message.get("enabled") is bool:
 				accepted = lobby_model.set_sync_shop(sender, message.enabled)
+		"cue_shop_enabled":
+			if message.get("enabled") is bool:
+				accepted = lobby_model.set_cue_shop_enabled(sender, message.enabled)
 		"expansion_sets_enabled":
 			if message.get("enabled") is bool:
 				accepted = lobby_model.set_expansion_sets_enabled(sender, message.enabled)
@@ -610,6 +626,7 @@ func _start_match(sender: int):
 	run_config = run_setup.capture_config(lobby_model.resolved_run_selection())
 	run_config["multiplayer_balls"] = bool(lobby_model.multiplayer_balls)
 	run_config["sync_shop"] = bool(lobby_model.sync_shop)
+	run_config["cue_shop_enabled"] = bool(lobby_model.cue_shop_enabled)
 	run_config["expansion_sets_enabled"] = bool(lobby_model.expansion_sets_enabled)
 	# Master-off defensively clears every set for registration/shop/rules.
 	run_config["expansion_sets"] = lobby_model.effective_expansion_sets()
@@ -659,6 +676,11 @@ func _start_match(sender: int):
 	_begin_table(run_config)
 
 
+## Frozen host rule: lobby edits cannot change a running table's cue economy.
+func cue_shop_enabled() -> bool:
+	return bool(run_config.get("cue_shop_enabled", true))
+
+
 func _begin_table(config: Dictionary):
 	if active or not lobby.get("started", false):
 		return
@@ -680,6 +702,7 @@ func _begin_table(config: Dictionary):
 	table_leader_id = _leader(table_id)
 	if table_id < 0 or table_leader_id == 0:
 		return
+	run_config = config.duplicate(true)
 	_set_panel(false)
 	turn_owner = table_leader_id
 	shot_number = 0
@@ -707,6 +730,9 @@ func _begin_table(config: Dictionary):
 	_clear_spawn_barrier()
 	presence.clear()
 	active = true
+	cue_inventory.reset(_members(table_id))
+	if cue_effects != null:
+		cue_effects.begin_session()
 	if bool(lobby.get("multiplayer_balls", config.get("multiplayer_balls", false))):
 		multiplayer_balls.begin_session()
 	else:
@@ -789,7 +815,10 @@ func _end_table():
 	shop_sync.end_session()
 	multiplayer_balls.end_session()
 	expansion_balls.end_session()
+	if cue_effects != null:
+		cue_effects.end_session()
 	adapter.end_session()
+	cue_inventory.reset([])
 	_queued_ui_nav.clear()
 	_applied_ui_nav.clear()
 	if turn_banner != null:
@@ -1244,6 +1273,11 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		return false
 	if multiplayer_balls != null and multiplayer_balls.blocks_shot_input():
 		return false
+	# PERF-013: validate the raw intent above, then apply host-owned handling once.
+	# Guests receive the identical effective vector for their shot-start prediction.
+	var raw_vector: Vector2 = vector
+	if cue_shop_enabled():
+		vector = CueModels.shot_vector(raw_vector, cue_inventory.model_for(player))
 	var starting_table = table_sync.capture()
 	# Validate before spending a shot: every guest must be able to accept its baseline.
 	if not table_sync.valid_capture(starting_table):
@@ -1259,7 +1293,16 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		func():
 			if not multiplayer_balls.begin_shot(used_shots + 1, player):
 				return false
-			return expansion_balls.begin_shot(used_shots + 1, player)
+			if not expansion_balls.begin_shot(used_shots + 1, player):
+				return false
+			if cue_effects != null and not cue_effects.begin_shot(used_shots + 1, player, raw_vector):
+				# Other rules already admitted this shot. Optional cue perks cannot
+				# strand their pending state by rejecting it afterward. Unexpected
+				# adapter failure disables perks until the next run, preventing a
+				# cleared round budget from being reused, while native play continues.
+				cue_effects.end_session()
+				push_warning("[Together] Cue perks disabled for this run: unsupported shot state.")
+			return true
 	):
 		return false
 	shot_pending = true
@@ -1280,6 +1323,8 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 
 
 func _finish_shot():
+	if cue_effects != null:
+		cue_effects.finish_shot()
 	multiplayer_balls.finish_shot()
 	expansion_balls.finish_shot()
 	total_score += maxf(0.0, adapter.shot_score() - shot_start_score)
@@ -1486,7 +1531,7 @@ func _result_text() -> String:
 ## Additive wire fields — shop_sync validation allows extras so we avoid editing
 ## shop_sync.gd while PR #35 is in flight. Cleared when shop closes (open:false).
 func _annotate_shop_counters(shop_state: Dictionary) -> Dictionary:
-	if shop_state.is_empty() or not bool(shop_state.get("open", false)):
+	if not is_inside_tree() or shop_state.is_empty() or not bool(shop_state.get("open", false)):
 		return shop_state
 	# Probe fixtures and early boot lack /root/Global; skip annotation so the
 	# publish path still advances last_shop_state (PERF-010). native_shop falls
@@ -1525,6 +1570,7 @@ func _publish_state(
 			"bounty_shot": multiplayer_balls.bounty_shot(),
 			"multiplayer_balls": multiplayer_balls.capture(),
 			"expansion_balls": expansion_balls.capture(),
+			"cues": cue_inventory.snapshot(),
 			"clone_round": CloneRound.snapshot(
 				_clone_instances, _clone_active, _clone_winner, _clone_shop_armed
 			),
@@ -1558,6 +1604,7 @@ func _publish_state(
 		finished,
 		multiplayer_balls.display_signature(balls_state),
 		expansion_balls.display_signature(expansion_state),
+		latest_state.get("cues", {}),
 		UiNav.signature(ui_nav)
 	]
 	if target != 0 or state_sig != _last_state_sig:
@@ -1813,13 +1860,13 @@ func _received(sender: int, message: Dictionary):
 			_status(message.get("reason", "The lobby is unavailable."))
 		"match_start":
 			if (
-				message.get("match") is int
+				not active
+				and message.get("match") is int
 				and message.match >= match_id
 				and message.get("config") is Dictionary
 			):
 				match_id = message.match
-				run_config = message.config
-				_begin_table(run_config)
+				_begin_table(message.config)
 		"match_stop":
 			if message.get("match") is int and message.match > match_id:
 				match_id = message.match
@@ -1916,6 +1963,9 @@ func _received_table(actor: int, message: Dictionary):
 			table_sync.begin_shot(message.vector)
 		last_started_turn = message.turn
 	elif kind == "state" and _valid_state(message, table_id):
+		if cue_shop_enabled() and message.get("cues") is Dictionary:
+			cue_inventory.apply_snapshot(message.cues)
+			shop_sync.refresh_cue_inventory(int(message.cues.revision))
 		latest_state = message
 		turn_owner = message.turn_owner
 		shot_number = message.turn
@@ -2039,6 +2089,10 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 	):
 		return false
 	if message.has("ui_nav") and not UiNav.valid(message.ui_nav):
+		return false
+	if message.has("cues") and (
+		not message.cues is Dictionary or not CueInventory.valid_snapshot(message.cues)
+	):
 		return false
 	return (
 		_number(message.get("score"))

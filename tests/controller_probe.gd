@@ -6,7 +6,7 @@ class TransportStub:
 	var is_host = false
 	var id = 20
 	var coordinator = 10
-	var room_code = "UP8-test"
+	var room_code = "UP10-test"
 	var sent: Array = []
 	var on_send: Callable
 
@@ -50,6 +50,7 @@ class AdapterStub:
 	var ended = 0
 	var ready_to_shoot = false
 	var accepted_shots = 0
+	var last_vector = Vector2.ZERO
 	var state = {
 		"available": false,
 		"table_active": false,
@@ -70,12 +71,13 @@ class AdapterStub:
 	func can_shoot() -> bool:
 		return ready_to_shoot
 
-	func shoot(_vector: Vector2, accepted: Callable = Callable()) -> bool:
+	func shoot(vector: Vector2, accepted: Callable = Callable()) -> bool:
 		if not ready_to_shoot:
 			return false
 		if accepted.is_valid() and not accepted.call():
 			return false
 		accepted_shots += 1
+		last_vector = vector
 		return true
 
 	func score() -> float:
@@ -316,6 +318,7 @@ func _initialize() -> void:
 	_targeted_shop_sync()
 	_shop_capture_reuse_after_send()
 	_rejected_shots_preserve_turn_state()
+	_cue_shop_run_setting()
 	_topology_keyframes()
 	_first_shot_phase_order()
 	_race_and_score_limits()
@@ -752,6 +755,66 @@ func _rejected_shots_preserve_turn_state():
 	)
 	_check(controller.adapter.accepted_shots == 2, "next turn executes exactly one native shot")
 	controller.free()
+
+
+func _cue_shop_run_setting():
+	var defaults = _controller()
+	defaults.lobby["cue_shop_enabled"] = false
+	_check(defaults.cue_shop_enabled(), "missing frozen setting preserves the default enabled shop")
+	defaults.run_config = {"cue_shop_enabled": false}
+	defaults.lobby.cue_shop_enabled = true
+	_check(not defaults.cue_shop_enabled(), "a lobby update cannot enable cues in a disabled run")
+	defaults.active = true
+	defaults.shot_number = 3
+	defaults._received(defaults.transport.host_id(), {
+		"kind": "match_start", "match": defaults.match_id,
+		"config": {"cue_shop_enabled": true}
+	})
+	_check(
+		not defaults.cue_shop_enabled() and defaults.shot_number == 3
+		and defaults.run_setup.validations == 0,
+		"a repeated match start cannot replace the active run's frozen cue rule or turn"
+	)
+	defaults.run_config.cue_shop_enabled = true
+	defaults.lobby.cue_shop_enabled = false
+	_check(defaults.cue_shop_enabled(), "a lobby update cannot disable cues in an enabled run")
+	defaults.free()
+	var raw_vector = Vector2(80, 60)
+	for enabled in [false, true]:
+		var controller = _controller()
+		controller.active = true
+		controller.adapter.ready_to_shoot = true
+		controller.run_config = {"cue_shop_enabled": enabled}
+		controller.lobby["cue_shop_enabled"] = not enabled
+		controller.cue_inventory.reset(controller._members(controller.table_id))
+		var purchase: Dictionary = controller.cue_inventory.transact(
+			20, "cue_buy", "finesse", "gold", 50.0
+		)
+		_check(purchase.accepted, "the shot fixture contains retained non-House equipment")
+		_check(controller._take_shot(20, raw_vector, 0), "the frozen cue rule permits a valid native shot")
+		var effective: Vector2 = controller.adapter.last_vector
+		if enabled:
+			_check(
+				not effective.is_equal_approx(raw_vector)
+				and effective.normalized().is_equal_approx(raw_vector.normalized()),
+				"enabled Finesse changes pull strength without changing shot direction"
+			)
+		else:
+			_check(effective == raw_vector, "disabled cues ignore retained Finesse and preserve native strength")
+		_check(
+			controller.cue_inventory.finish_for(20) == "gold",
+			"disabling gameplay changes does not erase the player's cosmetic finish"
+		)
+		var shots: Array = []
+		for frame in controller.transport.sent:
+			var payload: Dictionary = frame.message.get("payload", {})
+			if payload.get("kind") == "shot_start":
+				shots.append(payload)
+		_check(
+			shots.size() == 1 and shots[0].vector == effective,
+			"the single reliable shot start carries exactly the native adapter's effective vector"
+		)
+		controller.free()
 
 
 func _topology_keyframes():

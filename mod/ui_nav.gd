@@ -5,7 +5,7 @@ extends RefCounted
 ## screen / shop counter everyone should be looking at.
 
 const PLACES := ["lobby", "table", "shop", "snack_bar", "set_vote"]
-const SHOP_SECTIONS := ["balls", "mix", "snacks"]
+const SHOP_SECTIONS := ["balls", "mix", "snacks", "cues"]
 
 
 static func host_place(controller: Node) -> String:
