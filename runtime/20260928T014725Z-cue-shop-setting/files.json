@@ -1,0 +1,32 @@
+[
+  {
+    "name": "complete-native-gallery.zip",
+    "bytes": 50428925,
+    "sha256": "19d2a3978ce781add09902fb64b8ed6fcca297438b8c9be3b227de2424594941"
+  },
+  {
+    "name": "cue-shop-guest-disabled.png",
+    "bytes": 449353,
+    "sha256": "4947539c24e7cdfb24d1e44a25d09027490422340e3595117d854b91e5354cc9"
+  },
+  {
+    "name": "cue-shop-host-disabled.png",
+    "bytes": 451002,
+    "sha256": "fd5dd9ec121e461de4dcdde0748e57d398e980582ea724a0ec4525275c83206d"
+  },
+  {
+    "name": "lobby-cue-shop-disabled.png",
+    "bytes": 976330,
+    "sha256": "e4d36b1012568ea0d85a7a5339427dc6f8dcc12c6dc7f59651b212fe59ad3f4d"
+  },
+  {
+    "name": "README.md",
+    "bytes": 1616,
+    "sha256": "4ea8837e89f03493a6a54e3bd868194f973bd89d1e523068f83389677bbb9581"
+  },
+  {
+    "name": "verification.json",
+    "bytes": 818,
+    "sha256": "d05a57e23dad1349b9e82d1eb5887f5446ad7b6234cb363df56b3916036a0759"
+  }
+]
