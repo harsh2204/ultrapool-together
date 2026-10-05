@@ -60,6 +60,18 @@ func _run():
 	get_node("/root/CloudSaveManager").backend = null
 	get_node("/root/TutorialManager").ENABLED = false
 	Engine.max_fps = 30
+	if "--lobby-only" in args:
+		if not _check(await _wait(_menu_capture_ready), "native menu ready for lobby preview"):
+			_finish()
+			return
+		fixtures = load(
+			get_script().resource_path.get_base_dir().path_join("render_ui_fixtures.gd")
+		).new()
+		await fixtures.capture_lobby_preview(mod, _capture)
+		for result in fixtures.checks:
+			_check(result.passed, result.name)
+		_finish()
+		return
 	var round_flow_script = load(
 		get_script().resource_path.get_base_dir().path_join("round_flow_fixtures.gd")
 	)

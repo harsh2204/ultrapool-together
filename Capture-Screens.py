@@ -123,10 +123,13 @@ def prepare_app(source, runtime, source_root, profile_name):
     return copied
 
 
-def command_for(app, output):
-    return [str(app / MAC.EXECUTABLE), "--resolution", "1280x720", "--single-window",
-            "--rendering-method", "gl_compatibility", "--audio-driver", "Dummy",
-            "--max-fps", "30", "--disable-vsync", "--", "--output", str(output)]
+def command_for(app, output, lobby_only=False):
+    arguments = [str(app / MAC.EXECUTABLE), "--resolution", "1280x720", "--single-window",
+                 "--rendering-method", "gl_compatibility", "--audio-driver", "Dummy",
+                 "--max-fps", "30", "--disable-vsync", "--", "--output", str(output)]
+    if lobby_only:
+        arguments.append("--lobby-only")
+    return arguments
 
 
 def native_environment(output):
@@ -158,7 +161,8 @@ def stop_process(process):
     return process.poll() is not None
 
 
-def capture(game_path=None, output_path=None, timeout_seconds=180, *, source_root=ROOT, user_data_root=None):
+def capture(game_path=None, output_path=None, timeout_seconds=180, *, lobby_only=False,
+            source_root=ROOT, user_data_root=None):
     if not 30 <= timeout_seconds <= 300:
         raise ValueError("Timeout must be between 30 and 300 seconds.")
     app = MAC.inspect_game(game_path or MAC.find_game())
@@ -180,6 +184,7 @@ def capture(game_path=None, output_path=None, timeout_seconds=180, *, source_roo
     profile_name = "UltrapoolTogetherRenderTest-" + run_id
     report = {
         "started_at": timestamp(), "status": "running", "platform": "macos",
+        "capture_scope": "lobby" if lobby_only else "all",
         "renderer": "gl_compatibility", "resolution": "1280x720", "max_fps": 30,
         "audio_driver": "Dummy", "background": True, "requested_window_mode": "minimized_no_focus",
         "native_environment": None,
@@ -204,7 +209,7 @@ def capture(game_path=None, output_path=None, timeout_seconds=180, *, source_roo
             runtime = Path(tempfile.mkdtemp(prefix="UltrapoolTogetherRenderTest-")).resolve()
             report["runtime_directory"] = str(runtime)
             copied = prepare_app(app, runtime, source_root, profile_name)
-            arguments = command_for(copied, output)
+            arguments = command_for(copied, output, lobby_only=lobby_only)
             report["arguments"] = arguments[1:]
             environment = dict(os.environ, __CFBundleIdentifier=BUNDLE_ID)
             MAC.assert_game_closed()
@@ -275,6 +280,7 @@ def main():
     parser.add_argument("--game-path", help="Steam game directory or Ultrapool.app")
     parser.add_argument("--output-path", help="New directory for screenshots, gallery and runner.json")
     parser.add_argument("--timeout-seconds", type=int, default=180, help="Watchdog, 30–300 seconds (default: 180)")
+    parser.add_argument("--lobby-only", action="store_true", help="Capture only the lobby home and eight-player layout")
     options = vars(parser.parse_args())
     if sys.platform != "darwin":
         parser.error("This harness requires macOS. Use Capture-Screens.cmd on Windows.")

@@ -3,7 +3,8 @@ param(
     [string]$GamePath,
     [string]$OutputPath,
     [ValidateRange(30, 300)]
-    [int]$TimeoutSeconds = 180
+    [int]$TimeoutSeconds = 180,
+    [switch]$LobbyOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -133,6 +134,7 @@ RenderProbe="*$sourceRoot/tests/render_probe.gd"
     $report = [ordered]@{
         started_at = [DateTime]::UtcNow.ToString('o')
         status = 'running'
+        capture_scope = $(if ($LobbyOnly) { 'lobby' } else { 'all' })
         renderer = 'gl_compatibility'
         audio_driver = 'Dummy'
         muted = $true
@@ -152,6 +154,7 @@ RenderProbe="*$sourceRoot/tests/render_probe.gd"
         game_files_unchanged = $false
     }
     $arguments = '--audio-driver Dummy --windowed --resolution 1280x720 --rendering-method gl_compatibility --max-fps 30 --disable-vsync -- --output "' + $outputRoot + '"'
+    if ($LobbyOnly) { $arguments += ' --lobby-only' }
     $process = Start-Process -FilePath (Join-Path $runtimeRoot 'game.exe') -WorkingDirectory $runtimeRoot -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     $null = $process.Handle
     $report.process_id = $process.Id

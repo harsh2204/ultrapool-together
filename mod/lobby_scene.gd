@@ -56,7 +56,8 @@ const DIFFICULTY_ROW_WIDTH = 404
 const CHALK_TRACK = Color(0, 0, 0, 0.22)
 const CHALK_GRABBER = Color(0.95, 0.93, 0.89, 0.55)
 const CHALK_GRABBER_HOVER = Color(0.95, 0.93, 0.89, 0.8)
-const HEADER_PLANK_GROW = Vector2(18, 8)
+const HEADER_PLANK_MARGIN_X = 18
+const HEADER_PLANK_HEIGHT = 64
 const PLAYER_CHIP_SIZE = Vector2(20, 20)
 const TABLE_COLORS = [
 	Color("35d5ab"),
@@ -89,6 +90,7 @@ var _vote_catalogs: Dictionary = {}
 var _vote_buttons: Dictionary = {}
 var _vote_groups: Dictionary = {}
 var _header_plank: Panel
+var _header_plank_queued = false
 var _expansion_checks: Dictionary = {}
 var _mod_options_open = false
 var _cue_buttons: Dictionary = {}
@@ -1300,7 +1302,8 @@ func _apply_skin(palette: Theme) -> void:
 	_header_plank.add_theme_stylebox_override("panel", skin.style("header_plank"))
 	add_child(_header_plank)
 	move_child(_header_plank, 1)
-	$Margin/Layout/Header.item_rect_changed.connect(_place_header_plank)
+	for control in [$Margin, $Margin/Layout, $Margin/Layout/Header]:
+		control.item_rect_changed.connect(_queue_header_plank)
 	var brand = $Margin/Layout/Header/Brand
 	brand.get_node("Title").visible = false
 	brand.get_node("Together").visible = false
@@ -1309,7 +1312,7 @@ func _apply_skin(palette: Theme) -> void:
 	logo.texture = skin.texture("logo")
 	logo.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	logo.custom_minimum_size = Vector2(0, 52)
+	logo.custom_minimum_size = Vector2(0, 108)
 	logo.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	logo.tooltip_text = "Ultrapool Together"
 	brand.add_child(logo)
@@ -1325,12 +1328,30 @@ func inlay_rect() -> Rect2:
 	return Rect2(origin + BACKDROP_INLAY.position * shown, BACKDROP_INLAY.size * shown)
 
 
+func _queue_header_plank() -> void:
+	if _header_plank_queued:
+		return
+	_header_plank_queued = true
+	_flush_header_plank.call_deferred()
+
+
+func _flush_header_plank() -> void:
+	_header_plank_queued = false
+	_place_header_plank()
+
+
 func _place_header_plank() -> void:
 	if _header_plank == null:
 		return
 	var header: Control = $Margin/Layout/Header
-	_header_plank.position = header.global_position - global_position - HEADER_PLANK_GROW
-	_header_plank.size = header.size + HEADER_PLANK_GROW * 2
+	# Container notifications can arrive while ancestor global transforms are stale.
+	# These controls share the lobby's local space; avoid that transient offset.
+	# The board is decorative: keep it slim while the larger logo overhangs it.
+	_header_plank.position = (
+		$Margin.position + $Margin/Layout.position + header.position
+		+ Vector2(-HEADER_PLANK_MARGIN_X, (header.size.y - HEADER_PLANK_HEIGHT) * 0.5)
+	)
+	_header_plank.size = Vector2(header.size.x + HEADER_PLANK_MARGIN_X * 2, HEADER_PLANK_HEIGHT)
 
 
 func _chalk_bar(color: Color) -> StyleBoxFlat:

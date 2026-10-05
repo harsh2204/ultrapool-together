@@ -101,6 +101,8 @@ class MacCaptureTests(unittest.TestCase):
         self.assertEqual(self.popen.call_count, 1)
         report = self.report()
         self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["capture_scope"], "all")
+        self.assertNotIn("--lobby-only", self.popen.call_args.args[0])
         self.assertTrue(report["probe_passed"])
         self.assertTrue(report["process_stopped"])
         self.assertTrue(report["runtime_removed"])
@@ -119,6 +121,20 @@ class MacCaptureTests(unittest.TestCase):
         self.assertEqual(CAPTURE.tree_hashes(self.app), self.before)
         self.assertEqual(self.save.read_text(), "original save")
         self.assertFalse(list(self.output.glob(".runtime-*")))
+
+    def test_lobby_only_forwards_user_argument_and_records_scope(self):
+        self.run_capture(lobby_only=True)
+        arguments = self.popen.call_args.args[0]
+        self.assertEqual(self.popen.call_count, 1)
+        self.assertEqual(arguments[arguments.index("--") + 1:],
+                         ["--output", str(self.output), "--lobby-only"])
+        report = self.report()
+        self.assertEqual(report["capture_scope"], "lobby")
+        self.assertEqual(report["status"], "passed")
+        self.assertTrue(report["saves_unchanged"])
+        self.assertTrue(report["game_files_unchanged"])
+        self.assertTrue(report["process_stopped"])
+        self.assertTrue(report["runtime_removed"])
 
     def test_timeout_stops_its_process_and_keeps_failure_report(self):
         self.process = FakeProcess(running=True)

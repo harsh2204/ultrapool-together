@@ -472,6 +472,64 @@ func _pressed_choices(panel: Control, field: String, state: Dictionary) -> Array
 	return choices
 
 
+## Small visual preview using the same isolation, layout and capture path.
+func capture_lobby_preview(mod: Node, capture: Callable) -> void:
+	var saved = _save(mod)
+	var panel = mod.panel
+	panel.show()
+	panel.set_status("")
+	panel.set_connection("", false, false)
+	panel.render({}, 1, true)
+	await _settle_lobby_preview(mod)
+	await capture.call("lobby-home", "Lobby home with the enlarged logo.")
+	_check_lobby_logo_fit(panel, "home")
+	panel.set_connection("UP10-RENDER-FIXTURE", true, true)
+	panel.render(_lobby([0, 0, 1, 1, 2, 2, 3, 3], 4), 1, true)
+	await _settle_lobby_preview(mod)
+	await capture.call("lobby-eight-players", "Eight players across four tables with the enlarged logo.")
+	_check_lobby_logo_fit(panel, "eight players")
+	_restore(mod, saved)
+
+
+func _settle_lobby_preview(mod: Node) -> void:
+	var previous: Array = []
+	var stable_frames = 0
+	for _frame in 32:
+		await mod.get_tree().process_frame
+		var bounds: Array = []
+		for path in ["Margin/Layout/Header", "HeaderPlank", "%Body", "%Tables"]:
+			bounds.append(mod.panel.get_node(path).get_global_rect())
+		for card in mod.panel.get_node("%Tables").get_children():
+			bounds.append(card.get_global_rect())
+		stable_frames = stable_frames + 1 if bounds == previous else 0
+		if stable_frames >= 3:
+			_record(true, "lobby preview layout settles")
+			return
+		previous = bounds
+	_record(false, "lobby preview layout settles")
+
+
+func _check_lobby_logo_fit(panel: Control, label: String) -> void:
+	var logo: Control = panel.get_node("Margin/Layout/Header/Brand/Logo")
+	var bounds = logo.get_global_rect()
+	print("LOBBY_LOGO_LAYOUT ", label, " logo=", bounds,
+		" header=", panel.get_node("Margin/Layout/Header").get_global_rect(),
+		" plank=", panel.get_node("HeaderPlank").get_global_rect())
+	_record(panel.get_global_rect().encloses(bounds), "logo fits lobby viewport: " + label)
+	var plank: Control = panel.get_node("HeaderPlank")
+	var header: Control = panel.get_node("Margin/Layout/Header")
+	_record(
+		plank.is_visible_in_tree()
+		and panel.get_global_rect().encloses(plank.get_global_rect())
+		and plank.get_global_rect().has_point(header.get_global_rect().get_center()),
+		"header backing remains visible behind header: " + label
+	)
+	_record(
+		bounds.end.y <= panel.get_node("%Body").get_global_rect().position.y,
+		"logo stays above lobby body: " + label
+	)
+
+
 func capture_all_menu(mod: Node, capture: Callable) -> void:
 	var saved = _save(mod)
 	var panel = mod.panel

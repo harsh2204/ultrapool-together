@@ -32,6 +32,9 @@ Optional arguments:
 | --- | --- | --- |
 | `-OutputPath <directory>` | `--output-path <directory>` | Write to a new directory of your choice. Existing directories are rejected to preserve earlier captures. |
 | `-TimeoutSeconds <seconds>` | `--timeout-seconds <seconds>` | Change the 180-second watchdog, within 30–300 seconds. |
+| `-LobbyOnly` | `--lobby-only` | Capture only lobby home and eight-player layout for focused visual review. The default remains the full fixture suite. |
+
+`runner.json` records `capture_scope` as `lobby` or `all`. Lobby-only captures retain the same single-process, isolated-save, watchdog and preservation safeguards; their results do not verify the skipped gameplay fixtures.
 
 The Windows runner reuses a local copy of the game's executable and Steam runtime DLLs in `.local/screenshot-runtime`, updating those copies when the installed files change. The macOS runner copies and signs the complete app into the operating system's per-user temporary directory, then removes that private runtime on completion or failure. Keeping the app outside synchronized Documents folders prevents file providers from reattaching metadata that invalidates signing. Captures remain in the selected output directory. The original app is never signed or modified. Each run uses a fresh `UltrapoolTogetherRenderTest-…` save profile, disables external integrations through the test bootstrap, and uses a 1280×720 compatibility-renderer viewport capped at 30 FPS. The runners refuse to start while another game process or screenshot harness is running and close their own process on failure, interruption, or timeout. They do not change display, driver, GPU, or system audio settings.
 
