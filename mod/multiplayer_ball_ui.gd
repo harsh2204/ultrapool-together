@@ -13,6 +13,7 @@ var _overlay: Control
 var _hint: Label
 var _data: Dictionary = {}
 var _expansion: Dictionary = {}
+var _cue_feedback: Dictionary = {}
 var _last_call: Dictionary = {}
 var _ball_ids: Array[int] = []
 var _selected_ball = 0
@@ -49,6 +50,7 @@ func setup(controller: Node, service: Node) -> void:
 func clear() -> void:
 	_data = {}
 	_expansion = {}
+	_cue_feedback = {}
 	_last_call.clear()
 	_ball_ids.clear()
 	_selected_ball = 0
@@ -62,9 +64,10 @@ func clear() -> void:
 		_overlay.hide()
 
 
-func refresh(data: Dictionary, expansion: Dictionary = {}) -> void:
+func refresh(data: Dictionary, expansion: Dictionary = {}, cue_feedback: Dictionary = {}) -> void:
 	_data = data
 	_expansion = expansion
+	_cue_feedback = cue_feedback
 	var visible: bool = (
 		_controller.active
 		and not _controller.is_spectating()
@@ -101,7 +104,7 @@ func refresh(data: Dictionary, expansion: Dictionary = {}) -> void:
 		hint = "%s called the highlighted pocket" % _player_name(called.actor)
 	_set_hint(hint)
 	# PERF-028: redraw only when display state or a tracked ball's position changed.
-	var signature: Array = AbilityOverlay.signature(data, expansion, [_selected_ball, choosing])
+	var signature: Array = AbilityOverlay.signature(data, expansion, [_selected_ball, choosing], cue_feedback)
 	for pair in AbilityOverlay.tracked_balls(data, expansion):
 		signature.append(_service.ball_position(pair[0], pair[1]))
 	if signature != _signature:
@@ -202,5 +205,6 @@ func draw_overlay(canvas: CanvasItem) -> void:
 		_data,
 		_expansion,
 		_selected_ball,
-		_can_call()
+		_can_call(),
+		_cue_feedback
 	)

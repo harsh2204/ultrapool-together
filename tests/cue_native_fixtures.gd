@@ -8,6 +8,8 @@ const CueCatalog = preload("../mod/cue_catalog.gd")
 const CueVisuals = preload("../mod/cue_visuals.gd")
 const CueInventory = preload("../mod/cue_inventory.gd")
 const CueEffects = preload("../mod/cue_effects.gd")
+const AbilityOverlay = preload("../mod/ability_overlay.gd")
+var committed_feedback: Dictionary = {}
 const SPRITE_FIELDS = [
 	"texture",
 	"transform",
@@ -248,6 +250,8 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 			not award.is_empty() and game.score == baseline and body.alive,
 			"native cue effects: staged award cannot score while its source is alive"
 		)
+		check.call(effects.capture_feedback().is_empty(),
+			"native cue feedback: a reserved perk has no award receipt before commit")
 		check.call(
 			award.get("position") == body.global_position,
 			"native cue effects: staged award retains its pre-graveyard world position"
@@ -261,8 +265,18 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 			is_equal_approx(game.score, baseline + points) and points > 0.0 and points < 1.0,
 			"native cue effects: real native score boundary preserves fractional Bankshot credit"
 		)
+		var receipt: Dictionary = effects.capture_feedback()
+		committed_feedback = receipt.duplicate(true)
+		check.call(CueEffects.valid_feedback(receipt) and receipt.get("model") == "bankshot"
+			and receipt.get("actor") == 1 and receipt.get("ball") == body.get_instance_id()
+			and receipt.get("shot") == 1 and is_equal_approx(float(receipt.get("points", 0.0)), points),
+			"native cue feedback: committed receipt preserves catalog model, actor, source, shot and fractional award")
+		check.call(AbilityOverlay.cue_feedback_lines(receipt) == ["CUE  Bankshot  +0.18 points  -  shot 1"],
+			"native cue feedback: actual native commit produces the catalog-named cause label")
 		effects.commit_pocket(award)
 		effects.commit_pocket(effects.record_pocket(body, pocket, 1.0))
+		check.call(effects.capture_feedback() == receipt,
+			"native cue feedback: duplicate callbacks cannot restart or replace the committed receipt")
 		check.call(
 			is_equal_approx(game.score, baseline + points),
 			"native cue effects: repeated pot is deduplicated"
@@ -277,6 +291,10 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 		body.alive = false
 		body.pocketed_this_frame = true
 		effects.commit_pocket(award)
+		check.call(effects.capture_feedback().get("shot") == 2
+			and is_equal_approx(float(effects.capture_feedback().get("points", 0.0)), 2.0)
+			and receipt == committed_feedback,
+			"native cue feedback: next actual award replaces the single slot without mutating an earlier capture")
 		check.call(
 			is_equal_approx(game.score, baseline + points + 2.0),
 			"native cue effects: high native ball value respects the two-point shot cap"
@@ -304,7 +322,10 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 			)
 			# Incorrectly early commit is rejected rather than invoking a native
 			# threshold event against a source that has not completed its pot.
+			var previous_feedback: Dictionary = effects.capture_feedback()
 			effects.commit_pocket(award)
+			check.call(effects.capture_feedback() == previous_feedback,
+				"native cue feedback: rejected living-source commit cannot invent an award cause")
 			check.call(
 				game.score == boundary_score and body.alive,
 				"GAMEBALL award commit refuses a still-living source"
@@ -313,6 +334,7 @@ func _check_callbacks(mod: Node, game: Node, check: Callable) -> void:
 			game.set_score(0.0)
 			body.ball_item.data = source_data
 	effects.end_session()
+	check.call(effects.capture_feedback().is_empty(), "native cue feedback: session teardown removes the award receipt")
 	check.call(
 		(
 			body.get_script() == wrapper

@@ -1,12 +1,12 @@
 # Client table-effect coverage
 
-Native floor effects, energy projectiles, WORMHOLE pocket state, and catalogued transient visuals have shared guest and spectator renderers. **Overall parity: partial; the implemented subset has historical Windows native fixture evidence.** This document records implementation details and historical acceptance for [issue #48](https://github.com/harsh2204/ultrapool-together/issues/48), **GAP-007** in [PERFORMANCE.md](PERFORMANCE.md). The measurements below cover bounded fixtures, not complete audiovisual parity or live-session performance.
+Native floor effects, energy projectiles, WORMHOLE pocket state, and catalogued transient visuals have shared guest and spectator renderers. **Overall parity: partial; the implemented subset has Windows and macOS native fixture evidence.** This document records implementation details and historical acceptance for [issue #48](https://github.com/harsh2204/ultrapool-together/issues/48), **GAP-007** in [PERFORMANCE.md](PERFORMANCE.md). The measurements below cover bounded fixtures, not complete audiovisual parity or live-session performance.
 
-Use the [effect replication and scoring tracker](EFFECT_REPLICATION_TRACKER.md) for the 2026-10-05 audit, per-family guest/spectator status, native catalog checklist, missing non-catalog drawing and scoring effects, and prioritized scoring-stall investigation. In particular, the generic scene catalog does not cover CANDLE's ritual pentagram, REAPER's ball-local tether, or native floating score/money scenes. Existing state delivery is not proof that those visuals are implemented.
+Use the [effect replication and scoring tracker](EFFECT_REPLICATION_TRACKER.md) for the 2026-10-05 audit, per-family guest/spectator status, native catalog checklist, missing non-catalog drawing and scoring effects, and prioritized scoring-stall investigation. CANDLE ritual geometry, ball-local tether/trail/prediction geometry and floating score/money now use a separate `native_draw` contract. Ball-local sampled presentation uses `ball_visual`; neither contract runs native gameplay callbacks. Fixed-pocket artwork uses optional ordinary `pocket.pocket_visual`, keeping the legacy durable-effect pocket schema unchanged for protocol-10 peers. See the tracker for the exact stated fields and remaining trigger acceptance.
 
 The supported native source is Ultrapool 0.15.7. Assets are read from the installed game; no native source or art is redistributed. Historical evidence below describes the exact revision tested, rather than verification of later additions.
 
-The optional `effects` and `visual_fx` fields originally preserved protocol 8 acceptance in v0.9.4; older leaders could not provide the descriptors and older clients ignored them. The current Cue Workshop build uses **v0.10.0 / protocol 10 / UP10**, so every participant must use that compatible build. Historical v0.9.4 evidence below remains specific to the revision tested.
+The optional `effects` and `visual_fx` fields originally preserved protocol 8 acceptance in v0.9.4; older leaders could not provide the descriptors and older clients ignored them. The current Cue Workshop build uses **v0.10.0 / protocol 10 / UP10**, so every participant must use that compatible build. Historical v0.9.4 evidence below remains specific to the revision tested. The PR #53 fields are additive within protocol 10: updated peers accept their absence, while older builds omit or ignore them. Matching PR builds and native 0.15.7 are required for the new presentation; mixed builds do not establish visual parity.
 
 ## Coverage matrix
 
@@ -24,6 +24,14 @@ The optional `effects` and `visual_fx` fields originally preserved protocol 8 ac
 | Burning ball, star/shield/lock, level and item transformations | Existing durable ball item fields and native visual setters remain represented. Catalogued transformation/upgrade visuals use the transient path. | Durable result correctness and each transient animation remain distinct acceptance checks. |
 | Wisps, tornado, lightning/zap lines, constellation links, explosions and catalogued effects | Shared scriptless rendering of the installed EffectManager catalog plus ordinary and pocket wisps. Host part transforms, visibility, tint, sprite frames, allowlisted wisp textures, line geometry, labels and typed scalar/vector shader parameters are captured. Constellation child stars/links have an explicit visual path. | The catalog contains 34 definitions on the supported installation; this is not 34 independently verified gameplay triggers. The native fixture passed for boom, tornado, zap line, constellation and both wisp kinds. Particle seeds/elapsed simulation, uncatalogued effects and arbitrary dynamic children are not a general replication protocol. |
 | Basic shot/spawn/pocket/impact visuals and sounds | Existing [replica_fx.gd](../mod/replica_fx.gd) supplies bounded guest pulses and inferred impact sounds; catalogued native visual nodes are additional presentation. | There is no general native audio/event replay. Full-screen native postprocessing and effects outside the catalog need their own contract and tests. |
+
+## Sampled native presentation
+
+[ball_visual_state.gd](../mod/ball_visual_state.gd) transfers sparse differences from two cached native ball templates over a fixed set of visual children. Actual host flame/star/score particles, fleeting shader state, flash, level spark, tint and transforms apply to retained guest and spectator nodes. Resource paths, native callbacks and cue input are excluded. Native particle count and typed-value bounds apply; particle random phase is still approximate. Local guest LUNA aiming remains native, with the corresponding sampled hint suppressed only while that player owns local input.
+
+[table_native_draw.gd](../mod/table_native_draw.gd) and its [scriptless view](../mod/table_native_draw_view.gd) carry CANDLE line/circle pose, bounded REAPER/trail/LUNA geometry and native score/money text, tint, shader values and Control bounds. Score descriptors have bounded lifetime and duplicate-expiry protection. Round/scene reset clears pending work and expired identities. The installed 0.15.7 REAPER ball leaves its `deathline` reference null despite having the native `visuals/deathline` node. A host-only lifecycle repair binds that existing node once after native readiness; native code still owns its geometry. The macOS fixture confirms the reference, visible host tether and matching guest/spectator geometry.
+
+The transient contract additionally covers six allowlisted dice faces, localized native RichTextLabel content, AnimatedSprite2D animation/frame, and changing constellation graphs with native antialias resources. The fixture samples 79 native scenes/variants: every catalog definition, all six dice faces, and 21 visual modes for each wisp kind. These are native scene-pose comparisons, not 79 independent gameplay-trigger or network tests. Five catalog rows retain unresolved UI/shop ownership. The legacy `upgrade_big` scene is sampled with native level 2 and its own tween advanced to 40/80 ms; its invalid bare default level is not treated as a gameplay trigger.
 
 ## Ownership and lifecycle
 
@@ -46,7 +54,10 @@ The optional `effects` and `visual_fx` fields originally preserved protocol 8 ac
 | Optional projectile lines | Four lines per projectile, 32 points per line, and 256 visited prefab nodes when establishing line references. Points use host world coordinates. |
 | Transient descriptors | 96 tracked effects, 96 parts per definition, 64 points per line/constellation, and 96 KiB encoded state. Capture checks a 192-entry / 4 ms budget between complete effects. |
 | Transient expiry | Last captured pose retained for 250 ms after native exit; no historical gameplay or audio is replayed. An overflowed still-live effect keeps the substate in explicit overflow rather than falsely declaring full coverage. |
-| Combined table payload | A 192 KiB target reserves space beneath the 256 KiB transport envelope limit. Transient presentation becomes overflow first, then durable presentation if necessary; normal ball/turn state remains available. Existing excessive base-ball state remains an independent limit. |
+| Combined table payload | A 192 KiB target reserves space beneath the 256 KiB transport envelope limit. Transient presentation becomes overflow first, then native drawing, durable presentation, optional ball art, then optional pocket art if necessary; normal ball/turn/pocket scoring state remains available. Existing excessive base-ball state remains an independent limit. |
+| Native drawing | 192 descriptors, including at most 64 retained scores; 128-ball scan, 64 points per line, 32 KiB encoded state, 4 ms soft capture allowance. Renderer checks eight creations / 2 ms between operations. |
+| Ball presentation | Two immutable native layouts, at most 512 indexed differences per ball; native particle limits and strict scalar/vector/color types. Aggregate pressure sets explicit `ball_visual_status=overflow` and omits optional art while retaining every authoritative body/item. |
+| Pocket presentation | Eight fixed native visual nodes per pocket with strict fields. Aggregate pressure sets explicit `pocket_visual_status=overflow` and omits optional art while retaining authoritative pocket identity and scoring. |
 | Deferred visual creation | Durable renderer: eight creations / 4 ms per apply. Transient renderer: twelve creations / 4 ms per apply. Only the latest bounded descriptor is retained and drained on subsequent frames. |
 | Overflow | An explicit status/reason pauses replacement of that effect substate and retains its last complete view within the current epoch. Main logs capacity and recovery transitions. New epochs clear old presentation even when the first substate overflows. A later complete state restores current coverage. |
 
@@ -65,10 +76,10 @@ Windows Capture-Screens run `20260927T094004Z-238aa6bf` passed on mod 0.9.4 / na
 
 Keep GAP-007 open until the relevant remaining acceptance is recorded:
 
-1. Resolve the observed soft-budget overshoot and investigate resource ownership across repeated lifecycle transitions. Shutdown diagnostics reported 63 CanvasItems, nine materials, one shader, six textures and 22 resources, compared with 21 resources in the preceding run; this is not evidence of stable resource counts.
+1. Resolve the observed soft-budget overshoot and investigate resource ownership across repeated lifecycle transitions. The expanded fixtures exposed retained off-tree drawing templates and catalog oracle resources; explicit teardown was added. Final run diagnostics are recorded below. A single clean preservation audit does not establish stable resource counts across long sessions.
 2. Exercise each remaining catalog family and gameplay trigger that is not included in the current native fixture. Add a separate contract for an uncatalogued or dynamically generated visual when encountered.
 3. Verify late joining, simultaneous bursts, reordered/lost updates, disconnect/rematch and overflow/recovery with a remote table leader and multiple live guests. Record topology, versions and latency conditions.
-4. Run the expanded shared fixtures on macOS and in mixed-platform sessions.
+4. Run the expanded shared fixtures on Windows and in mixed-platform sessions; macOS native replay evidence is recorded below.
 5. Extend the bounded fixture measurements below to matched before/after workloads, input feedback and confirmation, live bytes/rates, queue growth and repeated native/resource counts before claiming an FPS or latency improvement.
 
 Particle emitters use native art/materials and host visibility/emission controls where captured. Their individual random particles and elapsed simulation phase are not deterministic replicas. General native audio, camera/postprocessing effects, and arbitrary native runtime children remain outside the current visual descriptor contract.
@@ -93,3 +104,23 @@ These measurements come from the same Windows run, using the compatibility rende
 | Full table snapshot application | Three applications | p50 6.991 ms; p95/p99/max 13.235 ms. This includes work outside the durable renderer's individual budget. |
 
 The synthetic burst verifies bounded draining and replacement of pending state without resurrecting removed effects. It does not represent 128 naturally spawned droplets or a live network burst. No input-to-feedback/confirmation latency, live packet-rate distribution, GPU timing, or mixed-platform measurements were collected in this run.
+
+## macOS PR #53 follow-up
+
+Capture `20261005T134751Z-32cbb0fa` on native 0.15.7 / protocol 10 passed **19,146/19,146 harness checks** and produced **108 screenshots**. It used one muted isolated process, compatibility rendering, 1280×720, a 30 FPS cap and a 300-second watchdog, and exited normally after 143 seconds. No script errors were reported; installed files and normal saves were unchanged, and the private runtime was removed. The tested gameplay, fixture and runner files match the follow-up source. Native drawing, ball art, pocket overflow/recovery, catalog poses and ability/Bounty galleries were reviewed.
+
+The fixture covers 79 native catalog samples at two poses, CANDLE stages, real REAPER geometry, score/money text and Control layout, retained ball/item/material state, independent pocket-art overflow, strict optional fields, reliable recovery, elapsed-time HUD, native cue receipts, and competitive Bounty finalization including lobby-only updates. Existing controller, input, shop/snack/mixer, round-flow and full-catalog/localized lobby checks also pass. This is one-process native replay, not live transport or every gameplay-trigger combination.
+
+The pre-follow-up comparison used `138c9b3` with only the nested Overlay class renamed to avoid the native global-class collision. It failed three aggregate-budget assertions and five lobby clipping assertions. Both runs use the same named cost fixture and rendering settings; the expanded run carries additional presentation state and more fixture work. The short background samples below are observations, not a controlled foreground FPS or latency result.
+
+| Measurement | Earlier PR fixture | Final fixture |
+| --- | --- | --- |
+| Six native droplets, one energy body, six pockets: capture + validation, 16 samples | p50 1.426 ms; p95/p99/max 2.133 ms | p50 2.863 ms; p95/p99/max 3.481 ms |
+| Synthetic 128-droplet payload | 84,968 B | 84,968 B (ordinary pocket art is outside this durable substate) |
+| Burst frame interval | n=17; p50 33.324 ms; p95/p99/max 33.479 ms | n=15; p50 33.327 ms; p95/p99/max 34.287 ms |
+| Durable renderer tick | n=17; p50 4.625 ms; p95/p99/max 5.050 ms | n=15; p50 3.747 ms; p95/p99/max 4.067 ms |
+| Full snapshot apply | n=3; p50 3.973 ms; p95/p99/max 17.330 ms | n=3; p50 5.202 ms; p95/p99/max 15.410 ms |
+
+The final renderer still exceeds its soft 4 ms allowance, and full snapshot application includes larger indivisible work. There is no measured input-to-feedback/confirmation latency, live packet-rate or queue-growth distribution, GPU timing or mixed-platform evidence. Performance changes remain **implemented, unmeasured** against those acceptance criteria.
+
+Expanded testing exposed retained off-tree drawing templates and catalog oracle resources; explicit disposal releases them. Final shutdown diagnostics returned to the earlier fixture counts: 63 CanvasItems, nine materials, one shader, six textures and 22 resources, with existing RenderingServer/ObjectDB shutdown errors. They remain unresolved; matching counts in these runs do not prove long-session resource stability.

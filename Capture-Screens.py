@@ -35,7 +35,7 @@ FIXTURES = (
     "tests/cue_models_probe.gd", "tests/cue_inventory_probe.gd", "tests/cue_effects_probe.gd",
     "tests/progress_import_probe.gd", "tests/progress_settings_fixture.gd",
     "tests/cue_shop_fixtures.gd", "tests/cue_native_fixtures.gd", "tests/multiplayer_collection_fixture.gd",
-    "tests/expansion_sets_probe.gd", "tests/native_pocket_fixture.gd", "tests/native_table_effects_fixture.gd", "tests/native_visual_fx_fixture.gd", "tests/table_effects_probe.gd", "tests/shop_probe.gd",
+    "tests/expansion_sets_probe.gd", "tests/native_pocket_fixture.gd", "tests/native_table_effects_fixture.gd", "tests/native_visual_fx_fixture.gd", "tests/native_drawing_fixture.gd", "tests/ball_presentation_fixture.gd", "tests/ability_feedback_fixture.gd", "tests/bounty_feedback_fixture.gd", "tests/table_effects_probe.gd", "tests/shop_probe.gd",
 )
 ERROR_PATTERN = re.compile(r"SCRIPT ERROR:|Parse Error:|Compile Error:|RENDER_PROBE_FAIL")
 BUNDLE_ID = "org.ultrapooltogether.render-test"

@@ -6,6 +6,8 @@ const RoundPresentation = preload("round_presentation.gd")
 const PlayerInventory = preload("player_inventory_sync.gd")
 const TableEffects = preload("table_effects_sync.gd")
 const VisualFx = preload("table_visual_fx.gd")
+const NativeDraw = preload("table_native_draw.gd")
+const BallVisual = preload("ball_visual_state.gd")
 const ITEM_NUMBERS = {
 	"base_score": [-1.0e18, 1.0e18],
 	"temp_extra_score": [-1.0e18, 1.0e18],
@@ -38,16 +40,23 @@ var _saved_balls: Array = []
 var _saved_tutorial: Dictionary = {}
 var _results: Node
 var _visual_fx_capture: Node
+var _native_draw_capture: Node
 var _effects_game: WeakRef
 var _effects_were_active = false
 
 
 func _ready() -> void:
+	# PERF-019: native presentation templates are read once at lifecycle setup.
+	BallVisual.prepare()
 	_visual_fx_capture = VisualFx.new()
 	add_child(_visual_fx_capture)
+	_native_draw_capture = NativeDraw.new()
+	add_child(_native_draw_capture)
 
 
 func clear_effect_capture() -> void:
+	if is_instance_valid(_native_draw_capture):
+		_native_draw_capture.clear()
 	if is_instance_valid(_visual_fx_capture):
 		_visual_fx_capture.clear()
 	if _effects_game != null:
@@ -61,6 +70,8 @@ func effects_active() -> bool:
 	var game = global_node.gameManager if global_node != null else null
 	if not is_instance_valid(game) or not is_instance_valid(game.table) or game.in_shop:
 		return false
+	if is_instance_valid(_native_draw_capture) and _native_draw_capture.has_pending_or_active_effects():
+		return true
 	if _effects_were_active or not game.droplets.is_empty() or not game.energy_balls.is_empty():
 		return true
 	if is_instance_valid(_visual_fx_capture) and _visual_fx_capture.has_pending_or_active_effects():
@@ -119,6 +130,8 @@ func capture() -> Dictionary:
 		"daily": game.is_daily(),
 		"rotated": game.table.scene_file_path == game.table_rotated_scene.resource_path,
 		"table_position": game.table.global_position,
+		"ball_visual_status": "complete",
+		"pocket_visual_status": "complete",
 		"balls": [],
 		"pockets": []
 	}
@@ -147,6 +160,7 @@ func capture() -> Dictionary:
 				"id": body.get_instance_id(),
 				"player": body == game.player_ball,
 				"item": item_data,
+				"ball_visual": BallVisual.capture(body),
 				"position": body.global_position,
 				"velocity": body.linear_velocity,
 				"angular_velocity": body.angular_velocity,
@@ -173,6 +187,9 @@ func capture() -> Dictionary:
 	data.visual_fx = (
 		_visual_fx_capture.capture(game) if is_instance_valid(_visual_fx_capture) else {}
 	)
+	data.native_draw = (
+		_native_draw_capture.capture(game) if is_instance_valid(_native_draw_capture) else {}
+	)
 	_limit_effect_payload(data)
 	_effects_were_active = _active_effect_state(data)
 	return data
@@ -187,6 +204,11 @@ static func _active_effect_state(data: Dictionary) -> bool:
 	for pocket in effects.get("pockets", []):
 		if not pocket.suction_scale.is_equal_approx(Vector2.ONE) or pocket.suction_color.a > 0:
 			return true
+	var native_draw: Dictionary = data.get("native_draw", {})
+	if native_draw.get("status") == "overflow" or NativeDraw.active(native_draw):
+		return true
+	if data.get("ball_visual_status") == "overflow" or data.get("pocket_visual_status") == "overflow":
+		return true
 	var visual_fx: Dictionary = data.get("visual_fx", {})
 	return visual_fx.get("status") == "overflow" or not visual_fx.get("items", []).is_empty()
 
@@ -207,10 +229,43 @@ static func _limit_effect_payload(data: Dictionary) -> void:
 		"version": 1, "status": "overflow", "reason": "combined table bytes", "items": []
 	}
 	if var_to_bytes(data).size() > MAX_TABLE_CAPTURE_BYTES:
+		data.native_draw = NativeDraw.overflow("combined table bytes")
+	if var_to_bytes(data).size() > MAX_TABLE_CAPTURE_BYTES:
 		data.effects = TableEffects.overflow("bytes")
+	if var_to_bytes(data).size() > MAX_TABLE_CAPTURE_BYTES:
+		# Preserve authoritative body identities and item state. The next complete
+		# visual sample restores presentation; never truncate the live body list.
+		data.ball_visual_status = "overflow"
+		for body in data.get("balls", []):
+			if body is Dictionary:
+				body.erase("ball_visual")
+	if var_to_bytes(data).size() > MAX_TABLE_CAPTURE_BYTES:
+		# Pocket art is additive protocol-10 state, separate from authoritative
+		# pocket identity/score and the legacy durable-effect schema.
+		data.pocket_visual_status = "overflow"
+		for pocket in data.get("pockets", []):
+			if pocket is Dictionary:
+				pocket.erase("pocket_visual")
 
 
 static func _effect_substates_empty(data: Dictionary) -> bool:
+	# This fast path recognizes only empty known shapes. Unknown/oversized data
+	# must still reach the aggregate byte guard (PERF-008).
+	for key in data.get("effects", {}):
+		if key not in ["version", "status", "reason", "droplets", "energy", "pockets"]:
+			return false
+	for key in data.get("visual_fx", {}):
+		if key not in ["version", "status", "reason", "items"]:
+			return false
+	for body in data.get("balls", []):
+		if body is Dictionary and not body.get("ball_visual", {}).is_empty():
+			return false
+	for pocket in data.get("pockets", []):
+		if pocket is Dictionary and not pocket.get("pocket_visual", []).is_empty():
+			return false
+	var native_draw: Dictionary = data.get("native_draw", {})
+	if native_draw.get("status", "complete") != "complete" or not native_draw.get("items", []).is_empty():
+		return false
 	var effects: Dictionary = data.get("effects", {})
 	var visual_fx: Dictionary = data.get("visual_fx", {})
 	return (
@@ -246,7 +301,8 @@ func _capture_pockets(game: Node) -> Array:
 				"score": pocket.extra_score,
 				"closed": pocket.closed,
 				"shielded": pocket.shielded,
-				"has_held_balls": not pocket.held_balls.is_empty()
+				"has_held_balls": not pocket.held_balls.is_empty(),
+				"pocket_visual": TableEffects.capture_pocket_visuals(pocket)
 			}
 		)
 	return states
@@ -652,7 +708,15 @@ func _snapshot_problem(data: Dictionary) -> String:
 		return "holes %d" % holes
 	if base_indices.size() != 6:
 		return "base pockets %d (need 6)" % base_indices.size()
+	if data.has("ball_visual_status") and data.ball_visual_status not in ["complete", "overflow"]:
+		return "ball visual status"
+	if data.has("pocket_visual_status") and data.pocket_visual_status not in ["complete", "overflow"]:
+		return "pocket visual status"
 	# Absent on older peers; present fields remain strict before any native mutation.
+	if data.has("native_draw"):
+		var draw_problem = NativeDraw.problem(data.native_draw)
+		if draw_problem != "":
+			return "native draw " + draw_problem
 	if data.has("visual_fx"):
 		var visual_fx_problem = VisualFx.problem(data.visual_fx)
 		if visual_fx_problem != "":
@@ -703,6 +767,8 @@ func _valid_pocket(pocket: Dictionary) -> bool:
 
 
 func _pocket_problem(pocket: Dictionary) -> String:
+	if pocket.has("pocket_visual") and not TableEffects.pocket_visual_valid(pocket.pocket_visual):
+		return "pocket visual fields"
 	if (
 		typeof(pocket.get("id")) != TYPE_INT
 		or pocket.id <= 0
@@ -738,6 +804,10 @@ func _valid_ball(body: Dictionary) -> bool:
 
 
 func _ball_problem(body: Dictionary) -> String:
+	if body.has("ball_visual"):
+		var visual_problem = BallVisual.problem(body.ball_visual)
+		if visual_problem != "":
+			return "ball visual " + visual_problem
 	if typeof(body.get("id")) != TYPE_INT or body.id <= 0:
 		return "ball id"
 	for key in BALL_FLAGS:
@@ -787,6 +857,8 @@ func _ball_problem(body: Dictionary) -> String:
 		or (item.mixed != "" and not resources.has(item.mixed))
 	):
 		return "ball item mixed " + str(item.get("mixed"))
+	if not body.get("ball_visual", {}).is_empty() and body.ball_visual.p != int(body.player):
+		return "ball visual cue role"
 	if body.player != (item.data == "PLAYER"):
 		return "ball cue role mismatch id=%d" % body.id
 	for key in ITEM_NUMBERS:

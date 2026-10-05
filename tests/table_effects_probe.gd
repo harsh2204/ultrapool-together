@@ -291,6 +291,26 @@ func _check_combined_budget() -> void:
 	)
 
 
+	state = {
+		"balls": [{"id": 42, "item": {"data": "APPLE"}, "ball_visual": {"payload": "x".repeat(TableSync.MAX_TABLE_CAPTURE_BYTES)}}],
+		"effects": Effects.empty(), "visual_fx": {}, "native_draw": {}
+	}
+	TableSync._limit_effect_payload(state)
+	_check(state.get("ball_visual_status") == "overflow", "ball presentation overflow is explicit")
+	_check(state.balls.size() == 1 and state.balls[0].id == 42 and state.balls[0].item.data == "APPLE", "ball presentation overflow preserves live identity and item")
+	_check(not state.balls[0].has("ball_visual") and var_to_bytes(state).size() < TableSync.MAX_TABLE_CAPTURE_BYTES, "optional ball presentation yields before rack state")
+	state = {
+		"balls": [{"id": 42}],
+		"pockets": [{"id": 9, "base_index": 0, "mult": 2.0, "pocket_visual": [{"payload": "x".repeat(TableSync.MAX_TABLE_CAPTURE_BYTES)}]}],
+		"effects": Effects.empty(), "visual_fx": {}, "native_draw": {}
+	}
+	TableSync._limit_effect_payload(state)
+	_check(state.get("pocket_visual_status") == "overflow", "pocket presentation overflow is explicit")
+	_check(state.pockets[0].id == 9 and state.pockets[0].base_index == 0 and state.pockets[0].mult == 2.0, "pocket presentation overflow preserves identity and scoring")
+	_check(not state.pockets[0].has("pocket_visual") and var_to_bytes(state).size() < TableSync.MAX_TABLE_CAPTURE_BYTES, "optional pocket presentation yields before authoritative state")
+	_check(TableSync._active_effect_state(state), "pocket presentation overflow schedules recovery")
+
+
 func _check_capture_epochs() -> void:
 	var sync = TableSync.new()
 	var visual = FxCaptureStub.new()

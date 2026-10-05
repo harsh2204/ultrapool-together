@@ -23,6 +23,8 @@ const HudPrefs = preload("hud_prefs.gd")
 const TurnBanner = preload("turn_banner.gd")
 const TableEffects = preload("table_effects_sync.gd")
 const VisualFx = preload("table_visual_fx.gd")
+const NativeDraw = preload("table_native_draw.gd")
+const CueEffects = preload("cue_effects.gd")
 const ProgressImport = preload("progress_import.gd")
 
 var transport: Node
@@ -126,6 +128,8 @@ var _published_ball_ids: Dictionary = {}
 var _published_pocket_ids: Dictionary = {}
 var _published_effect_ids: Dictionary = {}
 var _published_visual_fx_ids: Dictionary = {}
+var _published_native_draw_ids: Dictionary = {}
+var _published_presentation_status: Array = []
 var _effect_overflow_status = ""
 var _published_scene_id = 0
 var _progress_importer = ProgressImport.new()
@@ -1271,6 +1275,10 @@ func _roster_changed():
 				turn_owner = _next_player()
 				shot_number += 1
 				_publish_state()
+	# Final competitive awards arrive in lobby summaries, possibly after a
+	# finished watched table has stopped sending state. Refresh that label here.
+	if spectator != null:
+		spectator.refresh_summary()
 	if panel.visible:
 		_render_lobby()
 
@@ -1422,6 +1430,8 @@ func _clear_spawn_barrier() -> void:
 	_published_pocket_ids.clear()
 	_published_effect_ids.clear()
 	_published_visual_fx_ids.clear()
+	_published_native_draw_ids.clear()
+	_published_presentation_status.clear()
 	_effect_overflow_status = ""
 	if is_instance_valid(table_sync) and table_sync.has_method("clear_effect_capture"):
 		table_sync.clear_effect_capture()
@@ -1724,6 +1734,18 @@ func _set_hud_text(turn_text: String, score_text: String):
 
 
 func _result_text() -> String:
+	var text = _match_result_text()
+	if not finished or not _score_match():
+		return text
+	for summary in lobby.get("table_summaries", []):
+		if summary is Dictionary and summary.get("table") == table_id:
+			var award: String = bounty_race.award_text(summary)
+			if award != "":
+				return text + " · " + award
+	return text
+
+
+func _match_result_text() -> String:
 	if not _competitive():
 		return finish_reason
 	var summaries: Array = lobby.get("table_summaries", [])
@@ -1797,6 +1819,7 @@ func _publish_state(
 			"multiplayer_balls": multiplayer_balls.capture(),
 			"expansion_balls": expansion_balls.capture(),
 			"cues": cue_inventory.snapshot(),
+			"cue_feedback": cue_effects.capture_feedback() if cue_effects != null else {},
 			"clone_round": CloneRound.snapshot(
 				_clone_instances, _clone_active, _clone_winner, _clone_shop_armed
 			),
@@ -1831,6 +1854,7 @@ func _publish_state(
 		multiplayer_balls.display_signature(balls_state),
 		expansion_balls.display_signature(expansion_state),
 		latest_state.get("cues", {}),
+		latest_state.get("cue_feedback", {}),
 		UiNav.signature(ui_nav)
 	]
 	if target != 0 or state_sig != _last_state_sig:
@@ -1898,6 +1922,8 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 			_published_pocket_ids.clear()
 			_published_effect_ids.clear()
 			_published_visual_fx_ids.clear()
+			_published_native_draw_ids.clear()
+			_published_presentation_status.clear()
 			force_reliable = true
 		var ids: Dictionary = table_sync.ball_ids(scene)
 		var pocket_ids: Dictionary = table_sync.pocket_ids(scene)
@@ -1905,9 +1931,17 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 		var visual_fx: Dictionary = scene.get("visual_fx", {})
 		var effect_ids: Dictionary = TableEffects.topology(effects)
 		var visual_fx_ids: Dictionary = VisualFx.topology(visual_fx)
+		var native_draw: Dictionary = scene.get("native_draw", {})
+		var native_draw_ids: Dictionary = NativeDraw.topology(native_draw)
+		var presentation_status: Array = [
+			scene.get("ball_visual_status", "complete"),
+			scene.get("pocket_visual_status", "complete")
+		]
 		if (
 			ids != _published_ball_ids or pocket_ids != _published_pocket_ids
 			or effect_ids != _published_effect_ids or visual_fx_ids != _published_visual_fx_ids
+			or native_draw_ids != _published_native_draw_ids
+			or presentation_status != _published_presentation_status
 		):
 			force_reliable = true
 		if _spawn_barrier_held:
@@ -1916,7 +1950,9 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 		_published_pocket_ids = pocket_ids
 		_published_effect_ids = effect_ids
 		_published_visual_fx_ids = visual_fx_ids
-		_report_effect_capacity(effects, visual_fx)
+		_published_native_draw_ids = native_draw_ids
+		_published_presentation_status = presentation_status
+		_report_effect_capacity(effects, visual_fx, native_draw, str(scene.get("ball_visual_status", "complete")), str(scene.get("pocket_visual_status", "complete")))
 	if target == 0:
 		_spawn_barrier_held = false
 		_spawn_barrier_since_msec = -1
@@ -1927,9 +1963,11 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 	_table_send(message, target, force_reliable)
 
 
-func _report_effect_capacity(effects: Dictionary, visual_fx: Dictionary) -> void:
-	var status = ""
-	for state in [effects, visual_fx]:
+func _report_effect_capacity(effects: Dictionary, visual_fx: Dictionary, native_draw: Dictionary = {}, ball_visual_status: String = "complete", pocket_visual_status: String = "complete") -> void:
+	var status = "ball presentation bytes; " if ball_visual_status == "overflow" else ""
+	if pocket_visual_status == "overflow":
+		status += "pocket presentation bytes; "
+	for state in [effects, visual_fx, native_draw]:
 		if state.get("status") == "overflow":
 			status += str(state.get("reason", "effect capacity")) + "; "
 	if status == _effect_overflow_status:
@@ -2338,6 +2376,12 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 		and not expansion_balls.valid_state(message.get("expansion_balls"))
 	):
 		return false
+	if message.has("cue_feedback"):
+		if not CueEffects.valid_feedback(message.cue_feedback):
+			return false
+		if not message.cue_feedback.is_empty() and message.cue_feedback.shot > message.used_shots + int(message.pending):
+			return false
+		# A receipt can outlive its actor's membership; it grants no authority.
 	if message.has("ui_nav") and not UiNav.valid(message.ui_nav):
 		return false
 	if message.has("cues") and (

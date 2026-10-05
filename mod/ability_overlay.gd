@@ -1,9 +1,11 @@
 extends RefCounted
-## Shared presentation for TOGETHER and expansion ability state (MOD-01..12).
+## Shared presentation for TOGETHER and expansion ability state (MOD-01..13).
 ## Draws host-authoritative display state only; never computes an ability.
 ## The playing table and the spectator view call the same drawing code with
 ## their own ball-position resolver, so both sides show identical indicators.
 ## Implemented, unmeasured: authored for the existing capture harness.
+
+const CueModels = preload("cue_models.gd")
 
 const CALL_COLOR = Color(0.65, 0.88, 1.0)
 const BOUNTY_COLOR = Color(1.0, 0.76, 0.25)
@@ -16,7 +18,7 @@ const MAX_BALLS = 128
 const PHASE_NAMES = ["New", "Waxing", "Full", "Waning"]
 
 
-class Overlay:
+class AbilityCanvas:
 	extends Control
 	## Owner-supplied draw callback; the Control itself stores no state.
 	var draw_callback: Callable
@@ -26,8 +28,8 @@ class Overlay:
 			draw_callback.call(self)
 
 
-static func make_overlay(callback: Callable) -> Overlay:
-	var overlay = Overlay.new()
+static func make_overlay(callback: Callable) -> AbilityCanvas:
+	var overlay = AbilityCanvas.new()
 	overlay.draw_callback = callback
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return overlay
@@ -35,8 +37,8 @@ static func make_overlay(callback: Callable) -> Overlay:
 
 ## Cheap-to-compare identity of everything the drawing reads except ball
 ## positions. Callers add resolved positions, then redraw only on change.
-static func signature(balls: Dictionary, expansion: Dictionary, extra: Array = []) -> Array:
-	var result: Array = [balls.get("call", {}), balls.get("pending", false), extra]
+static func signature(balls: Dictionary, expansion: Dictionary, extra: Array = [], cue_feedback: Dictionary = {}) -> Array:
+	var result: Array = [balls.get("call", {}), balls.get("pending", false), balls.get("feedback", {}), cue_feedback, extra]
 	for ball in balls.get("balls", []):
 		if ball is Dictionary:
 			result.append([ball.get("id", 0), ball.get("alive", false), ball.get("marker", 0), ball.get("charge", 0), ball.get("kinds", [])])
@@ -72,7 +74,7 @@ static func tracked_balls(balls: Dictionary, expansion: Dictionary) -> Array:
 ## called-shot selection ring (playing table only).
 static func draw(canvas: CanvasItem, font: Font, transform: Transform2D, resolve: Callable,
 		offset: Vector2, name_for: Callable, balls: Dictionary, expansion: Dictionary,
-		selected: int = 0, choosing: bool = false) -> void:
+		selected: int = 0, choosing: bool = false, cue_feedback: Dictionary = {}) -> void:
 	var called: Dictionary = balls.get("call", {})
 	for pocket in balls.get("pockets", []):
 		if not pocket is Dictionary or not pocket.get("open", false):
@@ -113,7 +115,7 @@ static func draw(canvas: CanvasItem, font: Font, transform: Transform2D, resolve
 		var position: Vector2 = transform * resolve.call(ball.id, ball.position - offset)
 		var extra: Dictionary = ball.get("extra", {})
 		_draw_expansion_ball(canvas, position, extra)
-	_draw_shared_panel(canvas, font, expansion.get("sets", {}))
+	_draw_shared_panel(canvas, font, expansion.get("sets", {}), balls.get("feedback", {}), cue_feedback)
 
 
 static func _draw_expansion_ball(canvas: CanvasItem, position: Vector2, extra: Dictionary) -> void:
@@ -141,11 +143,11 @@ static func _draw_expansion_ball(canvas: CanvasItem, position: Vector2, extra: D
 		pips(canvas, position + Vector2(0, 21), int(zodiac.get("charge", 0)), 2, SET_COLOR)
 	var relic: Dictionary = extra.get("RELIC", {})
 	if not relic.is_empty():
-		pips(canvas, position + Vector2(0, 21), int(relic.get("dig", 0)), 3, SET_COLOR)
+		pips(canvas, position + Vector2(0, 21), int(relic.get("dig", 0)), 4, SET_COLOR)
 
 
-static func _draw_shared_panel(canvas: CanvasItem, font: Font, sets: Dictionary) -> void:
-	var lines: Array = shared_lines(sets)
+static func _draw_shared_panel(canvas: CanvasItem, font: Font, sets: Dictionary, feedback: Dictionary, cue_feedback: Dictionary) -> void:
+	var lines: Array = cue_feedback_lines(cue_feedback) + feedback_lines(feedback) + shared_lines(sets)
 	if lines.is_empty():
 		return
 	var width = 0.0
@@ -187,10 +189,55 @@ static func shared_lines(sets: Dictionary) -> Array:
 		var parts: Array = []
 		var align = sets.ZODIAC.get("align", {})
 		if align is Dictionary:
-			for key in align:
-				parts.append("%s %s" % [pretty_kind(str(key)), str(align[key])])
+			for key in ["fire", "earth", "air", "water"]:
+				var count: int = int(align.get(key, 0))
+				if count > 0:
+					parts.append("%s %d%s" % [str(key).capitalize(), count,
+						" Grand Trine" if count >= 3 else (" Aspect" if count == 2 else "")])
 		lines.append("ZODIAC  %s" % (", ".join(parts) if not parts.is_empty() else "no alignment"))
 	return lines
+
+
+## These are retained outcome receipts, not triggers. Repeated/late snapshots
+## render the same line without a second animation or native ability callback.
+## The authority clears all five fixed slots when its round generation changes.
+static func feedback_lines(feedback: Dictionary) -> Array:
+	var lines: Array = []
+	var outcomes: Dictionary = feedback.get("outcomes", {})
+	for kind in ["bounty_award", "bankroll", "lifeline", "domino", "encore"]:
+		if not outcomes.has(kind):
+			continue
+		var receipt: Dictionary = outcomes[kind]
+		var label = ""
+		match kind:
+			"bounty_award":
+				match receipt.get("status", ""):
+					"awarded": label = "BOUNTY  +10 points"
+					"late": label = "BOUNTY  missed the 3-shot reward"
+					"claimed": label = "BOUNTY  claimed - race standings decide reward"
+			"bankroll": label = "BANKROLL  +2 money"
+			"domino": label = "DOMINO  +%s points on the next ordinary ball" % str(receipt.get("amount", 0))
+			"lifeline":
+				label = "LIFELINE  +1 health" if receipt.get("status") == "healed" else "LIFELINE  already at full health"
+			"encore":
+				match receipt.get("status", ""):
+					"pending": label = "ENCORE  return waiting for table to settle"
+					"returned": label = "ENCORE  returned the last ordinary ball"
+					"unavailable": label = "ENCORE  no eligible ordinary ball to return"
+					"cancelled": label = "ENCORE  return cancelled at round end"
+		if label != "":
+			lines.append("%s  -  shot %d" % [label, int(receipt.get("shot", 0))])
+	return lines
+
+
+## The cue's catalog label identifies the perk; its amount comes only from an
+## already-committed authoritative receipt. Applying it never calls cue rules.
+static func cue_feedback_lines(feedback: Dictionary) -> Array:
+	if feedback.is_empty():
+		return []
+	var model: Dictionary = CueModels.entry(str(feedback.get("model", "")))
+	return ["CUE  %s  +%s points  -  shot %d" % [
+		model.label, str(feedback.get("points", 0)), int(feedback.get("shot", 0))]]
 
 
 static func pretty_kind(kind: String) -> String:

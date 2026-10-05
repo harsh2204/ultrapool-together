@@ -44,6 +44,11 @@ static func catalog(context: Node, game_scene: PackedScene = null) -> Dictionary
 			var scene = Reader.exported(game_scene, key + "_scene")
 			if scene is PackedScene:
 				_cache_scene(key, scene)
+	# Native AntialiasedLine2D._ready selects this generated shared texture.
+	# The scriptless graph uses the already initialized local resource.
+	var antialias = context.get_node_or_null("/root/AntialiasedLine2DTexture")
+	if _catalog.has("constellation") and antialias != null:
+		_catalog.constellation["line_texture"] = antialias.texture
 	# Fixed installed-game resource names, never a received path. Loaded once.
 	for key in WISP_TEXTURES:
 		var file_name = "apple_slice" if key == "apple" else key
@@ -60,6 +65,10 @@ static func _cache_scene(key: String, scene: PackedScene) -> void:
 	var parts: Array = []
 	var complete = _collect_parts(template, template, parts)
 	_catalog[key] = {"scene": scene, "template": template, "parts": parts, "complete": complete}
+	if key == "dicepop":
+		# Own the container, while sharing immutable installed native textures.
+		var faces = Reader.exported(scene, "dice_imgs")
+		_catalog[key]["dice_faces"] = faces.duplicate() if faces is Array else []
 	if key == "constellation":
 		_catalog[key]["star"] = Reader.exported(scene, "star_scn")
 		_catalog[key]["line"] = Reader.exported(scene, "line_scn")
@@ -77,7 +86,13 @@ static func _collect_parts(root: Node, node: Node, parts: Array) -> bool:
 				if _visual_value(value):
 					shaders.append(str(uniform.name))
 					shader_types[str(uniform.name)] = typeof(value)
-		parts.append({"path": str(root.get_path_to(node)), "shaders": shaders, "shader_types": shader_types})
+		var part = {"path": str(root.get_path_to(node)), "shaders": shaders, "shader_types": shader_types}
+		if node is RichTextLabel:
+			# Rich-text markup is local native content, never wire-controlled paths.
+			part["rich_text"] = node.text
+		if node is AnimatedSprite2D and node.sprite_frames != null:
+			part["animations"] = node.sprite_frames.get_animation_names()
+		parts.append(part)
 	for child in node.get_children():
 		if not _collect_parts(root, child, parts):
 			return false
@@ -232,16 +247,23 @@ func _describe(node: Node2D, kind: String) -> Dictionary:
 				state.scale = node.global_scale
 			if part is Sprite2D:
 				state["frame"] = part.frame
+				if kind == "dicepop" and definition.path == "Ring1":
+					var face = _catalog[kind].dice_faces.find(part.texture)
+					if face >= 0:
+						state["dice_face"] = face
 				for key in _textures:
 					if part.texture == _textures[key]:
 						state["texture"] = key
+			if part is AnimatedSprite2D:
+				state["animation"] = str(part.animation)
+				state["frame"] = part.frame
 			if part is Line2D:
 				state["points"] = part.points
 				state["width"] = part.width
 				state["color"] = part.default_color
 			if part is GPUParticles2D or part is CPUParticles2D:
 				state["emitting"] = part.emitting
-			if part is Label:
+			if part is Label or part is RichTextLabel:
 				state["text"] = part.text
 			if not definition.shaders.is_empty() and part.material is ShaderMaterial:
 				var shaders: Dictionary = {}
@@ -313,6 +335,14 @@ static func problem(data, encoded_bytes: int = -1) -> String:
 				return "visual effect texture"
 			if part.has("frame") and (not part.frame is int or part.frame < 0 or part.frame > 4096):
 				return "visual effect frame"
+			if part.has("dice_face"):
+				if item.kind != "dicepop" or _catalog[item.kind].parts[part.index].path != "Ring1":
+					return "visual effect dice part"
+				if not part.dice_face is int or part.dice_face < 0 or part.dice_face >= _catalog[item.kind].dice_faces.size():
+					return "visual effect dice face"
+			if part.has("animation"):
+				if not part.has("frame") or not part.animation is String or part.animation not in _catalog[item.kind].parts[part.index].get("animations", []):
+					return "visual effect animation"
 			if part.has("points") and not _points(part.points):
 				return "visual effect line"
 			if part.has("width") and (not _number(part.width) or part.width < 0 or part.width > 1024):
@@ -323,6 +353,9 @@ static func problem(data, encoded_bytes: int = -1) -> String:
 				return "visual effect particles"
 			if part.has("text") and (not part.text is String or part.text.length() > 256):
 				return "visual effect label"
+			if part.has("text") and _catalog[item.kind].parts[part.index].has("rich_text"):
+				if part.text != _catalog[item.kind].parts[part.index].rich_text:
+					return "visual effect native rich text"
 			if part.has("shader"):
 				if not part.shader is Dictionary or part.shader.size() > 32:
 					return "visual effect shader"

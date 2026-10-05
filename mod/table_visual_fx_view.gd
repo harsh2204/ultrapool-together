@@ -115,8 +115,6 @@ func _create(item: Dictionary) -> void:
 		"origin": Vector2.INF,
 		"links": []
 	}
-	if item.kind == "constellation":
-		_build_constellation(entries[item.id], item, definition)
 
 
 func _apply_item(entry: Dictionary, item: Dictionary, origin: Vector2) -> void:
@@ -142,6 +140,14 @@ func _apply_item(entry: Dictionary, item: Dictionary, origin: Vector2) -> void:
 				part.frame = mini(state.frame, part.hframes * part.vframes - 1)
 			if state.has("texture") and part.texture != Fx.textures().get(state.texture):
 				part.texture = Fx.textures()[state.texture]
+			if state.has("dice_face"):
+				var texture = _catalog[item.kind].dice_faces[state.dice_face]
+				if part.texture != texture:
+					part.texture = texture
+		if part is AnimatedSprite2D and state.has("animation"):
+			part.stop()
+			part.animation = state.animation
+			part.frame = mini(state.frame, part.sprite_frames.get_frame_count(part.animation) - 1)
 		if part is Line2D:
 			if state.has("points") and part.points != state.points:
 				part.points = state.points
@@ -152,27 +158,42 @@ func _apply_item(entry: Dictionary, item: Dictionary, origin: Vector2) -> void:
 		if part is GPUParticles2D or part is CPUParticles2D:
 			if state.has("emitting") and part.emitting != state.emitting:
 				part.emitting = state.emitting
-		if part is Label and state.has("text") and part.text != state.text:
+		if (part is Label or part is RichTextLabel) and state.has("text") and part.text != state.text:
 			part.text = state.text
 		if part.material is ShaderMaterial:
 			for key in state.get("shader", {}):
 				if part.material.get_shader_parameter(key) != state.shader[key]:
 					part.material.set_shader_parameter(key, state.shader[key])
+	if item.kind == "constellation" and (entry.state.get("stars") != item.get("stars") or entry.state.get("connections") != item.get("connections") or entry.state.get("points") != item.get("points")):
+		_build_constellation(entry, item, _catalog[item.kind])
 
 
 func _build_constellation(entry: Dictionary, item: Dictionary, definition: Dictionary) -> void:
+	# Geometry changes are bounded by MAX_POINTS and only rebuild these owned
+	# children; tint-only snapshots retain the graph and its materials.
+	for child in entry.links:
+		if is_instance_valid(child):
+			entry.node.remove_child(child)
+			child.queue_free()
+	entry.links = []
 	for point in item.get("stars", []):
 		if definition.get("star") is PackedScene:
 			var star = Reader.create(definition.star)
 			_enable_visual_process(star)
 			entry.node.add_child(star)
+			entry.links.append(star)
 			star.position = point
 	for pair in item.get("connections", []):
 		if definition.get("line") is PackedScene:
 			var line = Reader.create(definition.line)
 			_enable_visual_process(line)
 			entry.node.add_child(line)
+			entry.links.append(line)
 			if line is Line2D:
+				if definition.get("line_texture") is Texture2D:
+					line.texture = definition.line_texture
+					line.texture_mode = Line2D.LINE_TEXTURE_TILE
+					line.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 				line.points = PackedVector2Array([item.points[pair[0]], item.points[pair[1]]])
 
 

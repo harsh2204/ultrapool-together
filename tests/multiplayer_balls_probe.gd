@@ -28,6 +28,7 @@ func _initialize() -> void:
 	_bounty_and_round_reset()
 	_display_signature_and_encore_gates()
 	_multiplayer_state_validation()
+	_ability_outcome_feedback()
 	_potted_rail_classifier()
 	if failures.is_empty():
 		print("PASS: %d multiplayer ball rules checks" % checks)
@@ -485,6 +486,99 @@ func _display_signature_and_encore_gates() -> void:
 	)
 	empty_table.finish_shot([])
 	_check(not empty_table.call_ball(10, 1, 0), "calls require a registered Called Shot ball")
+
+
+func _ability_outcome_feedback() -> void:
+	var overlay = load(get_script().resource_path.get_base_dir().path_join("../mod/ability_overlay.gd"))
+	var model = _new_rules()
+	model.begin_shot(2, 10, false, 2)
+	var paid: Dictionary = model.pocket(1, [BOUNTY], 8.0, 0, false)
+	var receipt: Dictionary = model.capture_feedback()
+	_check(paid.points == 10 and receipt.outcomes.bounty_award.amount == 10,
+		"Bounty receipt names the actual fixed reward, not the native ball score")
+	_check(overlay.feedback_lines(receipt) == ["BOUNTY  +10 points  -  shot 2"],
+		"production Bounty pot renders cause, amount and accepted shot")
+	model.pocket(1, [BOUNTY], 8.0, 0, false)
+	_check(model.capture_feedback() == receipt, "duplicate Bounty callback cannot replace or replay a receipt")
+	var state = {"last_shooter": 0, "bounty_shot": 2, "pending": true, "call": {},
+		"balls": [], "pockets": [], "feedback": receipt}
+	_check(rules_script.valid_state(state), "optional outcome extension validates through production state boundary")
+	var legacy: Dictionary = state.duplicate(true)
+	legacy.erase("feedback")
+	_check(rules_script.valid_state(legacy), "protocol 10 state without outcome extension remains accepted")
+	_check(rules_script.display_signature(state) != rules_script.display_signature(legacy),
+		"outcome changes trigger reliable display publication")
+	_check(overlay.signature(state, {}) != overlay.signature(legacy, {}),
+		"outcome changes invalidate guest and watcher drawing")
+	_check(overlay.feedback_lines(receipt.duplicate(true)) == overlay.feedback_lines(receipt),
+		"late join and duplicate resync display the same receipt without trigger state")
+	var invalid: Dictionary = state.duplicate(true)
+	invalid.feedback.outcomes.bounty_award.amount = 11
+	_check(not rules_script.valid_state(invalid), "Bounty status cannot carry a forged reward amount")
+	invalid = state.duplicate(true)
+	invalid.feedback.outcomes.bounty_award.shot = -1
+	_check(not rules_script.valid_state(invalid), "receipt rejects invalid originating shot")
+	invalid = state.duplicate(true)
+	invalid.feedback.outcomes.unknown = receipt.outcomes.bounty_award
+	_check(not rules_script.valid_state(invalid), "receipt keys are a bounded ability allowlist")
+	model.reset_round("round-2")
+	_check(model.capture_feedback().generation != receipt.generation and model.capture_feedback().outcomes.is_empty(),
+		"round replacement changes generation and clears all visible receipts")
+	_check(receipt.outcomes.bounty_award.amount == 10, "round reset preserves previously captured immutable receipt")
+	var late = _new_rules()
+	late.begin_shot(4, 10, false, 2)
+	late.pocket(1, [BOUNTY], 8.0, 0, false)
+	_check(late.capture_feedback().outcomes.bounty_award.status == "late",
+		"late Bounty pot reports missed deadline instead of inventing an award")
+	var competitive = _new_rules()
+	competitive.begin_shot(1, 10, true, 2)
+	competitive.pocket(1, [BOUNTY], 8.0, 0, false)
+	_check(competitive.capture_feedback().outcomes.bounty_award.status == "claimed"
+		and competitive.capture_feedback().outcomes.bounty_award.amount == 0,
+		"competitive Bounty records the claim and leaves the lobby-owned race award unresolved")
+	var utility = _new_rules()
+	utility.begin_shot(1, 10, false, 2)
+	utility.wall(2)
+	var bank: Dictionary = utility.pocket(2, [BANKROLL], 8.0, 0, false)
+	var heal: Dictionary = utility.pocket(3, [LIFELINE], 8.0, 0, false)
+	utility.record_heal(3, 0)
+	utility.pocket(4, [DOMINO], 8.0, 0, false)
+	var domino: Dictionary = utility.pocket(5, [], 8.4, 0, true)
+	var encore: Dictionary = utility.pocket(6, [ENCORE], 8.0, 0, false)
+	var pending: Dictionary = utility.capture_feedback()
+	_check(bank.money == 2 and pending.outcomes.bankroll.amount == bank.money,
+		"Bankroll receipt follows its successful wall-qualified utility payout")
+	_check(heal.heal == 1 and pending.outcomes.lifeline.status == "full" and pending.outcomes.lifeline.amount == 0,
+		"Lifeline receipt uses applied healing rather than requested healing at full HP")
+	_check(domino.points == 9 and pending.outcomes.domino.amount == domino.points
+		and pending.outcomes.domino.ball == 5,
+		"Domino receipt binds the computed bonus to the following ordinary pot")
+	_check(encore.encore and pending.outcomes.encore.status == "pending",
+		"Encore begins as pending until the authority performs the return")
+	utility.record_encore("returned")
+	var returned: Dictionary = utility.capture_feedback()
+	_check(returned.outcomes.encore.status == "returned" and pending.outcomes.encore.status == "pending",
+		"Encore completion updates its receipt without mutating an in-flight capture")
+	utility.record_encore("cancelled")
+	utility.record_heal(3, 1)
+	utility.pocket(5, [], 100.0, 0, true)
+	_check(utility.capture_feedback() == returned, "duplicate terminal Encore/heal/Domino callbacks preserve completed outcomes")
+	_check(rules_script.valid_feedback(returned), "all utility receipts satisfy the bounded wire schema")
+	_check(overlay.feedback_lines(returned).size() == 4
+		and "ENCORE  returned the last ordinary ball  -  shot 1" in overlay.feedback_lines(returned),
+		"utility receipt causes all reach the common guest/watcher panel")
+	var injured = _new_rules()
+	injured.begin_shot(1, 10, false, 2)
+	injured.pocket(3, [LIFELINE], 8.0, 0, false)
+	injured.record_heal(3, 1)
+	_check(injured.capture_feedback().outcomes.lifeline.status == "healed", "applied healing reports the Lifeline cause")
+	for status in ["cancelled", "unavailable"]:
+		var ending = _new_rules()
+		ending.begin_shot(1, 10, false, 2)
+		ending.pocket(6, [ENCORE], 8.0, 0, false)
+		ending.record_encore(status)
+		_check(ending.capture_feedback().outcomes.encore.status == status,
+			"Encore resolves an unsuccessful return without claiming a respawn")
 
 
 func _potted_rail_classifier() -> void:

@@ -74,9 +74,12 @@ func _process(_delta: float) -> void:
 	var expansion_state: Dictionary = {}
 	if expansion != null and expansion.has_method("display_state"):
 		expansion_state = expansion.display_state()
-	if not _active and expansion_state.is_empty():
+	var cue_feedback: Dictionary = _controller.latest_state.get("cue_feedback", {})
+	if not _active and expansion_state.is_empty() and cue_feedback.is_empty():
+		if not _ui._cue_feedback.is_empty():
+			_ui.refresh({}, {}, {})
 		return
-	_ui.refresh(display_state() if _active else {}, expansion_state)
+	_ui.refresh(display_state() if _active else {}, expansion_state, cue_feedback)
 
 
 ## PERF-028: the host reuses its latest published capture instead of rebuilding
@@ -216,15 +219,20 @@ func record_pocket(body, pocket, multiplier: float) -> void:
 		game.player_info.gain_money(action.money)
 		game.table.update_money(game.player_info.money)
 		game.display_money(action.money, body.global_position)
-	if action.heal > 0 and game.player_info.hp < game.get_max_hp():
-		game.player_info.hp = mini(game.get_max_hp(), game.player_info.hp + action.heal)
-		game.update_hp(game.player_info.hp)
+	if action.heal > 0:
+		var before_hp: int = game.player_info.hp
+		if before_hp < game.get_max_hp():
+			game.player_info.hp = mini(game.get_max_hp(), before_hp + action.heal)
+			game.update_hp(game.player_info.hp)
+		rules.record_heal(body.get_instance_id(), int(game.player_info.hp) - before_hp)
 	if action.encore:
 		for index in range(_potted.size() - 1, -1, -1):
 			var candidate = _potted[index].get_ref()
 			if _encore_candidate(candidate):
 				_encore = weakref(candidate)
 				break
+		if _encore == null:
+			rules.record_encore("unavailable")
 	if kinds.is_empty():
 		_potted.append(weakref(body))
 
@@ -245,6 +253,7 @@ func _try_encore() -> void:
 	var game = _game()
 	var body = _encore.get_ref()
 	if game == null or not _encore_candidate(body):
+		rules.record_encore("cancelled")
 		_encore = null
 		return
 	# round_ended alone must not cancel — native sets it when the table clears, which is
@@ -252,6 +261,7 @@ func _try_encore() -> void:
 	if BallRules.encore_cancelled(
 		bool(game.in_shop), bool(game.get("round_end_stuff_happened"))
 	):
+		rules.record_encore("cancelled")
 		_encore = null
 		return
 	if (
@@ -268,6 +278,7 @@ func _try_encore() -> void:
 	game.respawn_specific_ball(body)
 	game.pocketed_balls.erase(body)
 	game.delay_round_end(1.0)
+	rules.record_encore("returned")
 	_encore = null
 
 
@@ -337,6 +348,7 @@ func capture() -> Dictionary:
 		"last_shooter": rules.last_shooter,
 		"pending": rules.pending,
 		"bounty_shot": bounty_shot(),
+		"feedback": rules.capture_feedback(),
 		"call": rules.call_state.duplicate(),
 		"balls": [],
 		"pockets": []

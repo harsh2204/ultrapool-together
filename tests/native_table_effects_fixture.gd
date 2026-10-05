@@ -20,6 +20,9 @@ var _active: Dictionary = {}
 var _tail: Dictionary = {}
 var _removed: Dictionary = {}
 var _native_visuals: Dictionary = {}
+var _pocket_active: Dictionary = {}
+var _pocket_reset: Dictionary = {}
+var _sampled_pocket_id = 0
 
 
 func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> void:
@@ -93,11 +96,20 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 	var area = pocket.get_node("Area2D")
 	var white = pocket.get_node("%WhiteHoleEffect")
 	var saved_pocket = {
-		"scale": area.scale, "color": white.modulate, "process": pocket.is_processing()
+		"scale": area.scale, "color": white.modulate, "process": pocket.is_processing(),
+		"closed": pocket.closed, "shielded": pocket.shielded
 	}
 	pocket.set_process(false)
 	pocket.increase_suck(2.5)
 	pocket._process(0.05)
+	pocket.close_pocket()
+	pocket.set_shield(true)
+	var door_animation = pocket.get_node("Doors/AnimationPlayer")
+	door_animation.advance(0.25)
+	door_animation.pause()
+	_sampled_pocket_id = pocket.get_instance_id()
+	_pocket_active = _inspect_pocket(pocket)
+	record.call(pocket.closed and pocket.shielded and pocket.get_node("Doors").modulate.a > 0.0, "native effects: native pocket close animation and shield are active")
 	_active = mod.table_sync.capture()
 	record.call(
 		mod.table_sync.valid_capture(_active), "native effects: active native capture is valid"
@@ -152,6 +164,14 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 	energy._process(1.1)
 	area.scale = saved_pocket.scale
 	white.modulate = saved_pocket.color
+	if saved_pocket.closed:
+		pocket.close_pocket()
+	else:
+		pocket.open_pocket()
+	pocket.set_shield(saved_pocket.shielded)
+	door_animation.advance(0.5)
+	door_animation.pause()
+	_pocket_reset = _inspect_pocket(pocket)
 	pocket.set_process(saved_pocket.process)
 	_removed = mod.table_sync.capture()
 	(
@@ -185,6 +205,8 @@ func check_guest(mod: Node, baseline: Dictionary, record: Callable, capture: Cal
 	var birth = _with_effects(baseline, _birth.effects)
 	var active = _with_effects(baseline, _active.effects)
 	var removed = _with_effects(baseline, _removed.effects)
+	active.pockets = _active.pockets.duplicate(true)
+	removed.pockets = _removed.pockets.duplicate(true)
 	record.call(sync.apply_snapshot(birth), "native effects: guest accepts native birth")
 	var game = mod.get_node("/root/Global").gameManager
 	var view = game.effects_view
@@ -197,6 +219,11 @@ func check_guest(mod: Node, baseline: Dictionary, record: Callable, capture: Cal
 	await _drain(view, mod, record, "guest growth")
 	_check_view(view, active.effects, Vector2.ZERO, record, "guest active", true)
 	_check_pockets(game.pocket_replicas, active.effects, record, "guest")
+	_check_pocket_visual(game.pocket_replicas[_sampled_pocket_id], _pocket_active, record, "guest closed")
+	var malformed_pocket = active.duplicate(true)
+	malformed_pocket.pockets[0].pocket_visual[2][2] = Vector2(NAN, 1.0)
+	record.call(not sync.apply_snapshot(malformed_pocket), "native effects: malformed ordinary pocket visual rejected before mutation")
+	_check_pocket_visual(game.pocket_replicas[_sampled_pocket_id], _pocket_active, record, "rejected update")
 	record.call(
 		_node_ids(view) == identities, "native effects: growth retains existing guest nodes"
 	)
@@ -210,11 +237,13 @@ func check_guest(mod: Node, baseline: Dictionary, record: Callable, capture: Cal
 		"native effects: guest render frames cannot score, spawn balls or change money"
 	)
 	_check_invalid(sync, active, view, record)
+	_check_pocket_substate_isolation(sync, game, active, removed, record)
 	var tail = _with_effects(baseline, _tail.effects)
 	record.call(sync.apply_snapshot(tail), "native effects: guest accepts projectile visual tail")
 	await _drain(view, mod, record, "guest tail")
 	_check_view(view, tail.effects, Vector2.ZERO, record, "guest projectile tail", false)
 	record.call(sync.apply_snapshot(removed), "native effects: guest accepts native consumption")
+	_check_pocket_visual(game.pocket_replicas[_sampled_pocket_id], _pocket_reset, record, "guest reopened")
 	await mod.get_tree().process_frame
 	record.call(view.entries.is_empty(), "native effects: consumed guest effects are freed")
 	record.call(
@@ -223,6 +252,8 @@ func check_guest(mod: Node, baseline: Dictionary, record: Callable, capture: Cal
 	await _drain(view, mod, record, "guest resync")
 	_check_view(view, active.effects, Vector2.ZERO, record, "guest resync", true)
 	await _check_synthetic_burst(mod, active, view, record)
+	_check_pocket_epoch(view, game.pocket_replicas, active.effects, active.pockets, record)
+	await _drain(view, mod, record, "pocket epoch recovery")
 	record.call(sync.apply_snapshot(baseline), "native effects: guest baseline restored")
 	await mod.get_tree().process_frame
 	record.call(view.entries.is_empty(), "native effects: baseline cleanup leaves no effect nodes")
@@ -267,6 +298,7 @@ func _check_spectator(
 			else spectator._holes.get(state.id)
 		)
 	_check_pockets(pockets, active.effects, record, "spectator")
+	_check_pocket_visual(pockets[_sampled_pocket_id], _pocket_active, record, "spectator closed")
 	await capture.call(
 		"spectate-table-effects", "Spectator · the same native table effects without host gameplay"
 	)
@@ -281,6 +313,7 @@ func _check_spectator(
 	spectator._frames.clear()
 	spectator.apply_snapshot(1, removed)
 	spectator.tick(0.0)
+	_check_pocket_visual(pockets[_sampled_pocket_id], _pocket_reset, record, "spectator reopened")
 	await mod.get_tree().process_frame
 	record.call(
 		spectator._effects_view.entries.is_empty(),
@@ -676,3 +709,58 @@ func _cleanup_host(mod: Node, game: Node, drops: Array, donor, energy, flower_st
 			game.get(field).erase(donor)
 		donor.queue_free()
 	game.ach_data_planted_flowers_count = flower_stat
+
+
+func _inspect_pocket(pocket: Node) -> Dictionary:
+	return {
+		"root_color": pocket.modulate,
+		"door_color": pocket.get_node("Doors").modulate,
+		"left": pocket.get_node("Doors/Left").position,
+		"right": pocket.get_node("Doors/Right").position,
+		"left_tint": pocket.get_node("Doors/Left").self_modulate,
+		"right_tint": pocket.get_node("Doors/Right").self_modulate,
+		"shield": pocket.get_node("ShieldIndicator").visible,
+		"label": pocket.get_node("Label").text,
+		"score_scale": pocket.get_node("ExtraScoreLabelPivot").scale
+	}
+
+
+func _check_pocket_visual(pocket: Node, expected: Dictionary, record: Callable, role: String) -> void:
+	var actual = _inspect_pocket(pocket)
+	for key in expected:
+		record.call(actual[key] == expected[key], "native effects: " + role + " preserves native pocket " + key)
+
+
+func _check_pocket_epoch(view, pockets: Dictionary, effects: Dictionary, ordinary: Array, record: Callable) -> void:
+	var epoch: String = view._epoch
+	var overflow = preload("../mod/table_effects_sync.gd").overflow("descriptor")
+	view.apply(overflow, Vector2.ZERO, epoch + ":pocket-reset")
+	view.apply_pockets(overflow, pockets)
+	var pocket = pockets[_sampled_pocket_id]
+	record.call(pocket.get_node("Doors").modulate.a == 0.0 and not pocket.get_node("ShieldIndicator").visible, "native effects: new-epoch overflow clears obsolete pocket doors and shield")
+	view.apply(effects, Vector2.ZERO, epoch)
+	view.apply_pockets(effects, pockets, ordinary)
+	_check_pocket_visual(pocket, _pocket_active, record, "epoch recovery")
+
+
+func _check_pocket_substate_isolation(sync, game: Node, active: Dictionary, removed: Dictionary, record: Callable) -> void:
+	var pocket = game.pocket_replicas[_sampled_pocket_id]
+	var suction_scale: Vector2 = pocket.get_node("Area2D").scale
+	var suction_color: Color = pocket.find_child("WhiteHoleEffect", true, false).modulate
+	var retained = _node_ids(game.effects_view)
+	var partial = active.duplicate(true)
+	partial.effects = preload("../mod/table_effects_sync.gd").overflow("bytes")
+	partial.pockets = removed.pockets.duplicate(true)
+	record.call(sync.apply_snapshot(partial), "native effects: ordinary pocket update survives independent durable overflow")
+	_check_pocket_visual(pocket, _pocket_reset, record, "independent pocket update")
+	record.call(pocket.get_node("Area2D").scale == suction_scale and pocket.find_child("WhiteHoleEffect", true, false).modulate == suction_color, "native effects: durable overflow retains last complete suction while pocket art advances")
+	record.call(_node_ids(game.effects_view) == retained, "native effects: independent pocket art update retains durable effect nodes")
+	var missing_art = active.duplicate(true)
+	missing_art.effects = partial.effects.duplicate(true)
+	missing_art.pocket_visual_status = "overflow"
+	for state in missing_art.pockets:
+		state.erase("pocket_visual")
+	record.call(sync.apply_snapshot(missing_art), "native effects: optional art omission preserves authoritative pocket fields")
+	_check_pocket_visual(pocket, _pocket_reset, record, "omitted art retention")
+	record.call(sync.apply_snapshot(active), "native effects: complete state recovers both pocket substates")
+	_check_pocket_visual(pocket, _pocket_active, record, "independent recovery")

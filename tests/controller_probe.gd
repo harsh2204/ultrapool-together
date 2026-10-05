@@ -153,6 +153,7 @@ class TableStub:
 class SpectatorStub:
 	extends Node
 	var watched_table = -1
+	var summary_refreshes = 0
 	var states: Array = []
 	var snapshots: Array = []
 
@@ -167,6 +168,9 @@ class SpectatorStub:
 
 	func apply_snapshot(table: int, scene: Dictionary):
 		snapshots.append({"table": table, "scene": scene.duplicate(true)})
+
+	func refresh_summary():
+		summary_refreshes += 1
 
 
 class ShopStub:
@@ -380,6 +384,7 @@ func _controller():
 		controller.add_child(dependency)
 	controller.lobby_model = load(_base.path_join("lobby_state.gd")).new()
 	controller.router = load(_base.path_join("table_router.gd")).new()
+	controller.bounty_race = load(_base.path_join("bounty_race.gd"))
 	controller._local_id = 20
 	controller.table_id = 1
 	controller.table_leader_id = 20
@@ -934,10 +939,39 @@ func _topology_keyframes():
 	_deliver(effect_guest, 20, with_effects)
 	_check(effect_guest.table_sync.applied.effects.droplets.is_empty() and effect_guest.table_sync.applied.visual_fx.items.is_empty(), "delayed effects cannot resurrect after a newer removal keyframe")
 	effect_guest.free()
+	# Optional art can recover while every other effect family still overflows.
+	# Its status is a reliable boundary even when identities remain unchanged.
+	host.table_sync.captured.effects.status = "overflow"
+	host.table_sync.captured.effects.reason = "bytes"
+	host.table_sync.captured.visual_fx.status = "overflow"
+	host.table_sync.captured["native_draw"] = {"status": "overflow", "items": []}
+	host._publish_snapshot()
+	host._publish_snapshot()
+	_check(host.transport.sent.back().unreliable, "stable effect overflow remains disposable")
+	for field in ["ball_visual_status", "pocket_visual_status"]:
+		var status_before: Array = host._published_presentation_status.duplicate()
+		host.table_sync.captured[field] = "overflow"
+		host._publish_snapshot(false, 30)
+		_check(not host.transport.sent.back().unreliable, field + " targeted overflow resync is reliable")
+		_check(host._published_presentation_status == status_before, field + " targeted overflow preserves broadcast boundary")
+		host._publish_snapshot()
+		_check(not host.transport.sent.back().unreliable, field + " status-only overflow broadcasts reliably")
+		host._publish_snapshot()
+		_check(host.transport.sent.back().unreliable, field + " stable overflow is disposable")
+		status_before = host._published_presentation_status.duplicate()
+		host.table_sync.captured[field] = "complete"
+		host._publish_snapshot(false, 30)
+		_check(not host.transport.sent.back().unreliable, field + " targeted recovery resync is reliable")
+		_check(host._published_presentation_status == status_before, field + " targeted recovery preserves broadcast boundary")
+		host._publish_snapshot()
+		_check(not host.transport.sent.back().unreliable, field + " status-only recovery broadcasts reliably")
+		host._publish_snapshot()
+		_check(host.transport.sent.back().unreliable, field + " stable recovery is disposable")
 	host._clear_spawn_barrier()
 	_check(
 		host._published_ball_ids.is_empty() and host._published_pocket_ids.is_empty()
-		and host._published_effect_ids.is_empty() and host._published_visual_fx_ids.is_empty(),
+		and host._published_effect_ids.is_empty() and host._published_visual_fx_ids.is_empty()
+		and host._published_native_draw_ids.is_empty() and host._published_presentation_status.is_empty(),
 		"disconnect/rematch reset clears every bounded topology cache"
 	)
 	host._publish_snapshot()
@@ -1145,6 +1179,23 @@ func _race_finishes():
 		}
 	)
 	_check(host._valid_state(win, 1), "native final-round victory is a valid race finish")
+	var receipt_state: Dictionary = win.duplicate(true)
+	receipt_state.used_shots = 2
+	receipt_state.cue_feedback = {"generation": 1, "shot": 2, "actor": 20, "ball": 123, "model": "bankshot", "points": 0.18}
+	_check(host._valid_state(receipt_state, 1), "committed cue receipt crosses the state boundary")
+	var pending_receipt: Dictionary = receipt_state.duplicate(true)
+	pending_receipt.pending = true
+	pending_receipt.cue_feedback.shot = 3
+	_check(host._valid_state(pending_receipt, 1), "mid-shot cue receipt is valid before used_shots increments")
+	pending_receipt.cue_feedback.shot = 4
+	_check(not host._valid_state(pending_receipt, 1), "pending cue receipt cannot claim a future shot")
+	for invalid in [{"model": "house"}, {"model": "res://foreign.gd"}, {"points": 0.0}, {"points": INF}, {"points": 1000000.0}, {"shot": 3}]:
+		var bad_receipt: Dictionary = receipt_state.duplicate(true)
+		bad_receipt.cue_feedback.merge(invalid, true)
+		_check(not host._valid_state(bad_receipt, 1), "invalid or future cue receipt rejects before state apply " + str(invalid))
+	var legacy_receipt: Dictionary = receipt_state.duplicate(true)
+	legacy_receipt.erase("cue_feedback")
+	_check(host._valid_state(legacy_receipt, 1), "legacy state remains valid without cue receipt")
 	var premature: Dictionary = win.duplicate(true)
 	premature.round = 19
 	_check(not host._valid_state(premature, 1), "winning a nonfinal round cannot finish a race")
@@ -1329,6 +1380,9 @@ func _spectator_routes():
 	viewer.spectator = SpectatorStub.new()
 	viewer.add_child(viewer.spectator)
 	viewer.spectator.watched_table = 0
+	viewer._roster_changed()
+	_check(viewer.spectator.summary_refreshes == 1,
+		"lobby summary delivery refreshes a finished watched result without another snapshot")
 	_check(not viewer._turn_ready(), "spectating blocks local shot controls")
 	var frame = {
 		"kind": "watch_state", "match": viewer.match_id, "table": 0, "payload": _state(viewer, 0)

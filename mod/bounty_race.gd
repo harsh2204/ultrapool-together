@@ -21,3 +21,16 @@ static func resolve(summaries: Array, competitive: bool) -> void:
 		if int(summary.get("bounty_shot", 0)) == earliest:
 			summary.bounty_bonus = REWARD
 			summary.score = float(summary.base_score) + REWARD
+
+
+## MOD-04: render only a finalized authoritative award. This helper never
+## resolves standings or modifies score, so duplicate lobby/resync updates are inert.
+static func award_text(summary: Dictionary) -> String:
+	if not summary.get("finished") is bool or not summary.finished:
+		return ""
+	if not summary.get("bounty_shot") is int or summary.bounty_shot <= 0:
+		return ""
+	var bonus = summary.get("bounty_bonus")
+	if not (bonus is int or bonus is float) or not is_finite(float(bonus)) or bonus != REWARD:
+		return ""
+	return "Bounty +25 points"

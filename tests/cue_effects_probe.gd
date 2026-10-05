@@ -21,6 +21,19 @@ class TableFixture:
 	var table: Node
 
 
+class FeedbackGame:
+	extends RefCounted
+	var rounds_played = 1
+
+
+class FeedbackService:
+	extends "../mod/cue_effects.gd"
+	var game: RefCounted
+
+	func _game():
+		return game
+
+
 func _initialize() -> void:
 	var base = get_script().resource_path.get_base_dir().path_join("../mod")
 	var script = load(base.path_join("cue_effect_rules.gd"))
@@ -35,6 +48,7 @@ func _initialize() -> void:
 	_check_midshot_overflow(script)
 	_check_native_callback_guards(base)
 	_check_pocket_geometry(base)
+	_check_feedback(base)
 	_finish()
 
 
@@ -622,6 +636,66 @@ func _check_pocket_geometry(base: String) -> void:
 	_check(service._fixed_pockets.is_empty(), "degenerate pocket geometry fails closed")
 	game.table.free()
 	service.free()
+
+
+func _check_feedback(base: String) -> void:
+	var effects = load(base.path_join("cue_effects.gd"))
+	var models = load(base.path_join("cue_models.gd"))
+	var overlay = load(base.path_join("ability_overlay.gd"))
+	var rules = _fresh(load(base.path_join("cue_effect_rules.gd")))
+	_begin(rules, 1, 10, "bankshot")
+	rules.wall(1)
+	var points: float = rules.pocket(1, 3.0, "corner")
+	var receipt = {"generation": 1, "shot": 1, "actor": 10, "ball": 1,
+		"model": "bankshot", "points": points}
+	_check(effects.valid_feedback({}), "legacy absent cue receipt remains valid")
+	_check(effects.valid_feedback(receipt), "actual rules-awarded fractional amount fits cue receipt schema")
+	_check(overlay.cue_feedback_lines(receipt) == ["CUE  Bankshot  +0.18 points  -  shot 1"],
+		"cue receipt presentation preserves its cause and fractional points")
+	_check(overlay.signature({}, {}, [], receipt) != overlay.signature({}, {}),
+		"a cue-only award invalidates shared ability drawing")
+	for model in models.entries():
+		var candidate: Dictionary = receipt.duplicate(true)
+		candidate.model = model.id
+		candidate.points = model.bonus_cap
+		_check(effects.valid_feedback(candidate) == (model.bonus_rate > 0.0),
+			"cue feedback permits only catalog models that can award a perk: " + model.id)
+		if model.bonus_rate > 0.0:
+			_check(model.label in overlay.cue_feedback_lines(candidate)[0],
+				"cue feedback preserves catalog label: " + model.id)
+	for points_value in [-1.0, 0.0, 2.01, INF, NAN, "0.18"]:
+		var invalid: Dictionary = receipt.duplicate(true)
+		invalid.points = points_value
+		_check(not effects.valid_feedback(invalid), "cue receipt rejects invalid or over-cap points")
+	for field in ["generation", "shot", "actor", "ball"]:
+		var invalid: Dictionary = receipt.duplicate(true)
+		invalid[field] = 0
+		_check(not effects.valid_feedback(invalid), "cue receipt rejects zero " + field)
+		invalid[field] = "1"
+		_check(not effects.valid_feedback(invalid), "cue receipt rejects noninteger " + field)
+	var invalid: Dictionary = receipt.duplicate(true)
+	invalid.model = "native_script_path"
+	_check(not effects.valid_feedback(invalid), "cue receipt rejects unknown cause identifiers")
+	invalid = receipt.duplicate(true)
+	invalid.extra = [receipt]
+	_check(not effects.valid_feedback(invalid), "cue receipt is one fixed-size record, never a queue")
+	var service = FeedbackService.new()
+	var controller = HostFixture.new()
+	service._controller = controller
+	service.begin_session()
+	service.game = FeedbackGame.new()
+	service._round_key = "%d:1" % service.game.get_instance_id()
+	service._feedback = receipt.duplicate(true)
+	var retained: Dictionary = service.capture_feedback()
+	retained.points = 1.0
+	_check(service.capture_feedback() == receipt, "captured cue receipt cannot mutate the retained authority state")
+	service.game.rounds_played = 2
+	_check(service.capture_feedback().is_empty(), "round transition clears cue receipt before the next shot")
+	service._feedback = receipt.duplicate(true)
+	service.end_session()
+	_check(service.capture_feedback().is_empty(), "cue receipt clears on disconnect/rematch teardown")
+	service.free()
+	controller.free()
 
 
 func _check(condition: bool, label: String) -> void:

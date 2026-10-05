@@ -228,6 +228,27 @@ class _PocketCaptureStub:
 	var shielded = false
 	var held_balls: Array = []
 
+	func _init() -> void:
+		# Capture samples the native pocket's fixed presentation hierarchy. Keep
+		# this logical stub inert, but give it the same visual node types/paths.
+		var doors = Node2D.new()
+		doors.name = "Doors"
+		add_child(doors)
+		for part_name in ["Left", "Right"]:
+			var door = Sprite2D.new()
+			door.name = part_name
+			doors.add_child(door)
+		for part_name in ["ShieldIndicator", "SkullIndicator"]:
+			var indicator = Sprite2D.new()
+			indicator.name = part_name
+			add_child(indicator)
+		var label = Label.new()
+		label.name = "Label"
+		add_child(label)
+		var extra_score_pivot = Node2D.new()
+		extra_score_pivot.name = "ExtraScoreLabelPivot"
+		add_child(extra_score_pivot)
+
 	func get_multiplier() -> float:
 		return multiplier
 
@@ -263,6 +284,16 @@ func _check_pocket_capture(sync: Node, state: Dictionary) -> void:
 	var original = sync._capture_pockets(game)
 	for index in 6:
 		_check(original[index].base_index == index, "base pocket retains native scene order")
+	var captured_base = state.duplicate(true)
+	captured_base.pockets = original
+	_check(sync.valid_capture(captured_base), "base pockets capture valid native presentation")
+	var legacy_base = captured_base.duplicate(true)
+	for pocket in legacy_base.pockets:
+		pocket.erase("pocket_visual")
+	_check(sync.valid_capture(legacy_base), "legacy pockets may omit optional presentation")
+	var malformed_visual = captured_base.duplicate(true)
+	malformed_visual.pockets[0].pocket_visual = []
+	_check(not sync.valid_capture(malformed_visual), "present incomplete pocket presentation is rejected")
 	var decoration = Node2D.new()
 	pocket_parent.add_child(decoration)
 	_check(

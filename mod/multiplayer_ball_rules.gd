@@ -18,6 +18,11 @@ var shooter = 0
 var pending = false
 var call_state: Dictionary = {}
 var bounty_shot = 0
+# PERF-028 / MOD-04..06: five fixed outcome slots, never an event backlog.
+# Receipts live until the next round/session. Resync reads them; it cannot replay
+# scoring, healing or respawning. The round generation changes even with no receipt.
+var feedback_generation = 0
+var feedback: Dictionary = {}
 var _round_key = ""
 var _competitive = false
 var _solo_table = false
@@ -32,6 +37,8 @@ func reset_round(round_key: String) -> void:
 	if round_key == _round_key:
 		return
 	_round_key = round_key
+	feedback_generation += 1
+	feedback = {}
 	balls.clear()
 	last_shooter = 0
 	shooter = 0
@@ -110,6 +117,7 @@ func pocket(
 	var value = maxf(0.0, base_value) if is_finite(base_value) else 0.0
 	if _domino_armed and ordinary and ball.kinds.is_empty():
 		result.points += ceilf(value)
+		_record_feedback("domino", ball_id, "awarded", ceilf(value))
 		_domino_armed = false
 	for kind in ball.kinds:
 		if ball.paid.has(kind):
@@ -136,10 +144,14 @@ func pocket(
 					result.bounty = true
 					if not _competitive and shot_index <= 3:
 						result.points += 10.0
+					_record_feedback("bounty_award", ball_id,
+						"claimed" if _competitive else ("awarded" if shot_index <= 3 else "late"),
+						10 if not _competitive and shot_index <= 3 else 0)
 				ball.paid[kind] = true
 			BANKROLL:
 				if _walls.has(ball_id) and not _utilities.has(kind):
 					result.money = 2
+					_record_feedback("bankroll", ball_id, "awarded", 2)
 					_utilities[kind] = true
 			LIFELINE:
 				if not _utilities.has(kind):
@@ -148,12 +160,83 @@ func pocket(
 			ENCORE:
 				if not _utilities.has(kind):
 					result.encore = true
+					_record_feedback("encore", ball_id, "pending")
 					_utilities[kind] = true
 			DOMINO:
 				if not _utilities.has(kind):
 					_domino_armed = true
 					_utilities[kind] = true
 	return result
+
+
+func _record_feedback(kind: String, ball_id: int, status: String, amount = 0) -> void:
+	feedback[kind] = {"ball": ball_id, "shot": shot_index, "status": status, "amount": amount}
+
+
+## Called after the authoritative native HP mutation; a full-health pot has zero
+## applied healing. Do not infer health feedback from a requested +1 action.
+func record_heal(ball_id: int, amount: int) -> void:
+	if not _pocketed.has(ball_id) or not balls.has(ball_id) or LIFELINE not in balls[ball_id].kinds:
+		return
+	if not _utilities.has(LIFELINE) or feedback.has("lifeline") or amount not in [0, 1]:
+		return
+	_record_feedback("lifeline", ball_id, "healed" if amount > 0 else "full", clampi(amount, 0, 1))
+
+
+## A pending Encore can resolve once. A repeated callback or resync cannot turn a
+## terminal outcome back into a pending return or replace its originating shot.
+func record_encore(status: String) -> void:
+	if not feedback.has("encore") or feedback.encore.status != "pending":
+		return
+	if status in ["returned", "unavailable", "cancelled"]:
+		feedback.encore = feedback.encore.duplicate()
+		feedback.encore.status = status
+
+
+func capture_feedback() -> Dictionary:
+	return {"generation": feedback_generation, "outcomes": feedback.duplicate(true)}
+
+
+static func valid_feedback(data) -> bool:
+	if not data is Dictionary or data.size() != 2:
+		return false
+	if not data.get("generation") is int or data.generation < 0:
+		return false
+	if not data.get("outcomes") is Dictionary or data.outcomes.size() > 5:
+		return false
+	for kind in data.outcomes:
+		var receipt = data.outcomes[kind]
+		if not receipt is Dictionary or receipt.size() != 4:
+			return false
+		if not receipt.get("ball") is int or receipt.ball <= 0:
+			return false
+		if not receipt.get("shot") is int or receipt.shot <= 0:
+			return false
+		if (not receipt.get("amount") is int and not receipt.get("amount") is float) or not is_finite(float(receipt.amount)) or not receipt.get("status") is String:
+			return false
+		match kind:
+			"bounty_award":
+				if receipt.status not in ["awarded", "late", "claimed"]:
+					return false
+				if receipt.amount != (10 if receipt.status == "awarded" else 0):
+					return false
+			"bankroll":
+				if receipt.status != "awarded" or receipt.amount != 2:
+					return false
+			"domino":
+				if receipt.status != "awarded" or receipt.amount < 0:
+					return false
+			"lifeline":
+				if receipt.status not in ["healed", "full"]:
+					return false
+				if receipt.amount != (1 if receipt.status == "healed" else 0):
+					return false
+			"encore":
+				if receipt.status not in ["pending", "returned", "unavailable", "cancelled"] or receipt.amount != 0:
+					return false
+			_:
+				return false
+	return true
 
 
 func finish_shot(survivors: Array) -> void:
@@ -186,7 +269,8 @@ static func display_signature(data: Dictionary) -> Array:
 		data.get("last_shooter", 0),
 		data.get("pending", false),
 		data.get("bounty_shot", 0),
-		data.get("call", {})
+		data.get("call", {}),
+		data.get("feedback", {})
 	]
 	for ball in data.get("balls", []):
 		if not ball is Dictionary:
@@ -214,6 +298,9 @@ static func valid_state(data) -> bool:
 		return false
 	if data.is_empty():
 		return true
+	# Optional protocol-10 display extension: older peers omit or ignore it.
+	if data.has("feedback") and not valid_feedback(data.feedback):
+		return false
 	for field in ["last_shooter", "bounty_shot"]:
 		if not data.get(field) is int or data[field] < 0:
 			return false

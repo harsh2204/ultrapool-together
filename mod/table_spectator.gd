@@ -9,9 +9,12 @@ const TITLE_TAG_CONTENT = [46, 9, 20, 12]
 const TITLE_EYE_POSITION = Vector2(16, 9)
 const TITLE_EYE_SIZE = Vector2(24, 24)
 const STATUS_RIBBON_CONTENT = [44, 8, 44, 12]
+const BallVisualState = preload("ball_visual_state.gd")
+const NativeDrawView = preload("table_native_draw_view.gd")
 const TableEffectsView = preload("table_effects_view.gd")
 const TableVisualFxView = preload("table_visual_fx_view.gd")
 const AbilityOverlay = preload("ability_overlay.gd")
+const BountyRace = preload("bounty_race.gd")
 
 var watched_table: int:
 	get:
@@ -42,6 +45,7 @@ var _bounds = Rect2(-320, -240, 640, 480)
 var _last_received = 0.0
 var _effects_view = TableEffectsView.new()
 var _visual_fx_view = TableVisualFxView.new()
+var _native_draw_view = NativeDrawView.new()
 var _effects_frame: Dictionary = {}
 ## PERF-022: table HUD nodes resolved once per board, and the last display inputs.
 var _ui_nodes: Dictionary = {}
@@ -151,6 +155,7 @@ func tick(_delta: float) -> void:
 		_effects_frame = after
 		_effects_view.apply(after.data.get("effects", {}), after.data.table_position, _scene_key)
 		_visual_fx_view.apply(after.data.get("visual_fx", {}), after.data.table_position, _scene_key)
+		_native_draw_view.apply(after.data.get("native_draw", {}), after.data.table_position, _scene_key)
 		_update_pockets(after.data)
 		_update_table_ui(after.data)
 		_layout()
@@ -158,6 +163,7 @@ func tick(_delta: float) -> void:
 		_layout()
 	_effects_view.tick()
 	_visual_fx_view.tick()
+	_native_draw_view.tick()
 	_refresh_abilities(after.data)
 	if _now() - _last_received > STALE_SECONDS:
 		_status.text = "Waiting for table updates… · Your table keeps playing."
@@ -308,6 +314,8 @@ func _create_table(data: Dictionary) -> void:
 	_refresh_cosmetics()
 	_effects_view.setup(_world, game_scene)
 	_visual_fx_view.setup(_world, game_scene)
+	_native_draw_view.setup(_world, game_scene)
+	BallVisualState.prepare()
 	var points: Array[Vector2] = []
 	for pocket in data.pockets:
 		if pocket.base_index >= 0:
@@ -434,6 +442,9 @@ func _render_balls(before: Dictionary, after: Dictionary, weight: float) -> void
 		visual.node.modulate = old.color.lerp(ball.color, weight)
 		visual.visuals.scale = old.visual_scale.lerp(ball.visual_scale, weight)
 		_apply_item(visual, ball.item, ball.player)
+		if visual.get("ball_visual") != ball.get("ball_visual", {}):
+			BallVisualState.apply(visual.node, ball.get("ball_visual", {}))
+			visual["ball_visual"] = ball.get("ball_visual", {}).duplicate(true)
 		var basis = Basis(
 			Quaternion.from_euler(old.spin).slerp(Quaternion.from_euler(ball.spin), weight)
 		)
@@ -457,7 +468,7 @@ func _create_ball(state: Dictionary) -> void:
 	visuals.show()
 	sphere.show()
 	_world.add_child(body)
-	for path in ["static/flash", "static/score_effects", "static/spark", "static/chargeGauge"]:
+	for path in ["static/flash", "static/spark", "static/chargeGauge"]:
 		var effect = visuals.get_node_or_null(path)
 		if effect is CanvasItem:
 			effect.hide()
@@ -475,6 +486,9 @@ func _apply_item(visual: Dictionary, item: Dictionary, is_player: bool = false) 
 		previous.get("data") != item.data or previous.get("mixed") != item.mixed
 	)
 	visual.item = item.duplicate()
+	# Item setup can replace a material or change an indicator beneath the same
+	# host visual sample; reapply that sample once after this mutation.
+	visual.erase("ball_visual")
 	var database = get_node("/root/BallDatabase").id_to_ball
 	var mixed: bool = item.mixed != ""
 	if identity_changed:
@@ -516,6 +530,10 @@ func _update_pockets(data: Dictionary) -> void:
 	var pockets: Array[Node] = _table.get_node("Pockets").get_children()
 	var present: Dictionary = {}
 	var effect_pockets: Dictionary = {}
+	var sampled: Dictionary = {}
+	for effect in data.pockets:
+		if effect.has("pocket_visual"):
+			sampled[effect.id] = true
 	for state in data.pockets:
 		var pocket: Node2D
 		if state.base_index >= 0:
@@ -531,12 +549,14 @@ func _update_pockets(data: Dictionary) -> void:
 		pocket.global_position = _world.to_global(state.position - data.table_position)
 		pocket.rotation = state.rotation
 		pocket.scale = state.scale
-		pocket.modulate = Color("888888") if state.closed else Color.WHITE
-		pocket.get_node("Label").text = (
-			"×"
-			if state.closed
-			else "x%s" % get_node("/root/Global").format_number(state.multiplier)
-		)
+		if not sampled.has(state.id):
+			pocket.modulate = Color("888888") if state.closed else Color.WHITE
+		if not sampled.has(state.id):
+			pocket.get_node("Label").text = (
+				"×"
+				if state.closed and not sampled.has(state.id)
+				else "x%s" % get_node("/root/Global").format_number(state.multiplier)
+			)
 		pocket.get_node("ShieldIndicator").visible = state.shielded
 		pocket.get_node("SkullIndicator").visible = state.has_held_balls
 		var extra_score = pocket.find_child("ExtraScore", true, false)
@@ -548,7 +568,7 @@ func _update_pockets(data: Dictionary) -> void:
 		if not present.has(id):
 			_holes[id].free()
 			_holes.erase(id)
-	_effects_view.apply_pockets(data.get("effects", {}), effect_pockets)
+	_effects_view.apply_pockets(data.get("effects", {}), effect_pockets, data.pockets)
 
 
 func _ability_states() -> Array:
@@ -563,7 +583,7 @@ func _refresh_abilities(data: Dictionary) -> void:
 	var states: Array = _ability_states()
 	_ability_offset = data.table_position
 	# Redraw only when display state, a tracked ball or the board transform changed.
-	var signature: Array = AbilityOverlay.signature(states[0], states[1], [_world.transform])
+	var signature: Array = AbilityOverlay.signature(states[0], states[1], [_world.transform], _state.get("cue_feedback", {}))
 	for pair in AbilityOverlay.tracked_balls(states[0], states[1]):
 		signature.append(_resolve_ability(pair[0], pair[1] - _ability_offset))
 	if signature != _ability_signature:
@@ -594,7 +614,8 @@ func _draw_abilities(canvas: CanvasItem) -> void:
 		_ability_offset,
 		_spectator_name,
 		states[0],
-		states[1]
+		states[1],
+		0, false, _state.get("cue_feedback", {})
 	)
 
 
@@ -606,19 +627,37 @@ func _layout() -> void:
 	_world.position = area.get_center() - _bounds.get_center() * factor
 
 
+## Lobby-summary delivery can finalize a Bounty while this table is already
+## finished. Reconcile once at that boundary, without scanning every render tick.
+func refresh_summary() -> void:
+	if is_watching() and not _frames.is_empty():
+		_update_status(_frames.back().data)
+
+
 func _update_status(data: Dictionary) -> void:
 	var activity = "Shopping" if data.in_shop else "Playing"
 	if _state.get("finished", false):
 		activity = "Finished"
-	_status.text = (
-		"Round %d · Score %s / %s · %d shots · %s"
-		% [data.round + 1, str(data.score), str(data.required_score), data.shots, activity]
-	)
+	var elapsed: int = maxi(0, int(data.results.game_time))
+	var text = "Round %d · %d/%d shots · %d used · %02d:%02d · %s" % [
+		data.round + 1, data.shots, data.shots_max, data.shots_used,
+		elapsed / 60, elapsed % 60, activity
+	]
+	if _state.get("finished", false) and _controller.lobby.get("match_mode", "score") == "score":
+		for summary in _controller.lobby.get("table_summaries", []):
+			if summary is Dictionary and summary.get("table") == _table_id:
+				var award: String = BountyRace.award_text(summary)
+				if award != "":
+					text += " · " + award
+				break
+	if _status.text != text:
+		_status.text = text
 
 
 func _clear_board() -> void:
 	_effects_view.dispose()
 	_visual_fx_view.clear()
+	_native_draw_view.dispose()
 	for child in _world.get_children():
 		child.free()
 	_table = null
@@ -640,6 +679,7 @@ func _clear_board() -> void:
 func _exit_tree() -> void:
 	_effects_view.dispose()
 	_visual_fx_view.clear()
+	_native_draw_view.dispose()
 
 
 func _hide_named(root: Node, node_name: String) -> void:
