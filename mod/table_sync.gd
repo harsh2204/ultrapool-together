@@ -197,6 +197,10 @@ static func _limit_effect_payload(data: Dictionary) -> void:
 	# actions. First defer transient FX, then durable FX if the table is still big.
 	# This bounded encoding is necessary because independent descriptor limits do
 	# not guarantee a valid combined packet (PERF-008/019).
+	if _effect_substates_empty(data):
+		# Without effect descriptors there is nothing this limit could trim, and
+		# 128 ordinary bodies stay beneath the target; skip the whole-table encode.
+		return
 	if var_to_bytes(data).size() <= MAX_TABLE_CAPTURE_BYTES:
 		return
 	data.visual_fx = {
@@ -204,6 +208,19 @@ static func _limit_effect_payload(data: Dictionary) -> void:
 	}
 	if var_to_bytes(data).size() > MAX_TABLE_CAPTURE_BYTES:
 		data.effects = TableEffects.overflow("bytes")
+
+
+static func _effect_substates_empty(data: Dictionary) -> bool:
+	var effects: Dictionary = data.get("effects", {})
+	var visual_fx: Dictionary = data.get("visual_fx", {})
+	return (
+		effects.get("status", "complete") == "complete"
+		and effects.get("droplets", []).is_empty()
+		and effects.get("energy", []).is_empty()
+		and effects.get("pockets", []).is_empty()
+		and visual_fx.get("status", "complete") == "complete"
+		and visual_fx.get("items", []).is_empty()
+	)
 
 
 func _capture_pockets(game: Node) -> Array:
@@ -398,8 +415,19 @@ func valid_capture(data: Dictionary) -> bool:
 	return _valid_snapshot(data)
 
 
+## Public apply: safe for independent callers and fixtures; validates first.
 func apply_snapshot(data: Dictionary) -> bool:
 	if not _guest or not _valid_snapshot(data):
+		return false
+	return apply_validated_snapshot(data)
+
+
+## PERF-014: internal apply for state that main._received_table has already
+## validated at the network boundary in the same frame, so accepted snapshots are
+## checked exactly once. There is no flag on the data: wire payloads can only
+## reach this method through that validated path.
+func apply_validated_snapshot(data: Dictionary) -> bool:
+	if not _guest:
 		return false
 	if not data.available:
 		_clear_replica()

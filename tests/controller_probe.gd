@@ -97,6 +97,7 @@ class TableStub:
 	extends Node
 	var ended = 0
 	var active_effects = false
+	var validations = 0
 	var shots: Array[Vector2] = []
 	var captured: Dictionary = {"available": false}
 	var applied: Dictionary = {}
@@ -108,6 +109,7 @@ class TableStub:
 		ended += 1
 
 	func _valid_snapshot(data: Dictionary) -> bool:
+		validations += 1
 		return data.get("available") is bool
 
 	func valid_capture(data: Dictionary) -> bool:
@@ -137,6 +139,9 @@ class TableStub:
 	func apply_snapshot(data: Dictionary) -> bool:
 		if not _valid_snapshot(data):
 			return false
+		return apply_validated_snapshot(data)
+
+	func apply_validated_snapshot(data: Dictionary) -> bool:
 		applied = data.duplicate(true)
 		return true
 
@@ -327,6 +332,8 @@ func _initialize() -> void:
 	_cue_shop_run_setting()
 	_topology_keyframes()
 	_first_shot_phase_order()
+	_snapshot_slot_and_single_validation()
+	_watcher_forwarding_is_gated()
 	_race_and_score_limits()
 	_native_score_standings()
 	_race_finishes()
@@ -881,10 +888,10 @@ func _topology_keyframes():
 	guest._local_id = 30
 	guest.transport.id = 30
 	guest._guest_phase = guest._snapshot_phase(removed_hole.scene)
-	guest._received_table(20, added_hole)
+	_deliver(guest, 20, added_hole)
 	_check(guest.table_sync.applied.pockets.size() == 2, "guest accepts the new hole keyframe")
-	guest._received_table(20, removed_hole)
-	guest._received_table(20, added_hole)
+	_deliver(guest, 20, removed_hole)
+	_deliver(guest, 20, added_hole)
 	_check(
 		guest.table_sync.applied.pockets.size() == 1
 		and guest.last_guest_snapshot == removed_hole.id,
@@ -922,9 +929,9 @@ func _topology_keyframes():
 	effect_guest._local_id = 30
 	effect_guest.transport.id = 30
 	effect_guest._guest_phase = effect_guest._snapshot_phase(with_effects.scene)
-	effect_guest._received_table(20, with_effects)
-	effect_guest._received_table(20, without_effects)
-	effect_guest._received_table(20, with_effects)
+	_deliver(effect_guest, 20, with_effects)
+	_deliver(effect_guest, 20, without_effects)
+	_deliver(effect_guest, 20, with_effects)
 	_check(effect_guest.table_sync.applied.effects.droplets.is_empty() and effect_guest.table_sync.applied.visual_fx.items.is_empty(), "delayed effects cannot resurrect after a newer removal keyframe")
 	effect_guest.free()
 	host._clear_spawn_barrier()
@@ -1344,6 +1351,127 @@ func _spectator_routes():
 	viewer._received(10, frame)
 	_check(viewer.spectator.snapshots.size() == 1, "previous-match spectator snapshots are ignored")
 	viewer.free()
+
+
+## Receive one table message, then end the frame's receive drain (PERF-002).
+func _deliver(controller, actor: int, message: Dictionary) -> void:
+	controller._received_table(actor, message)
+	controller._flush_pending_snapshot()
+
+
+func _snapshot_slot_and_single_validation():
+	var host = _controller()
+	host.active = true
+	host.adapter.state.available = true
+	host.table_sync.captured = {
+		"available": true,
+		"scene_id": 202,
+		"rounds_played": 0,
+		"rotated": false,
+		"results": {"phase": "table"},
+		"balls": [{"id": 11}, {"id": 12}],
+		"pockets": [{"id": 21, "base_index": 0}]
+	}
+	host._publish_snapshot()
+	var first: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	host._publish_snapshot()
+	var second: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	host.table_sync.captured.balls.append({"id": 13})
+	host._publish_snapshot()
+	var third: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	_check(second.id > first.id and third.id > second.id, "fixture snapshots have increasing ids")
+	var guest = _controller()
+	guest.active = true
+	guest._local_id = 30
+	guest.transport.id = 30
+	guest._guest_phase = guest._snapshot_phase(first.scene)
+	guest._received_table(20, first)
+	_check(
+		guest.table_sync.applied.is_empty() and guest._pending_snapshot.get("id") == first.id,
+		"a disposable snapshot waits in the bounded slot until the receive drain ends"
+	)
+	guest._received_table(20, second)
+	guest._received_table(20, third)
+	_check(guest._pending_snapshot.get("id") == third.id, "a burst keeps only the newest sample")
+	var validations_before: int = guest.table_sync.validations
+	guest._flush_pending_snapshot()
+	_check(
+		guest.table_sync.applied.balls.size() == 3 and guest.last_guest_snapshot == third.id,
+		"one drain applies only the newest sample"
+	)
+	_check(
+		guest.table_sync.validations - validations_before == 1,
+		"the applied snapshot is validated exactly once (PERF-014)"
+	)
+	_check(guest._pending_snapshot.is_empty(), "flush empties the slot")
+	guest._received_table(20, second)
+	guest._flush_pending_snapshot()
+	_check(
+		guest.last_guest_snapshot == third.id and guest.table_sync.applied.balls.size() == 3,
+		"a stale sample never reconciles after a newer apply"
+	)
+	host.table_sync.captured.balls.pop_back()
+	host._publish_snapshot()
+	var motion: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	var barrier: Dictionary = motion.duplicate(true)
+	barrier.id = motion.id + 1
+	barrier["shop"] = {"open": false, "revision": 2}
+	guest._received_table(20, motion)
+	guest._received_table(20, barrier)
+	_check(
+		guest._pending_snapshot.is_empty() and guest.last_guest_snapshot == barrier.id,
+		"a phase barrier applies immediately and supersedes pending motion"
+	)
+	_check(guest._guest_phase == guest._snapshot_phase(barrier.scene), "the barrier advances the guest phase")
+	var late: Dictionary = barrier.duplicate(true)
+	late.erase("shop")
+	late.id = barrier.id + 1
+	guest._received_table(20, late)
+	guest._end_table()
+	_check(guest._pending_snapshot.is_empty(), "leaving the table drops the pending sample")
+	guest.free()
+	host.free()
+
+
+func _watcher_forwarding_is_gated():
+	var host = _host_controller("race")
+	var snapshot = {"kind": "snapshot", "id": 4, "scene": {"available": false}}
+	var validations_before: int = host.table_sync.validations
+	_send_table(host, 10, 0, snapshot)
+	_check(
+		host.table_sync.validations == validations_before,
+		"an unwatched table's snapshot is not validated by the room host (PERF-007)"
+	)
+	_check(
+		host._watch_snapshots.get(0, {}).get("id") == 4,
+		"the newest unwatched snapshot is retained for late joiners"
+	)
+	host._set_watcher(30, {"match": host.match_id, "table": 0})
+	var frames = host.transport.sent.filter(
+		func(frame): return frame.message.get("kind") == "watch_state" and frame.message.payload.get("kind") == "snapshot"
+	)
+	_check(
+		host.table_sync.validations == validations_before + 1
+		and frames.size() == 1 and frames[0].recipient == 30 and frames[0].message.payload.id == 4,
+		"a late joiner receives the retained snapshot after exactly one validation"
+	)
+	host.transport.sent.clear()
+	snapshot = {"kind": "snapshot", "id": 5, "scene": {"available": false}}
+	_send_table(host, 10, 0, snapshot)
+	frames = host.transport.sent.filter(
+		func(frame): return frame.message.get("kind") == "watch_state"
+	)
+	_check(
+		host.table_sync.validations == validations_before + 2 and frames.size() == 1,
+		"a watched table's snapshot validates once and forwards once"
+	)
+	host.transport.sent.clear()
+	_send_table(host, 10, 0, {"kind": "snapshot", "id": 6, "scene": "broken"})
+	_check(
+		host.transport.sent.is_empty() and host._watch_snapshots[0].id == 5,
+		"a malformed snapshot is rejected before reaching watchers"
+	)
+	host.free()
 
 
 func _check(condition: bool, description: String):

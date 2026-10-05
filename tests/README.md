@@ -8,6 +8,16 @@ For authorized same-PC host+guest play over LAN loopback (not Steam), see [LOCAL
 
 ## Checks that do not launch the game
 
+The effect-replication benchmark scores [the tracker](../docs/EFFECT_REPLICATION_TRACKER.md) statically: a weighted coverage ledger per guest/spectator row, PASS/FAIL source gates for the `PERF-*` scoring amplification paths, a cross-check that tracker claims match code evidence, and an estimated `var_to_bytes` wire model for synthetic snapshots:
+
+```sh
+python3 tests/effect_benchmark.py            # report and punch list
+python3 tests/effect_benchmark.py --check    # exit 1 on regression vs tests/effect_benchmark_baseline.json
+python3 tests/effect_benchmark.py --write-baseline
+```
+
+It reads sources and documentation only. Passing gates are static evidence that a redundant-work pattern is gone; they are not frame-time, rendering or engine-compatibility results.
+
 Installer boundary tests use fake executable fixtures:
 
 ```powershell
@@ -52,7 +62,7 @@ These scripts extend `SceneTree` and require a Godot 4.6 executable with `--scri
 | `cue_effects_probe.gd` | Conditional cue perks, duplicate callbacks, shared round caps, cue swapping, first-shot/recovery/relay history, initial/mid-shot overflow, actual pocket geometry in both orientations, and malformed input. | `CUE_EFFECTS_PROBE PASS` |
 | `transport_budget_probe.gd` | Fake Steam queues exercise bounded dispatch, reliable retention/order, channel fairness across frames, and byte/time limits without network connections. | `TRANSPORT_BUDGET_PROBE PASS` |
 | `router_probe.gd` | Authenticated actor identity, requests to the correct table leader, table-isolated broadcasts and replies, reliable actions, disconnected members, and malformed routes. | `ROUTER_PROBE PASS` |
-| `controller_probe.gd` | Main controller lifecycle using off-tree service substitutes: identity teardown, room/match generations, terminal leader disconnects and reconnects, a run closing during a shot, and targeted shop synchronization preserving the broadcast cache. | `CONTROLLER_PROBE PASS` |
+| `controller_probe.gd` | Main controller lifecycle using off-tree service substitutes: identity teardown, room/match generations, terminal leader disconnects and reconnects, a run closing during a shot, targeted shop synchronization preserving the broadcast cache, the guest's bounded latest-snapshot slot and single validation per accepted snapshot, and watcher forwarding that validates only for subscribed tables. | `CONTROLLER_PROBE PASS` |
 | `shop_layout_probe.gd` | Guest remote-slot coverage for host-authoritative shop layouts, including stale pre-inventory replicas and extra local unlock slots. | `SHOP_LAYOUT_PROBE PASS` |
 
 Each script exits 0 on success. The controller probe creates no native game scenes or network connections. It also covers Race versus Score PvP caps, authenticated race results, finish ordering, return-vote generations, startup failure handling, spectator routing, and reliable effect lifecycle transitions. The screenshot harness runs these fourteen model probes inside its existing game process, plus the embedded native `snapshot_probe.gd` and `table_effects_probe.gd`. Its model adapter requires a successful completion marker, at least one assertion, and no failed assertions; merely loading a probe cannot count as a pass. The navigation fallback case uses an explicit null context so the real process's CRT overlay does not change the test premise. `clone_round_probe.gd`, `set_vote_probe.gd`, and the standalone adapter/session/transport probes are not part of this model invocation list.

@@ -1,36 +1,32 @@
 extends Node
+## Playing-table overlay for TOGETHER called shots plus every ability indicator
+## drawn by ability_overlay.gd (MOD-01..12). Host and guest see the same drawing;
+## the spectator view reuses the same helper for watched tables.
 
-const CALL_COLOR = Color(0.65, 0.88, 1.0)
-const BOUNTY_COLOR = Color(1.0, 0.76, 0.25)
-
-
-class BallOverlay:
-	extends Control
-	var ui: Node
-
-	func _draw() -> void:
-		ui.draw_overlay(self)
-
+const AbilityOverlay = preload("ability_overlay.gd")
+const CALL_COLOR = AbilityOverlay.CALL_COLOR
+const BOUNTY_COLOR = AbilityOverlay.BOUNTY_COLOR
 
 var _controller: Node
 var _service: Node
-var _overlay: BallOverlay
+var _overlay: Control
 var _hint: Label
 var _data: Dictionary = {}
+var _expansion: Dictionary = {}
 var _last_call: Dictionary = {}
 var _ball_ids: Array[int] = []
 var _selected_ball = 0
 var _call_press = false
 var _names: Dictionary = {}
 var _names_at = 0
+var _signature: Array = []
+var _hint_text = ""
 
 
 func setup(controller: Node, service: Node) -> void:
 	_controller = controller
 	_service = service
-	_overlay = BallOverlay.new()
-	_overlay.ui = self
-	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_overlay = AbilityOverlay.make_overlay(draw_overlay)
 	_controller.ui_root.add_child(_overlay)
 	_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_hint = Label.new()
@@ -52,20 +48,24 @@ func setup(controller: Node, service: Node) -> void:
 
 func clear() -> void:
 	_data = {}
+	_expansion = {}
 	_last_call.clear()
 	_ball_ids.clear()
 	_selected_ball = 0
 	_call_press = false
 	_names.clear()
 	_names_at = 0
+	_signature = []
+	_hint_text = ""
 	if _hint != null:
 		_hint.hide()
 		_overlay.hide()
 
 
-func refresh(data: Dictionary) -> void:
+func refresh(data: Dictionary, expansion: Dictionary = {}) -> void:
 	_data = data
-	_overlay.visible = (
+	_expansion = expansion
+	var visible: bool = (
 		_controller.active
 		and not _controller.is_spectating()
 		and _controller.latest_state.get("table_active", false)
@@ -74,8 +74,11 @@ func refresh(data: Dictionary) -> void:
 		and not _controller.panel.visible
 		and not _controller.shop_sync.is_open()
 	)
-	_hint.hide()
-	if not _overlay.visible:
+	if _overlay.visible != visible:
+		_overlay.visible = visible
+	if not visible:
+		_set_hint("")
+		_signature = []
 		return
 	_refresh_names()
 	_ball_ids.clear()
@@ -88,15 +91,33 @@ func refresh(data: Dictionary) -> void:
 	if not called.is_empty() and called != _last_call:
 		_selected_ball = called.ball
 	_last_call = called.duplicate()
-	if _can_call():
-		_hint.text = "Called Shot · click a pocket"
+	var choosing: bool = _can_call()
+	var hint = ""
+	if choosing:
+		hint = "Called Shot · click a pocket"
 		if _ball_ids.size() > 1:
-			_hint.text = "Called Shot · choose a ball, then a pocket"
-		_hint.show()
+			hint = "Called Shot · choose a ball, then a pocket"
 	elif not called.is_empty() and not data.get("pending", false):
-		_hint.text = "%s called the highlighted pocket" % _player_name(called.actor)
-		_hint.show()
-	_overlay.queue_redraw()
+		hint = "%s called the highlighted pocket" % _player_name(called.actor)
+	_set_hint(hint)
+	# PERF-028: redraw only when display state or a tracked ball's position changed.
+	var signature: Array = AbilityOverlay.signature(data, expansion, [_selected_ball, choosing])
+	for pair in AbilityOverlay.tracked_balls(data, expansion):
+		signature.append(_service.ball_position(pair[0], pair[1]))
+	if signature != _signature:
+		_signature = signature
+		_overlay.queue_redraw()
+
+
+func _set_hint(text: String) -> void:
+	if text == _hint_text:
+		return
+	_hint_text = text
+	if text.is_empty():
+		_hint.hide()
+		return
+	_hint.text = text
+	_hint.show()
 
 
 func _can_call() -> bool:
@@ -140,6 +161,7 @@ func _choose_at(position: Vector2) -> bool:
 		var center: Vector2 = transform * _service.ball_position(ball.id, ball.position)
 		if position.distance_to(center) <= 18.0:
 			_selected_ball = ball.id
+			_signature = []
 			_overlay.queue_redraw()
 			return true
 	for pocket in _data.get("pockets", []):
@@ -165,37 +187,20 @@ func _player_name(id: int) -> String:
 	return str(_names.get(id, "Player")).left(24)
 
 
-func draw_overlay(canvas: Control) -> void:
-	var transform = get_viewport().get_canvas_transform()
-	var called: Dictionary = _data.get("call", {})
-	var choosing = _can_call()
-	for pocket in _data.get("pockets", []):
-		if not pocket.open or pocket.index < 0 or pocket.index >= 6:
-			continue
-		if pocket.index == called.get("pocket", -1):
-			canvas.draw_circle(transform * pocket.position, 21.0, CALL_COLOR, false, 2.0, true)
-	for ball in _data.get("balls", []):
-		if not ball.alive:
-			continue
-		var position: Vector2 = transform * _service.ball_position(ball.id, ball.position)
-		if "TOGETHER_RELAY" in ball.kinds and ball.marker > 0:
-			var color = Color.from_hsv(posmod(hash(str(ball.marker)), 360) / 360.0, 0.55, 1.0)
-			canvas.draw_circle(position, 14.0, color, false, 1.5, true)
-			_caption(canvas, position + Vector2(17, 20), _player_name(ball.marker), color)
-		if "TOGETHER_PATIENCE" in ball.kinds:
-			for pip in range(mini(ball.charge, 3)):
-				canvas.draw_circle(position + Vector2((pip - 1) * 6, -19), 2.0, CALL_COLOR)
-		if "TOGETHER_BOUNTY" in ball.kinds:
-			canvas.draw_circle(position, 13.0, BOUNTY_COLOR, false, 1.5, true)
-			for axis in [Vector2.RIGHT, Vector2.DOWN, Vector2.LEFT, Vector2.UP]:
-				canvas.draw_line(position + axis * 10, position + axis * 17, BOUNTY_COLOR, 1.5)
-		if ball.id == called.get("ball", -1) or (choosing and ball.id == _selected_ball):
-			canvas.draw_circle(position, 17.0, CALL_COLOR, false, 1.5, true)
+func _resolve(id: int, raw: Vector2) -> Vector2:
+	return _service.ball_position(id, raw)
 
 
-func _caption(canvas: Control, position: Vector2, text: String, color: Color) -> void:
-	var font = _hint.get_theme_font("font")
-	canvas.draw_string_outline(
-		font, position, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, 3, Color.BLACK
+func draw_overlay(canvas: CanvasItem) -> void:
+	AbilityOverlay.draw(
+		canvas,
+		_hint.get_theme_font("font"),
+		get_viewport().get_canvas_transform(),
+		_resolve,
+		Vector2.ZERO,
+		_player_name,
+		_data,
+		_expansion,
+		_selected_ball,
+		_can_call()
 	)
-	canvas.draw_string(font, position, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)

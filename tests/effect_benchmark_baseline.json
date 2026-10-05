@@ -1,0 +1,391 @@
+{
+  "coverage": {
+    "rows": 87,
+    "score": 67.5,
+    "guest": 73.3,
+    "spectator": 61.8,
+    "missing_rows": [
+      "BOARD-10",
+      "BOARD-21",
+      "DRAW-01",
+      "DRAW-02",
+      "DRAW-03",
+      "DRAW-04",
+      "DRAW-05",
+      "DRAW-06",
+      "DRAW-07",
+      "DRAW-08",
+      "HUD-03",
+      "HUD-05",
+      "HUD-06",
+      "HUD-07",
+      "HUD-08",
+      "HUD-09"
+    ],
+    "sections": {
+      "Durable board and ball state": {
+        "rows": 22,
+        "score": 83.0
+      },
+      "Native drawing and scoring outside the catalog": {
+        "rows": 9,
+        "score": 11.1
+      },
+      "Native transient catalog: every definition": {
+        "rows": 34,
+        "score": 73.5
+      },
+      "HUD, local feedback and audiovisual effects": {
+        "rows": 9,
+        "score": 44.4
+      },
+      "Optional content: outcome versus visible cause": {
+        "rows": 13,
+        "score": 80.8
+      }
+    }
+  },
+  "corroborations": [
+    {
+      "row": "MOD-01",
+      "side": "spectator",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "relay owner ring/name drawn on watched tables"
+    },
+    {
+      "row": "MOD-02",
+      "side": "spectator",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "called-shot rings on watched tables"
+    },
+    {
+      "row": "MOD-03",
+      "side": "spectator",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "patience pips on watched tables"
+    },
+    {
+      "row": "MOD-04",
+      "side": "spectator",
+      "claim": "P",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "bounty crosshair plus award cause/timing feedback on watched tables"
+    },
+    {
+      "row": "MOD-07",
+      "side": "guest",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "PHASES ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-07",
+      "side": "spectator",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "PHASES ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-08",
+      "side": "guest",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "MORPH ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-08",
+      "side": "spectator",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "MORPH ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-09",
+      "side": "guest",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "TIDE ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-09",
+      "side": "spectator",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "TIDE ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-10",
+      "side": "guest",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "RELIC ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-10",
+      "side": "spectator",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "RELIC ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-11",
+      "side": "guest",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "TAROT ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-11",
+      "side": "spectator",
+      "claim": "I",
+      "evidence": true,
+      "verdict": "OK",
+      "note": "TAROT ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-12",
+      "side": "guest",
+      "claim": "P",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "ZODIAC ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "MOD-12",
+      "side": "spectator",
+      "claim": "P",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "ZODIAC ability state has a view consuming the replicated display state"
+    },
+    {
+      "row": "BOARD-10",
+      "side": "guest",
+      "claim": "P",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "fleeting flag presentation"
+    },
+    {
+      "row": "BOARD-10",
+      "side": "spectator",
+      "claim": "M",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "fleeting flag presentation"
+    },
+    {
+      "row": "FX-08",
+      "side": "guest",
+      "claim": "P",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "final_round RichTextLabel content survives the scriptless reader"
+    },
+    {
+      "row": "FX-08",
+      "side": "spectator",
+      "claim": "P",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "final_round RichTextLabel content survives the scriptless reader"
+    },
+    {
+      "row": "FX-07",
+      "side": "guest",
+      "claim": "P",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "dicepop face selection is transmitted"
+    },
+    {
+      "row": "FX-07",
+      "side": "spectator",
+      "claim": "P",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "dicepop face selection is transmitted"
+    },
+    {
+      "row": "DRAW-01",
+      "side": "guest",
+      "claim": "M",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "pentagram/ritual geometry captured and drawn"
+    },
+    {
+      "row": "DRAW-01",
+      "side": "spectator",
+      "claim": "M",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "pentagram/ritual geometry captured and drawn"
+    },
+    {
+      "row": "DRAW-03",
+      "side": "guest",
+      "claim": "M",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "floating score/money presentation events"
+    },
+    {
+      "row": "DRAW-03",
+      "side": "spectator",
+      "claim": "M",
+      "evidence": false,
+      "verdict": "OK",
+      "note": "floating score/money presentation events"
+    }
+  ],
+  "corroboration_failures": [],
+  "gates": [
+    {
+      "id": "G01",
+      "perf": "PERF-014",
+      "title": "Guest validates each accepted snapshot once",
+      "passed": true,
+      "evidence": "internal apply=True, no trusted flag=True, boundary calls=2, boundary validation=True"
+    },
+    {
+      "id": "G02",
+      "perf": "PERF-002/004",
+      "title": "Bounded latest-snapshot slot per receive drain",
+      "passed": true,
+      "evidence": "slot=True flush=True drain signal=True connected=True cleared on end=True"
+    },
+    {
+      "id": "G03",
+      "perf": "PERF-007",
+      "title": "Watcher forwarding validates/copies only with watchers",
+      "passed": true,
+      "evidence": "deep copies=0, watcher check before validation=True"
+    },
+    {
+      "id": "G04",
+      "perf": "PERF-018/019",
+      "title": "Guest score/status-only item updates avoid BallItem/material rebuild",
+      "passed": true,
+      "evidence": "allocation-free=True dispatched=True"
+    },
+    {
+      "id": "G05",
+      "perf": "PERF-024",
+      "title": "Spectator score-only item updates keep the ball material",
+      "passed": true,
+      "evidence": "material rebuild guarded by identity change=True"
+    },
+    {
+      "id": "G06",
+      "perf": "PERF-022",
+      "title": "Spectator table UI/pockets update per snapshot frame, not per render tick",
+      "passed": true,
+      "evidence": "frame-gated: {'_update_pockets(': True, '_update_table_ui(': True}"
+    },
+    {
+      "id": "G07",
+      "perf": "PERF-022",
+      "title": "Spectator table UI update has no per-apply find_child",
+      "passed": true,
+      "evidence": "find_child calls per table UI update=0"
+    },
+    {
+      "id": "G08",
+      "perf": "PERF-008/011",
+      "title": "Effect lifecycle delivered separately from whole-table reliable promotion",
+      "passed": false,
+      "evidence": "effect births/removals still promote the whole table snapshot to reliable delivery"
+    },
+    {
+      "id": "G09",
+      "perf": "BOARD-10",
+      "title": "Guest clears fleeting presentation on true\u2192false",
+      "passed": false,
+      "evidence": "guest only calls set_fleeting on true; no true\u2192false cleanup"
+    },
+    {
+      "id": "G10",
+      "perf": "PERF-004/019",
+      "title": "Transient capture validates without re-encoding every item",
+      "passed": true,
+      "evidence": "host capture reuses its item byte sum for validation=True"
+    },
+    {
+      "id": "G11",
+      "perf": "PERF-008",
+      "title": "Combined-table byte limit skips the whole-table encode when no effects exist",
+      "passed": true,
+      "evidence": "whole-table encode skipped when effect substates are empty=True"
+    },
+    {
+      "id": "G12",
+      "perf": "PERF-015",
+      "title": "Guest HUD writes are change-gated",
+      "passed": true,
+      "evidence": "guest HUD writes are change-gated"
+    },
+    {
+      "id": "G13",
+      "perf": "PERF-019",
+      "title": "Durable effect renderer updates only changed descriptors",
+      "passed": true,
+      "evidence": "durable renderer updates only changed descriptors"
+    },
+    {
+      "id": "G14",
+      "perf": "PERF-016",
+      "title": "Guest pocket updates skip unchanged state",
+      "passed": true,
+      "evidence": "guest pocket updates skip unchanged state"
+    },
+    {
+      "id": "G15",
+      "perf": "PERF-028",
+      "title": "Ability overlay redraws only when display state changes",
+      "passed": true,
+      "evidence": "overlay redraw only when display state changes"
+    }
+  ],
+  "gates_passed": 13,
+  "gates_total": 15,
+  "wire": {
+    "idle_16_balls": {
+      "bytes": 19708,
+      "bytes_per_second_at_cadence": 197080,
+      "key_share": 0.639,
+      "ball_bytes": 876,
+      "effects_bytes": 272
+    },
+    "scoring_burst_16_balls": {
+      "bytes": 39736,
+      "bytes_per_second_at_cadence": 397360,
+      "key_share": 0.604,
+      "ball_bytes": 876,
+      "effects_bytes": 19764
+    },
+    "late_run_48_balls": {
+      "bytes": 111580,
+      "bytes_per_second_at_cadence": 1115800,
+      "key_share": 0.599,
+      "ball_bytes": 876,
+      "effects_bytes": 63040
+    }
+  }
+}

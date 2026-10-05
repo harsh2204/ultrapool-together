@@ -11,6 +11,7 @@ var _ball_script: Script
 var _native_ball_script: Script
 var _hooked: Dictionary = {}
 var _remote: Dictionary = {}
+var _last_capture: Dictionary = {}
 var _active = false
 var _round_key = ""
 var _encore: WeakRef
@@ -41,6 +42,7 @@ func begin_session() -> void:
 	_active = true
 	_round_key = ""
 	_remote.clear()
+	_last_capture = {}
 	catalog.set_active(true)
 
 
@@ -54,6 +56,7 @@ func end_session() -> void:
 	_potted.clear()
 	_encore = null
 	_remote.clear()
+	_last_capture = {}
 	_round_key = ""
 	if catalog != null:
 		catalog.set_active(false)
@@ -62,12 +65,24 @@ func end_session() -> void:
 
 
 func _process(_delta: float) -> void:
-	if not _active:
-		return
-	if _controller.is_table_host():
+	if _active and _controller.is_table_host():
 		_sync_round()
 		_try_encore()
-	_ui.refresh(capture() if _controller.is_table_host() else _remote)
+	# The overlay also presents expansion ability state (MOD-07..12), so it keeps
+	# refreshing while only expansion sets are enabled.
+	var expansion = _controller.get("expansion_balls")
+	var expansion_state: Dictionary = {}
+	if expansion != null and expansion.has_method("display_state"):
+		expansion_state = expansion.display_state()
+	if not _active and expansion_state.is_empty():
+		return
+	_ui.refresh(display_state() if _active else {}, expansion_state)
+
+
+## PERF-028: the host reuses its latest published capture instead of rebuilding
+## every ball's display entry each rendered frame; guests use validated remote state.
+func display_state() -> Dictionary:
+	return _last_capture if _controller.is_table_host() else _remote
 
 
 func _game():
@@ -316,6 +331,7 @@ func bounty_shot() -> int:
 
 func capture() -> Dictionary:
 	if not _active:
+		_last_capture = {}
 		return {}
 	var data = {
 		"last_shooter": rules.last_shooter,
@@ -361,6 +377,7 @@ func capture() -> Dictionary:
 					"open": not fixed[index].closed
 				}
 			)
+	_last_capture = data
 	return data
 
 

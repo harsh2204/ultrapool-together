@@ -15,6 +15,7 @@ var _ball_script: Script
 var _native_ball_script: Script
 var _hooked: Dictionary = {}
 var _remote: Dictionary = {}
+var _last_capture: Dictionary = {}
 var _active_flags: Dictionary = {}
 var _active = false
 var _round_key = ""
@@ -59,6 +60,7 @@ func begin_session(flags: Dictionary) -> void:
 	_active = Registry.any_enabled(_active_flags)
 	_round_key = ""
 	_remote.clear()
+	_last_capture = {}
 	_echo_queue.clear()
 	_locked.clear()
 	_closed_pocket = null
@@ -89,6 +91,7 @@ func end_session() -> void:
 	_hooked.clear()
 	_echo_queue.clear()
 	_remote.clear()
+	_last_capture = {}
 	_round_key = ""
 	for set_id in catalogs:
 		catalogs[set_id].set_active(false)
@@ -565,8 +568,16 @@ func prepare_shop() -> void:
 		catalogs[set_id].ensure_shop_offer(shop)
 
 
+## Presentation input for the shared ability overlay (MOD-07..12): the host's
+## latest published capture, or the validated remote state on guests. Never
+## captures per frame (PERF-028).
+func display_state() -> Dictionary:
+	return _last_capture if _controller.is_table_host() else _remote
+
+
 func capture() -> Dictionary:
 	if not _active:
+		_last_capture = {}
 		return {}
 	var data = {"sets": {}, "balls": []}
 	for set_id in _enabled_sets():
@@ -597,6 +608,7 @@ func capture() -> Dictionary:
 				entry.extra[set_id] = rules[set_id].capture_ball(id)
 		data.balls.append(entry)
 		count += 1
+	_last_capture = data
 	return data
 
 

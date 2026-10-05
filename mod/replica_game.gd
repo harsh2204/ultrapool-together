@@ -28,6 +28,10 @@ var _ball_bases: Dictionary = {}
 var _fx = ReplicaFx.new()
 var effects_view = TableEffectsView.new()
 var _visual_fx_view = TableVisualFxView.new()
+## PERF-018/019: counts per apply so fixtures can show score-only cascades no
+## longer rebuild items. Cheap integer bookkeeping only.
+var apply_stats: Dictionary = {"full_items": 0, "light_items": 0}
+var _score_label_refresh: Dictionary = {}
 
 
 func prepare_scene() -> void:
@@ -226,9 +230,13 @@ func apply_table(data: Dictionary) -> void:
 			_create_ball(state)
 		var body = replicas[id]
 		_fx.observe_ball(body, state, created)
-		var item_changed: bool = body.get_meta("remote_item") != state.item
+		var previous_item: Dictionary = body.get_meta("remote_item", {})
+		var item_changed: bool = previous_item != state.item
 		if item_changed:
-			_set_item(body, state.item)
+			if _item_identity_changed(previous_item, state.item):
+				_set_item(body, state.item)
+			else:
+				_update_item(body, state.item, previous_item)
 		# Local-predictive aim: do not snap the cue while the guest is drawing (#18).
 		var aiming_local: bool = state.player and bool(body.get("preparing_shot"))
 		var simulate: bool = (
@@ -495,6 +503,7 @@ func _install_native_player(body: Node) -> void:
 
 
 func _set_item(body, item: Dictionary) -> void:
+	apply_stats.full_items += 1
 	var native_item = BallItem.new()
 	native_item.data = BallDatabase.id_to_ball[item.data]
 	if item.mixed != "":
@@ -542,6 +551,75 @@ func _set_item(body, item: Dictionary) -> void:
 	BallLevelFx.apply_upgrade_badge(body, int(item.level), BallLevelFx.start_level_of(native_item))
 	BallLevelFx.hide_default_table_fx(body)
 	body.set_meta("remote_item", item.duplicate())
+
+
+## PERF-018/019/024: identity, level and weight changes need the inherited set_item
+## path (native item/material setup, badges, prediction). A fleeting ball losing
+## its flag also takes that path until its native cleanup is known (BOARD-10).
+func _item_identity_changed(previous: Dictionary, item: Dictionary) -> bool:
+	if previous.is_empty():
+		return true
+	for field in ["data", "mixed", "level", "weight_state"]:
+		if previous.get(field) != item.get(field):
+			return true
+	return bool(previous.get("fleeting", false)) and not bool(item.get("fleeting", false))
+
+
+## Score and status-only changes: mutate the retained BallItem, refresh the native
+## value label and call only the setters whose flag actually changed. No BallItem
+## allocation, no material duplication, unchanged statuses untouched.
+func _update_item(body, item: Dictionary, previous: Dictionary) -> void:
+	var native_item = body.ball_item
+	if native_item == null:
+		_set_item(body, item)
+		return
+	if (
+		previous.base_score != item.base_score
+		or previous.temp_extra_score != item.temp_extra_score
+	):
+		native_item.base_score = item.base_score
+		native_item.temp_extra_score = item.temp_extra_score
+		if not _refresh_score_label(body):
+			_set_item(body, item)
+			return
+	apply_stats.light_items += 1
+	var is_cue: bool = body == player_ball or item.get("data") == "PLAYER"
+	if previous.star_power != item.star_power and not is_cue:
+		body.set_star(bool(item.star_power))
+		if not bool(item.star_power):
+			_hide_star_chrome(body)
+	if previous.flaming != item.flaming:
+		body.set_flame(item.flaming)
+	if previous.shield_broken != item.shield_broken:
+		body.set_shield_broken(item.shield_broken)
+	if previous.shielded != item.shielded:
+		body.set_shield(item.shielded)
+	if previous.locked != item.locked and body.freeze_icon:
+		body.freeze_icon.visible = item.locked
+	if item.fleeting and not previous.fleeting:
+		body.set_fleeting()
+	# Native label refresh can re-enable packed table FX; keep guest parity (#32).
+	BallLevelFx.hide_default_table_fx(body)
+	body.set_meta("remote_item", item.duplicate())
+
+
+## Native Ball.update_score_label() redraws the value label and its high-value
+## particles (BOARD-21). Call it only when the installed method takes no required
+## argument; any mismatch falls back to the full inherited setter.
+func _refresh_score_label(body) -> bool:
+	var key = str(body.get_script().resource_path) if body.get_script() != null else ""
+	if not _score_label_refresh.has(key):
+		var available = false
+		if body.has_method("update_score_label"):
+			for method in body.get_method_list():
+				if method.name == "update_score_label":
+					available = method.args.size() - method.default_args.size() == 0
+					break
+		_score_label_refresh[key] = available
+	if not _score_label_refresh[key]:
+		return false
+	body.update_score_label()
+	return true
 
 
 func _hide_star_chrome(body: Node) -> void:

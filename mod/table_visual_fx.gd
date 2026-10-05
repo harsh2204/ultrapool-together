@@ -197,7 +197,9 @@ func capture(game: Node) -> Dictionary:
 		result.items.append(item)
 	if _overflow_live > 0 or _overflow_until > now:
 		return _overflow("active effect count", started, scanned)
-	var invalid = problem(result)
+	# PERF-004/019: the host already summed each item's encoding above; reuse it
+	# instead of serializing the whole substate a second time per snapshot.
+	var invalid = problem(result, bytes)
 	if not invalid.is_empty():
 		return _overflow(invalid, started, scanned)
 	capture_stats = {"usec": Time.get_ticks_usec() - started, "count": result.items.size(), "bytes": bytes, "scanned": scanned}
@@ -265,7 +267,9 @@ static func topology(data: Dictionary) -> Dictionary:
 	return result
 
 
-static func problem(data) -> String:
+## encoded_bytes < 0 means "unknown": the network boundary measures the payload
+## itself. Host capture passes its item byte sum so validation never re-encodes.
+static func problem(data, encoded_bytes: int = -1) -> String:
 	if not data is Dictionary:
 		return "visual effects type"
 	if data.is_empty():
@@ -278,7 +282,8 @@ static func problem(data) -> String:
 		return "visual effects count"
 	if data.status == "overflow" and not data.items.is_empty():
 		return "visual effects partial overflow"
-	if var_to_bytes(data).size() > MAX_BYTES + 1024:
+	var encoded = encoded_bytes if encoded_bytes >= 0 else var_to_bytes(data).size()
+	if encoded > MAX_BYTES + 1024:
 		return "visual effects bytes"
 	var ids: Dictionary = {}
 	for item in data.items:

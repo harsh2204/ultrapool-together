@@ -11,6 +11,7 @@ const TITLE_EYE_SIZE = Vector2(24, 24)
 const STATUS_RIBBON_CONTENT = [44, 8, 44, 12]
 const TableEffectsView = preload("table_effects_view.gd")
 const TableVisualFxView = preload("table_visual_fx_view.gd")
+const AbilityOverlay = preload("ability_overlay.gd")
 
 var watched_table: int:
 	get:
@@ -42,6 +43,14 @@ var _last_received = 0.0
 var _effects_view = TableEffectsView.new()
 var _visual_fx_view = TableVisualFxView.new()
 var _effects_frame: Dictionary = {}
+## PERF-022: table HUD nodes resolved once per board, and the last display inputs.
+var _ui_nodes: Dictionary = {}
+var _ui_state: Array = []
+var _layout_size = Vector2.ZERO
+## MOD-01..12: watched-table ability indicators from the validated state feed.
+var _ability: Control
+var _ability_signature: Array = []
+var _ability_offset = Vector2.ZERO
 
 
 func setup(controller: Node) -> void:
@@ -137,15 +146,19 @@ func tick(_delta: float) -> void:
 	var weight = clampf((time - before.time) / duration, 0.0, 1.0) if duration > 0 else 1.0
 	_render_balls(before.data, after.data, weight)
 	# Apply each buffered descriptor once; interpolation ticks retain visual nodes.
+	# PERF-022: pockets, table HUD and layout depend only on the newest frame.
 	if not is_same(_effects_frame, after):
 		_effects_frame = after
 		_effects_view.apply(after.data.get("effects", {}), after.data.table_position, _scene_key)
 		_visual_fx_view.apply(after.data.get("visual_fx", {}), after.data.table_position, _scene_key)
-	_update_pockets(after.data)
-	_update_table_ui(after.data)
-	_layout()
+		_update_pockets(after.data)
+		_update_table_ui(after.data)
+		_layout()
+	elif _root.size != _layout_size:
+		_layout()
 	_effects_view.tick()
 	_visual_fx_view.tick()
+	_refresh_abilities(after.data)
 	if _now() - _last_received > STALE_SECONDS:
 		_status.text = "Waiting for table updates… · Your table keeps playing."
 
@@ -181,6 +194,10 @@ func _build_ui() -> void:
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_world = Node2D.new()
 	_root.add_child(_world)
+	_ability = AbilityOverlay.make_overlay(_draw_abilities)
+	_ability.z_index = 500
+	_root.add_child(_ability)
+	_ability.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var header = HBoxContainer.new()
 	header.z_index = 1000
 	header.add_theme_constant_override("separation", 16)
@@ -274,6 +291,20 @@ func _create_table(data: Dictionary) -> void:
 	_table = _scene_reader.create(_scene_reader.exported(game_scene, property))
 	_world.add_child(_table)
 	_table.position = Vector2.ZERO
+	_ui_nodes = {
+		"current": _table.get_node("ScoreDisplay/CurrentScore"),
+		"target": _table.get_node("ScoreDisplay/TargetScore"),
+		"fill": _table.get_node("ScoreDisplay/ScoreFill"),
+		"fill2": _table.get_node("ScoreDisplay/ScoreFill2"),
+		"score_label": _table.find_child("ScoreLabel", true, false),
+		"money_label": _table.find_child("MoneyLabel", true, false),
+		"round_text": _table.get_node("RoundText"),
+		"hearts": _table.get_node("hpInfo"),
+		"hp_panel": _table.find_child("HPPanel", true, false),
+		"daily_panel": _table.find_child("DailyMedalPanel", true, false),
+		"pips": _table.get_node("ShotsInfo/PipsHolder")
+	}
+	_ui_state = []
 	_refresh_cosmetics()
 	_effects_view.setup(_world, game_scene)
 	_visual_fx_view.setup(_world, game_scene)
@@ -328,25 +359,30 @@ func _refresh_cosmetics() -> void:
 
 func _update_table_ui(data: Dictionary) -> void:
 	var global_node = get_node("/root/Global")
+	var ui_state: Array = [
+		data.score, data.required_score, data.money, data.round, data.daily, data.hp, data.max_hp,
+		TranslationServer.get_locale()
+	]
+	if ui_state == _ui_state:
+		_update_shot_pips(data.shots)
+		return
+	_ui_state = ui_state
 	var required = maxf(data.required_score, 1.0)
 	var score_text: String = global_node.format_number(data.score, 4, 1)
 	var target_text: String = global_node.format_number(required, 4, 1)
-	var score_display = _table.get_node("ScoreDisplay")
-	score_display.get_node("CurrentScore").text = score_text
-	score_display.get_node("TargetScore").text = "/" + target_text
-	score_display.get_node("ScoreFill").material.set_shader_parameter(
-		"percent", data.score / required
-	)
-	score_display.get_node("ScoreFill2").material.set_shader_parameter(
+	_ui_nodes.current.text = score_text
+	_ui_nodes.target.text = "/" + target_text
+	_ui_nodes.fill.material.set_shader_parameter("percent", data.score / required)
+	_ui_nodes.fill2.material.set_shader_parameter(
 		"percent", data.score / maxf(required * 10.0, 100.0)
 	)
-	_table.find_child("ScoreLabel", true, false).text = score_text + " / " + target_text
-	_table.find_child("MoneyLabel", true, false).text = global_node.format_number(data.money) + "€"
-	_table.get_node("RoundText").text = tr("UI_ROUND") + " " + str(data.round + 1)
-	var hearts = _table.get_node("hpInfo")
+	_ui_nodes.score_label.text = score_text + " / " + target_text
+	_ui_nodes.money_label.text = global_node.format_number(data.money) + "€"
+	_ui_nodes.round_text.text = tr("UI_ROUND") + " " + str(data.round + 1)
+	var hearts = _ui_nodes.hearts
 	hearts.visible = not data.daily
-	_table.find_child("HPPanel", true, false).visible = not data.daily
-	_table.find_child("DailyMedalPanel", true, false).visible = data.daily
+	_ui_nodes.hp_panel.visible = not data.daily
+	_ui_nodes.daily_panel.visible = data.daily
 	var index = 0
 	for heart in hearts.get_children():
 		if not heart.has_node("HeartFull"):
@@ -360,10 +396,14 @@ func _update_table_ui(data: Dictionary) -> void:
 		heart.get_node("HeartRight").position = Vector2(2.5, 2.5)
 		heart.modulate.a = 0.75 if full else 0.3
 		index += 1
-	if _shots == data.shots:
+	_update_shot_pips(data.shots)
+
+
+func _update_shot_pips(shots: int) -> void:
+	if _shots == shots:
 		return
-	_shots = data.shots
-	var holder = _table.get_node("ShotsInfo/PipsHolder")
+	_shots = shots
+	var holder = _ui_nodes.pips
 	for child in holder.get_children():
 		child.free()
 	holder.position = Vector2(-20.0 * (_shots - 1) * 0.5, 0)
@@ -428,17 +468,24 @@ func _create_ball(state: Dictionary) -> void:
 func _apply_item(visual: Dictionary, item: Dictionary, is_player: bool = false) -> void:
 	if item == visual.item:
 		return
+	var previous: Dictionary = visual.item
+	# PERF-024: only an identity change needs a new ball material. Score, level
+	# and status changes update the label and indicators on the retained nodes.
+	var identity_changed: bool = (
+		previous.get("data") != item.data or previous.get("mixed") != item.mixed
+	)
 	visual.item = item.duplicate()
 	var database = get_node("/root/BallDatabase").id_to_ball
 	var mixed: bool = item.mixed != ""
-	var material: ShaderMaterial = (
-		load("res://materials/mixed_ball.tres" if mixed else "res://materials/ball.tres")
-		. duplicate()
-	)
-	material.set_shader_parameter("tex", database[item.data].texture)
-	if mixed:
-		material.set_shader_parameter("mixed_tex", database[item.mixed].texture)
-	visual.sphere.material = material
+	if identity_changed:
+		var material: ShaderMaterial = (
+			load("res://materials/mixed_ball.tres" if mixed else "res://materials/ball.tres")
+			. duplicate()
+		)
+		material.set_shader_parameter("tex", database[item.data].texture)
+		if mixed:
+			material.set_shader_parameter("mixed_tex", database[item.mixed].texture)
+		visual.sphere.material = material
 	var score = item.base_score + item.temp_extra_score
 	var numbered: bool = database[item.data].tags.has("TAG_NUMBER") and not mixed
 	var label: Label = visual.visuals.get_node("static/Panel/Label")
@@ -447,7 +494,7 @@ func _apply_item(visual: Dictionary, item: Dictionary, is_player: bool = false) 
 	)
 	label.text = get_node("/root/Global").format_number(score, 4, 0)
 	var edge = visual.visuals.get_node_or_null("static/edge")
-	if edge != null and edge.material is ShaderMaterial:
+	if identity_changed and edge != null and edge.material is ShaderMaterial:
 		edge.material.set_shader_parameter(
 			"selout_color", database[item.data].main_color.darkened(0.4)
 		)
@@ -461,7 +508,7 @@ func _apply_item(visual: Dictionary, item: Dictionary, is_player: bool = false) 
 	}
 	for indicator in indicators:
 		var node = visual.visuals.find_child(indicator, true, false)
-		if node is CanvasItem:
+		if node is CanvasItem and node.visible != indicators[indicator]:
 			node.visible = indicators[indicator]
 
 
@@ -504,7 +551,55 @@ func _update_pockets(data: Dictionary) -> void:
 	_effects_view.apply_pockets(data.get("effects", {}), effect_pockets)
 
 
+func _ability_states() -> Array:
+	var balls = _state.get("multiplayer_balls", {})
+	var expansion = _state.get("expansion_balls", {})
+	return [balls if balls is Dictionary else {}, expansion if expansion is Dictionary else {}]
+
+
+func _refresh_abilities(data: Dictionary) -> void:
+	if not is_instance_valid(_ability):
+		return
+	var states: Array = _ability_states()
+	_ability_offset = data.table_position
+	# Redraw only when display state, a tracked ball or the board transform changed.
+	var signature: Array = AbilityOverlay.signature(states[0], states[1], [_world.transform])
+	for pair in AbilityOverlay.tracked_balls(states[0], states[1]):
+		signature.append(_resolve_ability(pair[0], pair[1] - _ability_offset))
+	if signature != _ability_signature:
+		_ability_signature = signature
+		_ability.queue_redraw()
+
+
+func _resolve_ability(id: int, raw: Vector2) -> Vector2:
+	return _balls[id].node.position if _balls.has(id) else raw
+
+
+func _spectator_name(id: int) -> String:
+	for person in _controller.transport.participants():
+		if int(person.get("id", 0)) == id:
+			return str(person.get("name", "Player")).left(24)
+	return "Player"
+
+
+func _draw_abilities(canvas: CanvasItem) -> void:
+	if not is_instance_valid(_world) or not is_watching() or _frames.is_empty():
+		return
+	var states: Array = _ability_states()
+	AbilityOverlay.draw(
+		canvas,
+		_title.get_theme_font("font"),
+		_world.get_global_transform_with_canvas(),
+		_resolve_ability,
+		_ability_offset,
+		_spectator_name,
+		states[0],
+		states[1]
+	)
+
+
 func _layout() -> void:
+	_layout_size = _root.size
 	var area = Rect2(Vector2(24, 64), _root.size - Vector2(48, 120))
 	var factor = minf(area.size.x / _bounds.size.x, area.size.y / _bounds.size.y)
 	_world.scale = Vector2.ONE * factor
@@ -529,6 +624,12 @@ func _clear_board() -> void:
 	_table = null
 	_floor = null
 	_shots = -1
+	_ui_nodes.clear()
+	_ui_state = []
+	_layout_size = Vector2.ZERO
+	_ability_signature = []
+	if is_instance_valid(_ability):
+		_ability.queue_redraw()
 	_balls.clear()
 	_holes.clear()
 	_frames.clear()
