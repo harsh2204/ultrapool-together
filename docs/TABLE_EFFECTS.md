@@ -1,6 +1,8 @@
 # Client table-effect coverage
 
-Native floor effects, energy projectiles, WORMHOLE pocket state, and catalogued transient visuals now have shared guest and spectator renderers. **Status: implemented; Windows native fixtures passed.** This document records the implementation and remaining acceptance for [issue #48](https://github.com/harsh2204/ultrapool-together/issues/48), **GAP-007** in [PERFORMANCE.md](PERFORMANCE.md). The measurements below cover bounded fixtures, not complete audiovisual parity or live-session performance.
+Native floor effects, energy projectiles, WORMHOLE pocket state, and catalogued transient visuals have shared guest and spectator renderers. **Overall parity: partial; the implemented subset has historical Windows native fixture evidence.** This document records implementation details and historical acceptance for [issue #48](https://github.com/harsh2204/ultrapool-together/issues/48), **GAP-007** in [PERFORMANCE.md](PERFORMANCE.md). The measurements below cover bounded fixtures, not complete audiovisual parity or live-session performance.
+
+Use the [effect replication and scoring tracker](EFFECT_REPLICATION_TRACKER.md) for the 2026-10-05 audit, per-family guest/spectator status, native catalog checklist, missing non-catalog drawing and scoring effects, and prioritized scoring-stall investigation. In particular, the generic scene catalog does not cover CANDLE's ritual pentagram, REAPER's ball-local tether, or native floating score/money scenes. Existing state delivery is not proof that those visuals are implemented.
 
 The supported native source is Ultrapool 0.15.7. Assets are read from the installed game; no native source or art is redistributed. Historical evidence below describes the exact revision tested, rather than verification of later additions.
 
