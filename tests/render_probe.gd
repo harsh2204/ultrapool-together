@@ -115,12 +115,22 @@ func _run():
 		"shop_layout_probe",
 		"cue_models_probe",
 		"cue_inventory_probe",
-		"cue_effects_probe"
+		"cue_effects_probe",
+		"progress_import_probe"
 	]:
 		_run_model_probe(probe)
 	_check_run_completion()
 	if not _check(
 		await _wait(_menu_capture_ready), "native menu transition finishes before lobby captures"
+	):
+		_finish()
+		return
+	var progress_settings = load(
+		get_script().resource_path.get_base_dir().path_join("progress_settings_fixture.gd")
+	).new()
+	await progress_settings.check(mod, _check, _capture)
+	if not _check(
+		await _wait(_menu_capture_ready), "native menu refresh finishes after progress settings"
 	):
 		_finish()
 		return
@@ -470,14 +480,35 @@ func _check_shop_view_preference(original: Dictionary) -> void:
 	escape.keycode = KEY_ESCAPE
 	escape.pressed = true
 	mod.panel._input(escape)
-	_check(not mod.panel.is_mod_options_open(), "mod settings: Escape dismisses the slate")
-	mod.panel.open_mod_options()
+	_check(
+		not mod.panel.visible and not mod.panel.is_mod_options_open(),
+		"mod settings: Escape dismisses the standalone slate and input guard"
+	)
+	mod.settings_button.pressed.emit()
+	_check(
+		mod.panel.visible and mod.panel.is_settings_only() and mod.panel.is_mod_options_open(),
+		"mod settings: gear reopens the standalone slate after Escape"
+	)
 	var outside = InputEventMouseButton.new()
 	outside.button_index = MOUSE_BUTTON_LEFT
 	outside.pressed = true
 	outside.position = Vector2(2, 2)
 	mod.panel._input(outside)
-	_check(not mod.panel.is_mod_options_open(), "mod settings: outside click dismisses the slate")
+	_check(
+		not mod.panel.visible and not mod.panel.is_mod_options_open(),
+		"mod settings: outside click dismisses the standalone slate and input guard"
+	)
+	mod._set_panel(true)
+	mod.settings_button.pressed.emit()
+	_check(
+		mod.panel.visible and not mod.panel.is_settings_only() and mod.panel.is_mod_options_open(),
+		"mod settings: gear inside the lobby preserves its embedded shared-settings view"
+	)
+	mod.panel._close_mod_options()
+	_check(
+		mod.panel.visible and not mod.panel.is_mod_options_open(),
+		"mod settings: dismissing embedded settings keeps the lobby open"
+	)
 	mod._set_panel(false)
 	mod._set_follow_shop_view(saved_preference)
 	sync.apply_state(original)

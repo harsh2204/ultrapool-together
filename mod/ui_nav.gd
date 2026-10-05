@@ -11,7 +11,9 @@ const SHOP_SECTIONS := ["balls", "mix", "snacks", "cues"]
 static func host_place(controller: Node) -> String:
 	if controller == null:
 		return "table"
-	if bool(controller.panel.visible):
+	if bool(controller.panel.visible) and not (
+		controller.panel.has_method("is_settings_only") and controller.panel.is_settings_only()
+	):
 		return "lobby"
 	if controller.set_voting != null and controller.set_voting.active():
 		return "set_vote"

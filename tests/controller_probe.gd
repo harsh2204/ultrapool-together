@@ -294,6 +294,12 @@ class PanelStub:
 	extends Control
 	var status_text = ""
 
+	func is_settings_only() -> bool:
+		return false
+
+	func set_settings_only(_enabled: bool) -> void:
+		pass
+
 	func set_status(value: String):
 		status_text = value
 

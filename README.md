@@ -25,6 +25,8 @@ bash Install.command --game-path "/path/to/Ultrapool.app"
 
 Use `--destination "/path/to/UltrapoolTogether"` for a different mod folder, or `--dry-run` to check the installation without writing files. If an extracted `.command` file is not executable, run it with `bash` from Terminal.
 
+To copy newer Steam progress after installation, close the normal game, then open the **Mod settings** gear at the mod's main menu → **Copy save from Steam** → **Back up and copy** → **Close**. No lobby is needed. This replaces mod progression and keeps a backup, your current settings, and unfinished runs. It reads the normal game's local save; it does not merge the two profiles. See [save copying and recovery](docs/SAVE_IMPORT.md).
+
 ## Play
 
 1. Keep Steam running and open the mod on every computer before accepting invitations.

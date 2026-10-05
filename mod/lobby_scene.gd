@@ -24,6 +24,7 @@ signal return_vote_requested(approve: bool)
 signal watch_requested(table: int)
 signal leave_requested
 signal close_requested
+signal settings_closed
 
 const VoteOption = preload("lobby_vote_option.gd")
 const ExpansionRegistry = preload("sets/registry.gd")
@@ -96,6 +97,10 @@ var _turn_banner_check: CheckBox
 var _sync_shop_check: CheckBox
 var _sync_shop_help: Label
 var _cue_shop_check: CheckBox
+var _settings_only = false
+var _settings_chrome_visibility: Dictionary = {}
+var _settings_backdrop: ColorRect
+var _settings_header: HBoxContainer
 
 
 func _ready():
@@ -107,6 +112,7 @@ func _ready():
 	_ensure_cue_shop_toggle()
 	_ensure_cue_picker()
 	_ensure_turn_banner_toggle()
+	_build_standalone_settings_chrome()
 	%Host.pressed.connect(func(): host_requested.emit())
 	%Join.pressed.connect(_join)
 	%JoinCode.text_submitted.connect(func(_text): _join())
@@ -144,6 +150,9 @@ func render(state: Dictionary, local_id: int, is_host: bool):
 	_state = state.duplicate(true)
 	_local_id = local_id
 	_is_host = is_host
+	if _settings_only:
+		render_personal_options()
+		return
 	var players: Array = state.get("players", [])
 	var started: bool = state.get("started", false)
 	var connected = 0
@@ -579,13 +588,93 @@ func _toggle_mod_options() -> void:
 
 ## Shared entry point for the lobby gear and the in-game HUD gear (PERF-026).
 ## Personal controls remain available after the match starts; host rules stay locked.
-func open_mod_options() -> void:
-	_render_mod_options(_state, _is_host, bool(_state.get("started", false)))
+func open_mod_options(standalone: bool = false) -> void:
+	set_settings_only(standalone)
+	if standalone:
+		render_personal_options()
+	else:
+		_render_mod_options(_state, _is_host, bool(_state.get("started", false)))
 	_place_mod_options()
 	%ModOptionsScroll.scroll_vertical = 0
 	%ModOptions.popup()
 	_mod_options_open = true
 	%FollowShopView.grab_focus()
+
+
+func is_settings_only() -> bool:
+	return _settings_only
+
+
+## Reuse the retained controls without rebuilding hidden lobby cards (PERF-026).
+func render_personal_options() -> void:
+	_render_mod_options(_state, false, bool(_state.get("started", false)))
+	%ModOptionsHelp.text = "Personal preferences and saved progress."
+	%ModOptionsColumn.get_node("MatchSettingsHelp").text = (
+		"Shared match rules are locked during play."
+		if bool(_state.get("started", false))
+		else "Open the lobby to change shared match rules."
+	)
+	for child in %ModOptionsColumn.get_children():
+		if child is Control:
+			_fit_mod_options_child(child)
+
+
+func set_settings_only(enabled: bool) -> void:
+	if _settings_only == enabled:
+		return
+	_settings_only = enabled
+	if enabled:
+		for child in get_children():
+			if child is CanvasItem and child != %ModOptions and child != _settings_backdrop:
+				_settings_chrome_visibility[child] = child.visible
+				child.hide()
+	else:
+		for child in _settings_chrome_visibility:
+			if is_instance_valid(child):
+				child.visible = _settings_chrome_visibility[child]
+		_settings_chrome_visibility.clear()
+		%ModOptions.custom_minimum_size = Vector2(300, 160)
+		%ModOptionsHelp.text = "Your screen preferences and shared match rules."
+		%ModOptionsColumn.get_node("MatchSettingsHelp").text = (
+			"Host chooses before the match. Locked once play begins."
+		)
+	_settings_backdrop.visible = enabled
+	_settings_header.visible = enabled
+	%ModOptionsTitle.visible = not enabled
+	%ModOptions.get_node("ModOptionsBody").add_theme_constant_override(
+		"margin_top", 54 if enabled else 10
+	)
+
+
+func _build_standalone_settings_chrome() -> void:
+	_settings_backdrop = ColorRect.new()
+	_settings_backdrop.name = "SettingsBackdrop"
+	_settings_backdrop.color = Color(0, 0, 0, 0.6)
+	_settings_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_settings_backdrop)
+	move_child(_settings_backdrop, 0)
+	_settings_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_settings_backdrop.hide()
+	_settings_header = HBoxContainer.new()
+	_settings_header.name = "SettingsHeader"
+	%ModOptions.add_child(_settings_header)
+	_settings_header.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	_settings_header.offset_left = 18
+	_settings_header.offset_right = -18
+	_settings_header.offset_top = 8
+	_settings_header.offset_bottom = 46
+	var title = Label.new()
+	title.text = "Mod settings"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 16)
+	_settings_header.add_child(title)
+	var close = Button.new()
+	close.name = "CloseSettings"
+	close.text = "Close"
+	close.accessibility_name = "Close mod settings"
+	close.pressed.connect(_close_mod_options)
+	_settings_header.add_child(close)
+	_settings_header.hide()
 
 
 func is_mod_options_open() -> bool:
@@ -599,8 +688,11 @@ func close_mod_options() -> void:
 func _close_mod_options() -> void:
 	if not _mod_options_open and not %ModOptions.visible:
 		return
-	%ModOptions.hide()
 	_mod_options_open = false
+	%ModOptions.hide()
+	# Clear the child first: the controller's shell close calls this method again.
+	if _settings_only:
+		settings_closed.emit()
 
 
 ## Keep the options column fill-width with no horizontal growth (gated CloneRounds
@@ -635,6 +727,14 @@ func _fit_mod_options_child(child: Control) -> void:
 ## Fit ModOptions inside the lobby body (below the header) at capture size and up (#14).
 ## Rows live in a ScrollContainer so every toggle stays reachable when content is tall.
 func _place_mod_options() -> void:
+	if _settings_only:
+		var settings_panel: Control = %ModOptions
+		var available = Vector2(maxf(1.0, size.x - 48.0), maxf(1.0, size.y - 48.0))
+		settings_panel.custom_minimum_size = Vector2(minf(300.0, available.x), minf(160.0, available.y))
+		settings_panel.size = Vector2(minf(520.0, available.x), minf(680.0, available.y))
+		settings_panel.position = (size - settings_panel.size) * 0.5
+		_reset_mod_options_scroll()
+		return
 	# Position in lobby-local coordinates. ModOptions is an embedded Panel (#19),
 	# not a Window — global/screen coords would place it off the CRT layer.
 	var button: Control = %ModOptionsButton
@@ -692,7 +792,7 @@ func _input(event: InputEvent) -> void:
 		if %ModOptions.get_global_rect().has_point(pos):
 			return
 		# Let the toggle button handle open/close itself.
-		if %ModOptionsButton.get_global_rect().has_point(pos):
+		if %ModOptionsButton.is_visible_in_tree() and %ModOptionsButton.get_global_rect().has_point(pos):
 			return
 		_close_mod_options()
 		get_viewport().set_input_as_handled()
@@ -1047,6 +1147,9 @@ func _clear(parent: Node):
 
 func _resize_tables():
 	if not is_node_ready():
+		return
+	if _settings_only:
+		_place_mod_options()
 		return
 	# Keep the desktop header on one row; wrap the room-code group at narrow widths.
 	var header = $Margin/Layout/Header

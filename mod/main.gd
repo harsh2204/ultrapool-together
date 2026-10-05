@@ -23,6 +23,7 @@ const HudPrefs = preload("hud_prefs.gd")
 const TurnBanner = preload("turn_banner.gd")
 const TableEffects = preload("table_effects_sync.gd")
 const VisualFx = preload("table_visual_fx.gd")
+const ProgressImport = preload("progress_import.gd")
 
 var transport: Node
 var adapter: Node
@@ -121,6 +122,15 @@ var _published_effect_ids: Dictionary = {}
 var _published_visual_fx_ids: Dictionary = {}
 var _effect_overflow_status = ""
 var _published_scene_id = 0
+var _progress_importer = ProgressImport.new()
+var _progress_import_button: Button
+var _progress_import_confirm: Button
+var _progress_import_cancel: Button
+var _progress_import_status: Label
+var _progress_import_confirmation: HFlowContainer
+var _progress_import_busy = false
+var _progress_import_generation = 0
+var _progress_refresh_menu_pending = false
 
 
 func _ready():
@@ -241,6 +251,9 @@ func _build_ui():
 	panel = load(base.path_join("lobby_scene.tscn")).instantiate()
 	panel.skin = skin
 	ui_root.add_child(panel)
+	_build_progress_import_options()
+	panel.settings_closed.connect(func(): _set_panel(false))
+	panel.get_node("%ModOptions").visibility_changed.connect(_progress_options_visibility_changed)
 	panel.host_requested.connect(_host)
 	panel.join_requested.connect(_join)
 	panel.friends_requested.connect(func(): panel.set_friends(transport.online_friends()))
@@ -353,9 +366,178 @@ func _toggle_panel():
 
 
 func _open_mod_settings() -> void:
-	_set_panel(true)
+	if _progress_import_busy:
+		return
+	if panel.visible and panel.is_settings_only():
+		_set_panel(false)
+		return
 	if panel.visible:
 		panel.open_mod_options()
+		return
+	if not active and run_setup.at_main_menu() and _native_ui.is_popup_open():
+		_status("Close the game's popup before opening mod settings.")
+		return
+	if is_spectating():
+		spectator.close()
+	panel.set_settings_only(true)
+	panel.render(lobby, transport.local_id(), transport.is_host)
+	panel.show()
+	panel.open_mod_options(true)
+	_suspend_menu()
+
+
+func _build_progress_import_options() -> void:
+	# PERF-026/038: retained controls; save I/O happens only after explicit confirmation.
+	var column: VBoxContainer = panel.get_node("%ModOptionsColumn")
+	var section = VBoxContainer.new()
+	section.name = "ProgressImport"
+	section.add_theme_constant_override("separation", 8)
+	column.add_child(section)
+	column.move_child(section, panel.get_node("%ModOptionsHelp").get_index() + 1)
+	var title = Label.new()
+	title.text = "STEAM PROGRESS"
+	title.add_theme_font_size_override("font_size", 12)
+	section.add_child(title)
+	var help = Label.new()
+	help.text = (
+		"Copy progression, unlocks, collection and cosmetics from the Steam game's local save. "
+		+ "Your current mod progress is backed up. Local settings and unfinished runs are kept."
+	)
+	help.add_theme_font_size_override("font_size", 13)
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	section.add_child(help)
+	_progress_import_button = _button("Copy save from Steam", _request_progress_import)
+	_progress_import_button.name = "CopySteamSave"
+	section.add_child(_progress_import_button)
+	_progress_import_status = Label.new()
+	_progress_import_status.name = "ImportStatus"
+	_progress_import_status.add_theme_font_size_override("font_size", 13)
+	_progress_import_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	section.add_child(_progress_import_status)
+	_progress_import_confirmation = HFlowContainer.new()
+	_progress_import_confirmation.name = "ImportConfirmation"
+	_progress_import_confirmation.add_theme_constant_override("h_separation", 8)
+	section.add_child(_progress_import_confirmation)
+	_progress_import_confirm = _button("Back up and copy", _confirm_progress_import)
+	_progress_import_cancel = _button("Cancel", _cancel_progress_import)
+	_progress_import_confirmation.add_child(_progress_import_confirm)
+	_progress_import_confirmation.add_child(_progress_import_cancel)
+	_progress_import_confirmation.hide()
+	for control in [section, help, _progress_import_button, _progress_import_status]:
+		control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+
+func _progress_import_block_reason() -> String:
+	if not supported:
+		return "Copying saves requires the supported Ultrapool version."
+	if _progress_refresh_menu_pending:
+		return "Copied. Close mod settings to refresh the main menu."
+	if active or not run_setup.at_main_menu():
+		return "Return to the main menu to copy Steam progress."
+	if transport.session_open():
+		return "Leave the multiplayer room before copying Steam progress."
+	return ""
+
+
+func _progress_options_visibility_changed() -> void:
+	_progress_import_generation += 1
+	_progress_import_confirmation.hide()
+	if panel.get_node("%ModOptions").visible:
+		_refresh_progress_import_options(true)
+
+
+func _refresh_progress_import_options(reset_message: bool = false) -> void:
+	if _progress_import_button == null:
+		return
+	var reason = _progress_import_block_reason()
+	_progress_import_button.disabled = _progress_import_busy or not reason.is_empty()
+	_progress_import_confirm.disabled = _progress_import_busy or not reason.is_empty()
+	_progress_import_cancel.disabled = _progress_import_busy
+	if not reason.is_empty() and not _progress_import_busy:
+		_progress_import_confirmation.hide()
+		_progress_import_status.text = reason
+	elif reset_message and not _progress_import_busy:
+		_progress_import_status.text = "Available here without creating or joining a lobby."
+
+
+func _request_progress_import() -> void:
+	if _progress_import_busy:
+		return
+	var reason = _progress_import_block_reason()
+	if not reason.is_empty():
+		_refresh_progress_import_options()
+		return
+	var source: Dictionary = _progress_importer.source_info()
+	if not source.get("ok", false):
+		_progress_import_status.text = str(source.get("message", "Steam save is unavailable."))
+		return
+	_progress_import_status.text = (
+		"Replace mod progression with Steam progress? A backup is saved first. "
+		+ "Close the normal game before copying."
+	)
+	_progress_import_confirmation.show()
+	_progress_import_cancel.grab_focus()
+
+
+func _cancel_progress_import() -> void:
+	if _progress_import_busy:
+		return
+	_progress_import_confirmation.hide()
+	_refresh_progress_import_options(true)
+	_progress_import_button.grab_focus()
+
+
+func _confirm_progress_import() -> void:
+	if _progress_import_busy or not _progress_import_confirmation.visible:
+		return
+	var reason = _progress_import_block_reason()
+	if not reason.is_empty():
+		_refresh_progress_import_options()
+		return
+	_progress_import_busy = true
+	_progress_import_status.text = "Backing up and copying progress…"
+	_refresh_progress_import_options()
+	var generation = _progress_import_generation
+	# Draw pending feedback first. Recheck the safe boundary after the yield:
+	# a Steam invitation, scene transition or dismissal may have arrived meanwhile.
+	await RenderingServer.frame_post_draw
+	if (
+		generation != _progress_import_generation
+		or not panel.is_mod_options_open()
+		or not _progress_import_block_reason().is_empty()
+	):
+		_progress_import_busy = false
+		_progress_import_confirmation.hide()
+		_refresh_progress_import_options(true)
+		return
+	var result: Dictionary = _progress_importer.import_progress(get_node("/root/SaveManager"))
+	_progress_import_busy = false
+	_progress_import_confirmation.hide()
+	_progress_refresh_menu_pending = bool(result.get("ok", false))
+	_refresh_progress_import_options()
+	_progress_import_status.text = str(result.get("message", "Steam progress could not be copied."))
+	var backup = str(result.get("backup", ""))
+	_progress_import_status.tooltip_text = (
+		"Previous mod progress: " + backup if backup != "" else ""
+	)
+	if _progress_refresh_menu_pending:
+		_progress_import_status.text += " Close mod settings to refresh the main menu."
+	else:
+		_progress_import_button.grab_focus()
+
+
+func _refresh_imported_menu() -> void:
+	if not _progress_refresh_menu_pending:
+		return
+	if not run_setup.at_main_menu() or active or transport.session_open():
+		return
+	_progress_refresh_menu_pending = false
+	# The service already committed and adopted progress; derived gallery state
+	# and native menu construction belong at this explicit lifecycle boundary.
+	get_node("/root/AchievementManager").init_gallery()
+	var error = get_tree().reload_current_scene()
+	if error != OK:
+		_status("Progress copied. Reopen the game to refresh its main menu.")
 
 
 func _set_follow_shop_view(enabled: bool) -> void:
@@ -382,12 +564,14 @@ func _set_panel(value: bool):
 		return
 	if not value and panel.has_method("close_mod_options"):
 		panel.close_mod_options()
+	panel.set_settings_only(false)
 	panel.visible = value
 	if value:
 		_render_lobby()
 		_suspend_menu()
 	else:
 		_restore_menu()
+		_refresh_imported_menu()
 
 
 func _suspend_menu():
@@ -610,10 +794,15 @@ func _broadcast_lobby():
 
 
 func _render_lobby():
+	if panel.is_settings_only():
+		panel.render(lobby, transport.local_id(), transport.is_host)
+		_refresh_progress_import_options()
+		return
 	panel.set_connection(transport.room_code, transport.session_open(), transport.invite_ready())
 	var view = lobby.duplicate(true)
 	view.watched_table = spectator.watched_table if is_spectating() else table_id
 	panel.render(view, transport.local_id(), transport.is_host)
+	_refresh_progress_import_options()
 
 
 func _start_match(sender: int):

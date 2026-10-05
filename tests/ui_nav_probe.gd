@@ -12,6 +12,32 @@ class NavController:
 		return host
 
 
+class SettingsPanel:
+	extends Control
+	var settings_only = false
+
+	func is_settings_only() -> bool:
+		return settings_only
+
+
+class PlaceController:
+	extends Node
+	var panel: Control
+	var set_voting = null
+	var shop_sync = null
+
+
+class PlaceShop:
+	extends RefCounted
+	var section = "balls"
+
+	func is_open() -> bool:
+		return true
+
+	func current_section() -> String:
+		return section
+
+
 class NavView:
 	extends Node
 	var state = 0
@@ -56,6 +82,7 @@ func _initialize() -> void:
 	var CrtStack = load(base.path_join("../mod/crt_stack.gd"))
 	_check(UiNav != null, "ui_nav script loads")
 	_check(CrtStack != null, "crt_stack script loads")
+	_check_settings_host_place(UiNav)
 
 	_check(UiNav.PLACES.has("snack_bar"), "snack bar is a host UI place")
 	_check(UiNav.SHOP_SECTIONS.has("snacks"), "snacks is a shop section")
@@ -123,6 +150,45 @@ func _initialize() -> void:
 	for failure in failures:
 		push_error(failure)
 	quit(0 if failures.is_empty() else 1)
+
+
+func _check_settings_host_place(ui_nav) -> void:
+	var controller = PlaceController.new()
+	var panel = SettingsPanel.new()
+	controller.panel = panel
+	controller.add_child(panel)
+	panel.show()
+	_check(ui_nav.host_place(controller) == "lobby", "visible lobby publishes lobby navigation")
+	panel.settings_only = true
+	_check(
+		ui_nav.host_place(controller) == "table",
+		"opening personal settings on the table does not send teammates to the lobby"
+	)
+	controller.shop_sync = PlaceShop.new()
+	_check(
+		ui_nav.host_place(controller) == "shop",
+		"personal settings preserve the underlying shop navigation"
+	)
+	controller.shop_sync.section = "snacks"
+	_check(
+		ui_nav.host_place(controller) == "snack_bar",
+		"personal settings preserve the underlying snack-bar navigation"
+	)
+	panel.settings_only = false
+	_check(
+		ui_nav.host_place(controller) == "lobby",
+		"returning to the real lobby still publishes the lobby transition"
+	)
+	panel.hide()
+	_check(ui_nav.host_place(controller) == "snack_bar", "closing settings returns to the current place")
+	var legacy_panel = Control.new()
+	controller.add_child(legacy_panel)
+	controller.panel = legacy_panel
+	_check(
+		ui_nav.host_place(controller) == "lobby",
+		"panels without a settings-only API keep the existing lobby contract"
+	)
+	controller.free()
 
 
 func _check_follow_shop_view(base: String):
