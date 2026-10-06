@@ -3,7 +3,9 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $testParent = Join-Path $repoRoot '.local\installer-tests'
 $testRoot = Join-Path $testParent ([Guid]::NewGuid().ToString('N'))
 $package = Join-Path $testRoot 'package [test]'
-$game = Join-Path $testRoot 'game [test]'
+$steamApps = Join-Path $testRoot 'Steam library [test]\steamapps'
+$game = Join-Path $steamApps 'common\game [test]'
+$appManifest = Join-Path $steamApps 'appmanifest_4195110.acf'
 $installed = Join-Path $game 'UltrapoolTogether'
 $userDataRoot = Join-Path $testRoot 'user data [test]'
 $steamProfile = Join-Path $userDataRoot 'Godot\app_userdata\Ultrapool'
@@ -33,8 +35,31 @@ function Assert-Hash([string]$Path, [string]$Expected, [string]$Message) {
     Assert ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -eq $Expected) $Message
 }
 
+function Get-TreeSnapshot([string]$Root) {
+    $entries = @(Get-ChildItem -LiteralPath $Root -File -Recurse | Sort-Object FullName | ForEach-Object {
+        $_.FullName.Substring($Root.Length) + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+    })
+    return ConvertTo-Json -InputObject $entries -Compress
+}
+
 try {
     New-Item -ItemType Directory -Path (Join-Path $package 'mod'), $game -Force | Out-Null
+    $supportedManifest = @'
+"AppState"
+{
+    "appid" "4195110"
+    "buildid" "25727180"
+    "installdir" "game [test]"
+    "InstalledDepots"
+    {
+        "4195111"
+        {
+            "manifest" "123456789"
+        }
+    }
+}
+'@
+    Set-Content -LiteralPath $appManifest -Value $supportedManifest
     foreach ($name in @('Install.ps1', 'Uninstall.ps1', 'Launch.cmd')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot $name) -Destination (Join-Path $package $name)
     }
@@ -52,6 +77,43 @@ try {
         Set-Content -LiteralPath (Join-Path $steamProfile $name) -Value "Steam $name"
     }
 
+    $invalidManifests = @(
+        @{ label = 'missing manifest'; text = $null }
+        @{ label = 'malformed manifest'; text = 'not a Steam app manifest' }
+        @{ label = 'unclosed root object'; text = $supportedManifest.TrimEnd().Substring(0, $supportedManifest.TrimEnd().Length - 1) }
+        @{ label = 'missing field value'; text = $supportedManifest.Replace('"buildid" "25727180"', '"buildid"') }
+        @{ label = 'old build'; text = $supportedManifest.Replace('25727180', '25298901') }
+        @{ label = 'future build'; text = $supportedManifest.Replace('25727180', '25727181') }
+        @{ label = 'wrong app'; text = $supportedManifest.Replace('4195110', '12345') }
+        @{ label = 'missing build'; text = $supportedManifest.Replace('"buildid" "25727180"', '') }
+        @{ label = 'duplicate build'; text = $supportedManifest.Replace('"buildid" "25727180"', '"buildid" "25727180" "buildid" "25298901"') }
+        @{ label = 'empty duplicate build'; text = $supportedManifest.Replace('"buildid" "25727180"', '"buildid" "25727180" "buildid" ""') }
+        @{ label = 'object duplicate build'; text = $supportedManifest.Replace('"buildid" "25727180"', '"buildid" "25727180" "buildid" { }') }
+        @{ label = 'nested identity fields'; text = $supportedManifest.Replace('"buildid" "25727180"', '"Nested" { "buildid" "25727180" }') }
+        @{ label = 'duplicate app'; text = $supportedManifest.Replace('"appid" "4195110"', '"appid" "4195110" "appid" "12345"') }
+        @{ label = 'wrong directory'; text = $supportedManifest.Replace('game [test]', 'another game') }
+        @{ label = 'directory traversal'; text = $supportedManifest.Replace('game [test]', '..\common\game [test]') }
+        @{ label = 'rooted directory'; text = $supportedManifest.Replace('game [test]', $game) }
+        @{ label = 'directory alias'; text = $supportedManifest.Replace('game [test]', 'game [test].') }
+    )
+    $beforeRejectedProfiles = Get-TreeSnapshot $userDataRoot
+    foreach ($case in $invalidManifests) {
+        if ($null -eq $case.text) {
+            Remove-Item -LiteralPath $appManifest
+        } else {
+            Set-Content -LiteralPath $appManifest -Value $case.text
+        }
+        foreach ($whatIf in @($false, $true)) {
+            Expect-Failure {
+                & (Join-Path $package 'Install.ps1') -GamePath $game -UserDataRoot $userDataRoot -WhatIf:$whatIf
+            } "Installer accepted $($case.label)."
+            Assert (-not (Test-Path -LiteralPath $installed)) 'Rejected game metadata caused a partial installation.'
+            Assert ((Get-TreeSnapshot $userDataRoot) -eq $beforeRejectedProfiles) 'Rejected game metadata changed a save profile.'
+            Assert-Hash (Join-Path $game 'game.exe') $originalHash 'Rejected game metadata changed the native executable.'
+        }
+    }
+    Set-Content -LiteralPath $appManifest -Value $supportedManifest
+
     & (Join-Path $package 'Install.ps1') -GamePath $game -UserDataRoot $userDataRoot -WhatIf
     Assert (-not (Test-Path -LiteralPath $installed)) 'Install -WhatIf wrote files.'
     Assert (-not (Test-Path -LiteralPath $modProfile)) 'Install -WhatIf created a save directory.'
@@ -60,6 +122,7 @@ try {
     $markerPath = Join-Path $installed 'ultrapool-together-install.json'
     $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
     Assert ($marker.source_exe_sha256 -eq $originalHash) 'The source executable hash was not recorded.'
+    Assert ($marker.supported_game_version -eq '0.17.2' -and $marker.supported_steam_build -eq '25727180') 'The installed compatibility target is incorrect.'
     $config = Get-Content -LiteralPath (Join-Path $installed 'override.cfg') -Raw
     Assert ($config.Contains('config/use_custom_user_dir=true')) 'Custom save directory is disabled.'
     Assert ($config.Contains((Join-Path $installed 'mod\main.gd').Replace('\', '/'))) 'Autoload path is incorrect.'
@@ -88,6 +151,13 @@ try {
     $retiredPath = Join-Path $installed 'mod\retired.gd'
     $beforeUpgradeMarker = Get-Content -LiteralPath $markerPath -Raw
     $beforeUpgradeHash = (Get-FileHash -LiteralPath (Join-Path $installed 'mod\main.gd')).Hash
+    $beforeRejectedInstall = Get-TreeSnapshot $installed
+    $beforeRejectedProfiles = Get-TreeSnapshot $userDataRoot
+    Set-Content -LiteralPath $appManifest -Value $supportedManifest.Replace('25727180', '25298901')
+    Expect-Failure { & (Join-Path $package 'Install.ps1') -GamePath $game -UserDataRoot $userDataRoot } 'Update accepted an unsupported native build.'
+    Assert ((Get-TreeSnapshot $installed) -eq $beforeRejectedInstall) 'Rejected native build changed the existing installation.'
+    Assert ((Get-TreeSnapshot $userDataRoot) -eq $beforeRejectedProfiles) 'Rejected native build changed existing save profiles.'
+    Set-Content -LiteralPath $appManifest -Value $supportedManifest
     foreach ($unsafeRelative in @('..\game.exe', 'mod\main.gd:alternate', 'mod\main.gd.', 'ultrapool-together-install.json')) {
         $unsafeUpgrade = $beforeUpgradeMarker | ConvertFrom-Json
         $unsafeUpgrade.files += $unsafeRelative

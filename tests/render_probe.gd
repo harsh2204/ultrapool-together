@@ -20,6 +20,7 @@ var screens: Array[Dictionary] = []
 var fixtures: RefCounted
 var round_flow: RefCounted
 var shop_input: Node
+var native_version = preload("native_version_fixture.gd").new()
 var native_aim = preload("native_aim_fixture.gd").new()
 var native_pocket = preload("native_pocket_fixture.gd").new()
 var native_effects = preload("native_table_effects_fixture.gd").new()
@@ -183,14 +184,17 @@ func _run():
 	}
 	mod.latest_state = {"table_active": true, "in_shop": false}
 	mod.adapter.begin_session(mod)
+	native_version.prime_host_context(mod)
 	if not _check(mod.run_setup.start(fixture_config) == OK, "selected native run config starts"):
 		_finish()
 		return
+	native_version.check_host_context(mod, _check)
 	if not _check(await _wait(_native_ready), "native table spawned"):
 		_finish()
 		return
 	await get_tree().create_timer(3.0).timeout
 	var game = global_node.gameManager
+	native_version.check_host_passive_copy(mod, game, _check)
 	mod.run_controls.begin_session()
 	_check(not mod.run_controls._bindings.is_empty(), "native run exits route to lobby voting")
 	_check_run_config("host")
@@ -266,9 +270,11 @@ func _run():
 	if mod.turn_banner != null:
 		mod.turn_banner.clear()
 	mod._turn_banner_showing = false
+	native_version.prime_guest_context(mod)
 	if not _check(mod.table_sync.begin_guest(fixture_config), "guest scene begins"):
 		_finish()
 		return
+	native_version.check_guest_context(mod, _check)
 	# Prove spent pips through snapshot → replica _update_shots (#29), not a post-apply poke.
 	var shots_max: int = maxi(int(snapshot.get("shots_max", 0)), int(snapshot.get("shots", 0)))
 	if shots_max < 1:
@@ -279,6 +285,7 @@ func _run():
 	_check(mod.table_sync.apply_snapshot(snapshot), "guest snapshot accepted")
 	await get_tree().create_timer(1.0).timeout
 	game = global_node.gameManager
+	native_version.check_guest_passive_copy(mod, snapshot, _check)
 	mod._local_id = 2
 	mod.turn_owner = 2
 	mod.latest_state = mod.adapter.game_data()
@@ -321,6 +328,7 @@ func _run():
 	await _capture_ball_previews(game)
 	await _capture_guest_shop(snapshot, shop_state)
 	mod.table_sync.end_guest()
+	native_version.check_restored_context(mod, _check)
 	for result in await round_flow.replay_guest(mod, _capture):
 		_check(result.passed, result.name)
 	for result in fixtures.checks:
@@ -341,6 +349,7 @@ func _capture_guest_shop(table_state: Dictionary, shop_state: Dictionary):
 	var game = get_node("/root/Global").gameManager
 	var shop = mod.shop_sync.native_shop()
 	if is_instance_valid(shop):
+		native_version.check_guest_shop(mod, shop, _check)
 		_check_shop_wallet_refresh(shop, shop_state)
 		_check_shop_offer_refresh(shop, shop_state)
 	await get_tree().create_timer(1.0).timeout
@@ -1267,6 +1276,8 @@ func _check(condition: bool, label: String) -> bool:
 
 
 func _finish():
+	if mod != null:
+		native_version.cleanup(mod)
 	_write_gallery()
 	print("RENDER_PROBE_", "PASS" if failures.is_empty() else "FAIL", " ", failures)
 	get_tree().quit(0 if failures.is_empty() else 1)

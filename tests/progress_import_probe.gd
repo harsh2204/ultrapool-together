@@ -70,6 +70,7 @@ func _initialize() -> void:
 		_finish()
 		return
 	_check_copy_and_reimport()
+	_check_legacy_halo_daily()
 	_check_rejected_sources()
 	_check_failures()
 	_check_destructive_rename_failure()
@@ -117,8 +118,11 @@ func _fixture(name: String, existing: bool = true) -> Dictionary:
 		)
 		_write(profile.path_join(Importer.MARKER), '{"schema":1,"fixture":"old marker"}')
 	_write(source_dir.path_join("save.bak.tres"), "vanilla recovery stays unchanged")
+	# Native 0.17.2 keeps cloud-replacement recovery separately from save.bak.
+	_write(source_dir.path_join("save_overwritten.tres"), "vanilla cloud recovery stays unchanged")
 	_write(source_dir.path_join("run_data.tres"), "unfinished vanilla run")
 	_write(source_dir.path_join("daily_data.tres"), "unfinished vanilla daily")
+	_write(profile.path_join("save_overwritten.tres"), "Together cloud recovery stays unchanged")
 	_write(profile.path_join("run_data.tres"), "unfinished Together run")
 	_write(profile.path_join("daily_data.tres"), "unfinished Together daily")
 	_write(profile.path_join("together_hud.cfg"), "personal mod preferences")
@@ -229,6 +233,70 @@ func _check_copy_and_reimport() -> void:
 	fixture.manager.free()
 
 
+func _check_legacy_halo_daily() -> void:
+	var fixture = _fixture("legacy-halo-daily")
+	var halo: Resource = load("res://data/passives_data/halo_halo.tres")
+	var current_halo_valid = halo != null and halo.id == "HALO-HALO"
+	_check(current_halo_valid, "current native Halo-Halo resolves to its stable catalog id")
+	if not current_halo_valid:
+		fixture.manager.free()
+		return
+	var run_script = load("res://saves/run_state_resource.gd")
+	var item_script = load("res://ball_item.gd")
+	var local_daily: Resource = run_script.new()
+	local_daily.money = 23
+	var local_item: Resource = item_script.new()
+	local_item.data = halo
+	local_daily.current_passives.append(local_item)
+	fixture.manager.save.last_daily = local_daily
+	var source: Resource = load(Importer.SAVE_SCRIPT).new()
+	source.game_version = "0.15.7"
+	source.total_runs_played = 71
+	var source_daily: Resource = run_script.new()
+	source_daily.money = 77
+	var source_item: Resource = item_script.new()
+	source_item.data = halo
+	source_daily.current_passives.append(source_item)
+	source.last_daily = source_daily
+	_check(ResourceSaver.save(source, fixture.source) == OK, "legacy daily graph serializes in the isolated source")
+	var text = FileAccess.get_file_as_string(fixture.source)
+	var declarations = text.split("\n")
+	var references: Array[int] = []
+	var current_path = 'path="' + halo.resource_path + '"'
+	for index in declarations.size():
+		if declarations[index].begins_with("[ext_resource ") and declarations[index].contains(current_path):
+			references.append(index)
+	_check(references.size() == 1, "legacy daily fixture starts from one real native external resource reference")
+	if references.size() != 1:
+		fixture.manager.free()
+		return
+	# Reproduce the old serialized reference, without modifying either catalog or
+	# a real save. 0.17.2 reused that UID for a different native snack; importing
+	# progression must still retain the local daily rather than adopt this graph.
+	# Release ResourceSaver emits path-only references; add the historical UID to
+	# this one native-generated declaration to exercise the UID-bearing case.
+	var uid_attribute = RegEx.new()
+	uid_attribute.compile(' uid="[^"]+"')
+	var reference = uid_attribute.sub(declarations[references[0]], "", true)
+	declarations[references[0]] = reference.replace(
+		current_path,
+		'uid="uid://0nployt1dx74" path="res://data/passives_data/halohalo.tres"'
+	)
+	text = "\n".join(declarations)
+	_write(fixture.source, text)
+	var source_bytes = FileAccess.get_file_as_bytes(fixture.source)
+	var old_uid = ResourceUID.text_to_id("uid://0nployt1dx74")
+	print("PROGRESS_LEGACY_HALO_UID_MAP ", ResourceUID.get_id_path(old_uid) if ResourceUID.has_id(old_uid) else "unmapped")
+	var result = Importer.new()._import_paths(fixture.source, fixture.profile, fixture.manager, [fixture.cache])
+	_check(result.ok, "progress import accepts a legacy UID-bearing daily graph")
+	_check(FileAccess.get_file_as_bytes(fixture.source) == source_bytes, "legacy daily source bytes are never rewritten")
+	if result.ok:
+		_check(is_same(fixture.manager.save.last_daily, local_daily), "legacy source daily is discarded while the exact local daily is retained")
+		var disk = ResourceLoader.load(fixture.profile.path_join("save.tres"), "", ResourceLoader.CACHE_MODE_IGNORE)
+		_check(disk != null and disk.last_daily.money == 23 and disk.last_daily.current_passives.size() == 1 and disk.last_daily.current_passives[0].data.id == "HALO-HALO", "prepared progress preserves the local daily and correct current Halo-Halo id")
+	fixture.manager.free()
+
+
 func _check_rejected_sources() -> void:
 	for kind in ["missing", "header", "oversize", "resource", "same_profile", "directory"]:
 		var fixture = _fixture("reject-" + kind)
@@ -330,6 +398,7 @@ func _check_destructive_rename_failure() -> void:
 		fixture.manager.save == fixture.old_save,
 		"failed destructive rename preserves native memory"
 	)
+	_check_non_targets(fixture, "destructive rename rollback")
 	fixture.manager.free()
 
 
@@ -397,9 +466,9 @@ func _check_links() -> void:
 
 func _protected_snapshot(source_dir: String, profile: String) -> Dictionary:
 	var result: Dictionary = {}
-	for name in ["save.tres", "save.bak.tres", "run_data.tres", "daily_data.tres"]:
+	for name in ["save.tres", "save.bak.tres", "save_overwritten.tres", "run_data.tres", "daily_data.tres"]:
 		result["source/" + name] = FileAccess.get_file_as_bytes(source_dir.path_join(name))
-	for name in ["run_data.tres", "daily_data.tres", "together_hud.cfg"]:
+	for name in ["save_overwritten.tres", "run_data.tres", "daily_data.tres", "together_hud.cfg"]:
 		result["other/" + name] = FileAccess.get_file_as_bytes(profile.path_join(name))
 	for name in _target_snapshot(profile):
 		result["target/" + name] = FileAccess.get_file_as_bytes(profile.path_join(name))

@@ -384,9 +384,13 @@ func begin_guest(config: Dictionary = {}) -> bool:
 		"floating_ui",
 		"chosen_deck",
 		"chosen_difficulty",
+		"chosen_run_state",
 		"seed",
 		"seed_text",
 		"seeded_run",
+		"creative_run",
+		"force_selected_item",
+		"force_selected_object",
 		"run_mode"
 	]:
 		_saved_global[key] = global_node.get(key)
@@ -402,6 +406,12 @@ func begin_guest(config: Dictionary = {}) -> bool:
 	_results.setup()
 	global_node.in_run = true
 	global_node.run_mode = global_node.RunMode.NORMAL
+	# Replicas display a normal shared run even after local solo Creative play.
+	# The saved guest globals above are restored by end_guest, including selection.
+	global_node.set_creative(false)
+	global_node.chosen_run_state = null
+	global_node.force_selected_item = null
+	global_node.force_selected_object = null
 	if not config.is_empty():
 		var database = get_node("/root/BallDatabase")
 		global_node.chosen_deck = database.id_to_deck[config.deck]
@@ -788,7 +798,10 @@ func _inventory_problem(data) -> String:
 		for item in data[group]:
 			if item == null:
 				continue
-			if not item is Dictionary or not PlayerInventory._valid_item(item, resources):
+			if (
+				not item is Dictionary
+				or not PlayerInventory._valid_item(item, resources, group == "passives")
+			):
 				return "inventory " + group + " item"
 			if group == "cubes" and not PlayerInventory._is_negative_cube(resources[item.data]):
 				return "inventory cubes non-NEGATIVE " + str(item.data)

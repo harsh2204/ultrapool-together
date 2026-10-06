@@ -13,7 +13,9 @@ Scores three things without launching the game:
 3. Wire model: an estimate of Godot ``var_to_bytes`` size for synthetic table
    snapshots whose field lists are parsed from the capture sources. It reports
    bytes per snapshot, bytes per second at the host cadence and the share spent
-   on repeated dictionary keys.
+   on repeated dictionary keys. The historical scenarios retain their original
+   synthetic inventory; a separate 0.17.2 scenario models the current inventory
+   schema and sparse GUMMY-BRAIN copy identity without rewriting that baseline.
 
 Run ``python3 tests/effect_benchmark.py`` to print the report, ``--json PATH`` to
 save it, ``--write-baseline`` to record the current result as the reference and
@@ -870,11 +872,89 @@ def build_results():
 
 
 def build_inventory():
+    # Historical v2 workload, retained for baseline comparison. These toy keys
+    # and slot counts are not the production inventory schema. The separate
+    # compatibility scenario below parses that schema; correcting this old
+    # workload would be a model correction, not actual network growth.
     item = {"data": "FOOD_APPLE", "mixed": "", "base_score": 5, "temp_extra_score": 0, "level": 1,
             "weight_state": 0, "flaming": False, "fleeting": False, "star_power": False,
             "shielded": False, "shield_broken": False, "locked": False}
     return {"snacks": 1, "cocktails": 0, "balls": [item] * 8, "passives": [None] * 3,
             "cubes": [None] * 2, "tickets": []}
+
+
+def _inventory_slot_minimums(source: str) -> dict[str, int]:
+    match = re.search(r"const SLOT_MINIMUMS = (\{[^}]*\})", source)
+    if not match:
+        raise ValueError("inventory slot minimums require a representative model update")
+    result = json.loads(match.group(1))
+    if set(result) != {"build", "passives", "cubes"} or any(type(value) is not int or value < 0 for value in result.values()):
+        raise ValueError("inventory slot groups require a representative model update")
+    if set(_keys_in_block(source, "const SLOT_LIMITS =")) != set(result):
+        raise ValueError("inventory slot limits require a representative model update")
+    return result
+
+
+def build_current_inventory(copy_id: str = "CRISPS") -> dict:
+    """0.17.2 shape: eight balls, CRISPS, GUMMY-BRAIN, and empty padded slots.
+
+    CRISPS is an installed passive with passive_has_number_in_round=true. Only
+    GUMMY-BRAIN gets copy_id; ordinary table-ball items do not carry this field.
+    This is a synthetic shape, not a captured or validated native inventory.
+    """
+    source = code(read("mod/player_inventory_sync.gd"))
+    capture = code(function_body(source, "capture"))
+    minimums = _inventory_slot_minimums(source)
+    item_keys = _keys_in_block(capture, "var entry = {")
+    numbers = _const_dict_keys(source, "NUMBERS")
+    flags = _const_list(source, "FLAGS")
+    optional = set(re.findall(r'entry\["(\w+)"\]\s*=', capture))
+    if not item_keys or not numbers or not flags or optional != {"copy_id"}:
+        raise ValueError("inventory item fields require a representative model update")
+    if not has_calls("mod/player_inventory_sync.gd", "capture",
+                     'group == "passives" and entry.data == "GUMMY-BRAIN"',
+                     'entry["copy_id"] = item.copy_id'):
+        raise ValueError("inventory copy identity requires its sparse capture contract")
+    item = {key: _value_for(key) for key in item_keys + numbers}
+    item.update({key: False for key in flags})
+    values = {"snacks": 1, "cocktails": 0}
+    top_keys = _keys_in_block(capture, "var result = {")
+    if set(top_keys) != set(values):
+        raise ValueError("inventory top fields require a representative model update")
+    result = {key: values[key] for key in top_keys}
+    result["build"] = [item.copy() for _ in range(8)]
+    result["passives"] = [dict(item, data="CRISPS"), dict(item, data="GUMMY-BRAIN", copy_id=copy_id)]
+    result["cubes"] = [None] * 2
+    for group, minimum in minimums.items():
+        result[group] += [None] * max(0, minimum - len(result[group]))
+    return result
+
+
+def compatibility_inventory_wire() -> dict:
+    """Separate port workload; never substitute it for a historical scenario."""
+    import copy
+
+    populated = build_current_inventory()
+    cleared = build_current_inventory("")
+    absent = copy.deepcopy(populated)
+    del absent["passives"][1]["copy_id"]
+    snapshot = build_snapshot(*WIRE_SCENARIOS["idle_16_balls"])
+    bytes_by_case = {}
+    for name, inventory in [("absent", absent), ("cleared", cleared), ("copied", populated)]:
+        snapshot["scene"]["inventory"] = inventory
+        bytes_by_case[name] = var_bytes(snapshot)
+    return {
+        "native_version": "0.17.2",
+        "copy_target": "CRISPS",
+        "slot_counts": {group: len(populated[group]) for group in ("build", "passives", "cubes")},
+        "inventory_bytes_without_optional_copy": var_bytes(absent),
+        "inventory_bytes_cleared": var_bytes(cleared),
+        "inventory_bytes_copied": var_bytes(populated),
+        "copy_field_bytes_cleared": var_bytes(cleared) - var_bytes(absent),
+        "copy_field_bytes_populated": var_bytes(populated) - var_bytes(absent),
+        "idle_snapshot_bytes": bytes_by_case,
+        "scope": "Separate synthetic current-schema inventory: eight build items, CRISPS and GUMMY-BRAIN, empty padding to source minimums. Absent copy_id is an accepted legacy field case; current capture emits the copied ID or explicit empty clear. Reuses the idle 16-ball table shape. Excludes transport overhead; no actual native packet, frequency or performance claim. Historical wire scenarios and comparison thresholds are unchanged.",
+    }
 
 
 def build_droplet(effects_source: str):
@@ -1123,7 +1203,7 @@ def build_report() -> dict:
         gate.run()
     return {
         "wire_model_version": 2,
-        "wire_model_scope": "Synthetic descriptor shapes, not captured or validated native packets; includes sparse ball art, pocket art, native drawing, transient points/shaders/text. Excludes transport envelope, reliable state/ability stream and retransmission overhead. No compression or overflow trimming applied.",
+        "wire_model_scope": "Historical synthetic descriptor shapes, not captured or validated native packets; the v2 inventory retains toy keys/slot counts for baseline comparability. Current 0.17.2 inventory is reported separately. Includes sparse ball art, pocket art, native drawing, transient points/shaders/text. Excludes transport envelope, reliable state/ability stream and retransmission overhead. No compression or overflow trimming applied.",
         "coverage": coverage,
         "corroborations": corroborations,
         "corroboration_failures": sorted(
@@ -1137,6 +1217,7 @@ def build_report() -> dict:
         "gates_total": len(GATES),
         "wire": wire_report(),
         "reliable_feedback_wire": reliable_feedback_wire(),
+        "compatibility_inventory_wire": compatibility_inventory_wire(),
     }
 
 
@@ -1196,6 +1277,13 @@ def print_report(report: dict, baseline: dict | None) -> None:
     receipts = report["reliable_feedback_wire"]
     print("  Separate reliable state: cue receipt %d B; five TOGETHER receipts %d B (values only)." % (
         receipts["cue_receipt_bytes"], receipts["five_together_receipts_bytes"]))
+    inventory = report["compatibility_inventory_wire"]
+    print("  Separate native 0.17.2 inventory scenario (current schema, two occupied passives):")
+    print("    idle snapshot absent/cleared/copied: %d / %d / %d B; GUMMY-BRAIN copy_id adds %d B empty or %d B for %s." % (
+        inventory["idle_snapshot_bytes"]["absent"], inventory["idle_snapshot_bytes"]["cleared"],
+        inventory["idle_snapshot_bytes"]["copied"], inventory["copy_field_bytes_cleared"],
+        inventory["copy_field_bytes_populated"], inventory["copy_target"]))
+    print("    Historical v2 inventory keys/counts are synthetic, not production-valid; no baseline rewrite.")
     print()
     punch = [g for g in report["gates"] if not g["passed"]]
     if punch:
@@ -1268,6 +1356,34 @@ def self_test() -> bool:
         def test_wire_unknown_fields_fail_closed(self):
             with self.assertRaisesRegex(ValueError, "explicit representative"):
                 _value_for("future_expensive_descriptor")
+
+        def test_compatibility_inventory_preserves_sparse_copy_cost(self):
+            legacy = build_inventory()
+            current = build_current_inventory()
+            self.assertEqual(set(current), {"snacks", "cocktails", "build", "passives", "cubes"})
+            self.assertEqual(len(current["build"]), 16)
+            self.assertEqual(len(current["passives"]), 4)
+            self.assertTrue(all("copy_id" not in item for item in current["build"] if item))
+            self.assertNotIn("copy_id", current["passives"][0])
+            self.assertEqual(current["passives"][1]["copy_id"], "CRISPS")
+            report = compatibility_inventory_wire()
+            # Variant key + String value: 16 + 8 empty, 16 + 16 for CRISPS.
+            self.assertEqual(report["copy_field_bytes_cleared"], 24)
+            self.assertEqual(report["copy_field_bytes_populated"], 32)
+            self.assertEqual(report["idle_snapshot_bytes"]["copied"] - report["idle_snapshot_bytes"]["absent"], 32)
+            self.assertEqual(build_inventory(), legacy)
+            self.assertEqual(build_snapshot(*WIRE_SCENARIOS["idle_16_balls"])["scene"]["inventory"], legacy)
+
+        def test_compatibility_inventory_rejects_unmodeled_fields(self):
+            original_read = read
+            path = "mod/player_inventory_sync.gd"
+            source = original_read(path)
+            marker = 'entry["copy_id"] = item.copy_id'
+            self.assertIn(marker, source)
+            mutated = source.replace(marker, marker + '\n\t\t\tentry["future_expensive_descriptor"] = []')
+            with patch.dict(globals(), read=lambda relative: mutated if relative == path else original_read(relative)):
+                with self.assertRaisesRegex(ValueError, "item fields"):
+                    build_current_inventory()
 
         def test_partial_path_does_not_support_complete_claim(self):
             evidence = Corroboration("HUD-03", "aim reminder only", guest=lambda: True, complete=False)

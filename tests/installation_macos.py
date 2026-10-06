@@ -40,7 +40,7 @@ class MacInstallationTests(unittest.TestCase):
         for directory in ("MacOS", "Resources", "Frameworks", "_CodeSignature"):
             (contents / directory).mkdir(parents=True)
         with (contents / "Info.plist").open("wb") as target:
-            plistlib.dump({"CFBundleExecutable": "Ultrapool", "CFBundleShortVersionString": "0.15.7"}, target)
+            plistlib.dump({"CFBundleExecutable": "Ultrapool", "CFBundleShortVersionString": "0.17.2"}, target)
         # This file is an inert fixture, never a real engine executable.
         (self.app / MAC.EXECUTABLE).write_text("native executable fixture\n")
         (self.app / MAC.EXECUTABLE).chmod(0o755)
@@ -87,6 +87,9 @@ class MacInstallationTests(unittest.TestCase):
         self.sign.assert_not_called()
         self.install()
         self.sign.assert_called_once_with(self.install_root / "Ultrapool.app")
+        installed = json.loads((self.install_root / MAC.MANIFEST).read_text())
+        self.assertEqual(installed["supported_game_version"], "0.17.2")
+        self.assertEqual(installed["supported_steam_build"], "25727180")
         self.assertEqual(self.snapshot(self.app), {name.removeprefix("Ultrapool.app/"): data for name, data in self.original.items()})
         self.assertEqual(self.snapshot(self.vanilla), self.original_saves)
         for name in ("save.tres", "save.bak.tres"):
@@ -277,14 +280,56 @@ class MacInstallationTests(unittest.TestCase):
     def test_native_game_validation(self):
         info_path = self.app / "Contents/Info.plist"
         original = info_path.read_bytes()
-        info_path.write_bytes(plistlib.dumps({"CFBundleExecutable": "Ultrapool", "CFBundleShortVersionString": "9.0"}))
-        with self.assertRaisesRegex(ValueError, "supports Ultrapool"):
-            self.install()
+        self.write_save(self.profile / "save.tres", "mod progress before rejected install")
+        before_profile = self.snapshot(self.profile)
+        for version in ("0.15.7", "0.17.1", "0.17.3", "9.0", ""):
+            for dry_run in (False, True):
+                with self.subTest(version=version, dry_run=dry_run):
+                    info_path.write_bytes(plistlib.dumps({
+                        "CFBundleExecutable": "Ultrapool", "CFBundleShortVersionString": version,
+                    }))
+                    before_app = self.snapshot(self.app)
+                    with self.assertRaisesRegex(ValueError, "supports Ultrapool 0.17.2"):
+                        self.install(dry_run=dry_run)
+                    self.assertFalse(self.install_root.exists())
+                    self.assertEqual(self.snapshot(self.app), before_app)
+                    self.assertEqual(self.snapshot(self.vanilla), self.original_saves)
+                    self.assertEqual(self.snapshot(self.profile), before_profile)
+                    self.sign.assert_not_called()
         info_path.write_bytes(original)
         override = self.app / "Contents/MacOS/override.cfg"
         override.write_text("unrelated mod")
         with self.assertRaisesRegex(ValueError, "local override"):
             self.install()
+
+    def test_update_from_previous_game_version_preserves_profiles(self):
+        self.install()
+        installed_app = self.install_root / "Ultrapool.app"
+        (installed_app / "Contents/Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleExecutable": "Ultrapool", "CFBundleShortVersionString": "0.15.7",
+        }))
+        (installed_app / MAC.EXECUTABLE).write_text("previous native executable fixture\n")
+        marker = self.install_root / MAC.MANIFEST
+        previous = json.loads(marker.read_text())
+        previous.update(supported_game_version="0.15.7", supported_steam_build="25298901")
+        marker.write_text(json.dumps(previous))
+        self.write_save(self.profile / "save.tres", "progress after earlier installation")
+        (self.profile / "run_data.tres").write_text("preserved unfinished mod run")
+        before_profiles = self.snapshot(self.user_data)
+        before_install = self.snapshot(self.install_root)
+        self.install(dry_run=True)
+        self.assertEqual(self.snapshot(self.install_root), before_install)
+        self.assertEqual(self.snapshot(self.user_data), before_profiles)
+        self.install()
+        self.assertEqual((installed_app / "Contents/Info.plist").read_bytes(),
+                         (self.app / "Contents/Info.plist").read_bytes())
+        self.assertEqual((installed_app / MAC.EXECUTABLE).read_bytes(),
+                         (self.app / MAC.EXECUTABLE).read_bytes())
+        current = json.loads(marker.read_text())
+        self.assertEqual(current["supported_game_version"], "0.17.2")
+        self.assertEqual(current["supported_steam_build"], "25727180")
+        self.assertEqual(current["state"], "installed")
+        self.assertEqual(self.snapshot(self.user_data), before_profiles)
 
     def test_signing_preserves_native_entitlements(self):
         self.signer.stop()

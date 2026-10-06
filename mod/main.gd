@@ -1,7 +1,7 @@
 extends Node
 
-const VERSION = "0.10.0"
-const GAME_VERSION = "0.15.7"
+const VERSION = "0.11.0"
+const GAME_VERSION = "0.17.2"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
 const SNAPSHOT_IDLE_HEARTBEAT = 1.0
@@ -622,7 +622,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.10.0 and a new UP10 room code.")
+		_status("Could not join. Everyone needs v0.11.0 and a new UP11 room code.")
 	_render_lobby()
 
 

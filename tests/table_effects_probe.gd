@@ -47,13 +47,13 @@ func _run() -> void:
 	_check(Effects.valid(Effects.empty()), "empty authoritative effect state accepted")
 	_check(not Effects.valid({}), "missing new envelope rejected at effect boundary")
 	var state = Effects.empty()
-	for kind in range(6):
+	for kind in range(7):
 		state.droplets.append(_drop(kind + 1, kind))
 	state.energy.append(_energy(20))
 	state.pockets.append(
 		{"id": 30, "suction_scale": Vector2(4, 4), "suction_color": Color(0, 0, 0, 0.7)}
 	)
-	_check(Effects.valid(state), "all native floor families, energy trail, and wormhole accepted")
+	_check(Effects.valid(state), "all seven native floor families including candy, energy trail, and wormhole accepted")
 	_check(
 		Effects.valid(bytes_to_var(var_to_bytes(state))),
 		"wire roundtrip preserves typed effect state"
@@ -113,8 +113,13 @@ func _check_mutations(state: Dictionary) -> void:
 	bad.energy[0].id = bad.droplets[0].id
 	_check(not Effects.valid(bad), "cross-family identity collision rejected")
 	for mutation in [
-		["kind", 6],
+		["kind", -1],
+		["kind", 7],
 		["kind", 1.0],
+		["kind", 6.0],
+		["texture_index", -1],
+		["texture_index", 7],
+		["texture_index", 6.0],
 		["texture_index", "res://injected.png"],
 		["sprite_rotation", NAN],
 		["scale", Vector2(INF, 1)],

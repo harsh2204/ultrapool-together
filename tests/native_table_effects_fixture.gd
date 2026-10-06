@@ -23,9 +23,14 @@ var _native_visuals: Dictionary = {}
 var _pocket_active: Dictionary = {}
 var _pocket_reset: Dictionary = {}
 var _sampled_pocket_id = 0
+var _candy_id = 0
+var _replacement_candy_id = 0
 
 
 func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> void:
+	_candy_id = 0
+	_replacement_candy_id = 0
+	_native_visuals.clear()
 	_check_template_lifecycle(mod, game, record)
 	var before: Dictionary = mod.table_sync.capture()
 	if not record.call(
@@ -41,7 +46,8 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 	_freeze_ball(donor)
 	var drops: Array = []
 	for method in [
-		"spawn_flower", "spawn_oil", "spawn_thorn", "spawn_launchpad", "spawn_stove", "spawn_flame"
+		"spawn_flower", "spawn_oil", "spawn_thorn", "spawn_launchpad", "spawn_stove", "spawn_flame",
+		"spawn_candy"
 	]:
 		game.call(method)
 		if not record.call(game.droplets.size() == drops.size() + 1, "native effects: " + method):
@@ -64,12 +70,12 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 	record.call(
 		(
 			mod.table_sync.valid_capture(_birth)
-			and _birth.get("effects", {}).get("droplets", []).size() == 6
+			and _birth.get("effects", {}).get("droplets", []).size() == 7
 			and _birth.get("effects", {}).get("energy", []).size() == 1
 		),
-		"native effects: all six native types and energy are captured at birth"
+		"native effects: all seven native types and energy are captured at birth"
 	)
-	if drops.size() != 6:
+	if drops.size() != 7:
 		_cleanup_host(mod, game, drops, donor, energy, flower_stat)
 		return
 	# Step native animation methods deterministically while collision monitoring is
@@ -127,17 +133,17 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 		donor.ball_item.flaming, "native effects: native stove ignites only the temporary donor"
 	)
 	for drop in drops:
-		_native_visuals[drop.get_instance_id()] = {
-			"texture": drop.get_node("MainSprite").texture,
-			"flip": drop.get_node("MainSprite").flip_h,
-			"rotation": drop.get_node("MainSprite").rotation,
-			"color": drop.get_node("MainSprite").self_modulate,
-			"flower": drop.get_node("Flower").visible,
-			"label": drop.get_node("%FlowerLabel").text
-		}
+		_remember_native_drop(drop)
+	_candy_id = drops[6].get_instance_id()
+	record.call(
+		drops[6].droplet_type == drops[6].DROPLET_TYPE.CANDY
+		and drops[6].get_node("MainSprite").texture == drops[6].droplet_sprites[6]
+		and drops[6].get_node("shadow").visible,
+		"native effects: native candy spawn selects the seventh texture and visible shadow"
+	)
 	await capture.call(
 		"12-host-table-effects",
-		"Host · native flowers, oil, thorns, launchpad, stove, flame, energy and WORMHOLE"
+		"Host · native flowers, oil, thorns, launchpad, stove, flame, candy, energy and WORMHOLE"
 	)
 	# Consume effects through their real callbacks instead of manufacturing an
 	# empty descriptor. The persistent stove is removed by native round cleanup API.
@@ -149,6 +155,36 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 	drops[3]._process(1.1)
 	drops[5]._on_area_2d_body_entered(donor)
 	drops[4].remove()
+	# The new floor family is collected only by the real PlayerBall. Exercise its
+	# native callback (including PICK-CANDY and native replacement spawn), rather
+	# than inventing a removal/replacement descriptor in the replication fixture.
+	var candy = drops[6]
+	candy._on_area_2d_body_entered(donor)
+	record.call(
+		game.droplets.has(candy) and not candy.is_queued_for_deletion(),
+		"native effects: object-ball contact cannot consume player-only candy"
+	)
+	var events = mod.get_node("/root/Global").eventManager
+	var event_slot: int = events._q_tail
+	candy._on_area_2d_body_entered(game.player_ball)
+	record.call(
+		candy.is_queued_for_deletion() and not game.droplets.has(candy)
+		and events._q_name[event_slot] == &"PICK-CANDY",
+		"native effects: cue pickup consumes candy and dispatches the native PICK-CANDY event"
+	)
+	var replacement = game.droplets.back() if game.droplets.size() == 1 else null
+	if record.call(
+		is_instance_valid(replacement) and replacement != candy
+		and replacement.droplet_type == replacement.DROPLET_TYPE.CANDY,
+		"native effects: native candy pickup spawns a new authoritative identity"
+	):
+		replacement.set_process(false)
+		replacement.get_node("Area2D").monitoring = false
+		replacement.get_node("Area2D").monitorable = false
+		replacement._process(0.35)
+		_replacement_candy_id = replacement.get_instance_id()
+		drops.append(replacement)
+		_remember_native_drop(replacement)
 	energy.linear_velocity = Vector2.ZERO
 	energy._process(1.1)
 	energy._physics_process(0.02)
@@ -161,7 +197,15 @@ func check_host(mod: Node, game: Node, record: Callable, capture: Callable) -> v
 		),
 		"native effects: expired projectile keeps its native visual tail before destruction"
 	)
+	record.call(
+		_tail.effects.droplets.size() == 1
+		and _tail.effects.droplets[0].id == _replacement_candy_id
+		and _tail.effects.droplets[0].kind == 6,
+		"native effects: production capture replaces the consumed candy identity without overflow"
+	)
 	energy._process(1.1)
+	if is_instance_valid(replacement) and not replacement.is_queued_for_deletion():
+		replacement.remove()
 	area.scale = saved_pocket.scale
 	white.modulate = saved_pocket.color
 	if saved_pocket.closed:
@@ -239,9 +283,16 @@ func check_guest(mod: Node, baseline: Dictionary, record: Callable, capture: Cal
 	_check_invalid(sync, active, view, record)
 	_check_pocket_substate_isolation(sync, game, active, removed, record)
 	var tail = _with_effects(baseline, _tail.effects)
+	var candy_event_cursor: Array = _native_event_cursor(mod)
+	var native_drops: Array = game.droplets.duplicate()
 	record.call(sync.apply_snapshot(tail), "native effects: guest accepts projectile visual tail")
 	await _drain(view, mod, record, "guest tail")
-	_check_view(view, tail.effects, Vector2.ZERO, record, "guest projectile tail", false)
+	_check_view(view, tail.effects, Vector2.ZERO, record, "guest projectile tail and candy replacement", true)
+	record.call(
+		not view.entries.has(_candy_id) and view.entries.has(_replacement_candy_id)
+		and game.droplets == native_drops and _native_event_cursor(mod) == candy_event_cursor,
+		"native effects: guest replaces candy visuals without native pickup or spawn callbacks"
+	)
 	record.call(sync.apply_snapshot(removed), "native effects: guest accepts native consumption")
 	_check_pocket_visual(game.pocket_replicas[_sampled_pocket_id], _pocket_reset, record, "guest reopened")
 	await mod.get_tree().process_frame
@@ -310,6 +361,20 @@ func _check_spectator(
 		),
 		"native effects: spectator leaves native game, camera and physics registration untouched"
 	)
+	var replaced = _with_effects(active, _tail.effects)
+	var candy_event_cursor: Array = _native_event_cursor(mod)
+	var native_drops: Array = original_game.droplets.duplicate()
+	spectator._frames.clear()
+	spectator.apply_snapshot(1, replaced)
+	spectator.tick(0.0)
+	await _drain(spectator._effects_view, mod, record, "spectator candy replacement")
+	_check_view(spectator._effects_view, replaced.effects, replaced.table_position, record, "spectator candy replacement", true)
+	record.call(
+		not spectator._effects_view.entries.has(_candy_id)
+		and spectator._effects_view.entries.has(_replacement_candy_id)
+		and original_game.droplets == native_drops and _native_event_cursor(mod) == candy_event_cursor,
+		"native effects: spectator replaces candy visuals without native pickup or spawn callbacks"
+	)
 	spectator._frames.clear()
 	spectator.apply_snapshot(1, removed)
 	spectator.tick(0.0)
@@ -348,8 +413,11 @@ func _check_invalid(sync: Node, active: Dictionary, view, record: Callable):
 	duplicate.effects.droplets.append(duplicate.effects.droplets[0].duplicate(true))
 	cases.append([duplicate, "duplicate identity"])
 	var unknown = active.duplicate(true)
-	unknown.effects.droplets[0].kind = 99
+	unknown.effects.droplets[0].kind = 7
 	cases.append([unknown, "unknown effect type"])
+	var unknown_texture = active.duplicate(true)
+	unknown_texture.effects.droplets.back().texture_index = 7
+	cases.append([unknown_texture, "texture outside installed candy catalog"])
 	var nonfinite = active.duplicate(true)
 	nonfinite.effects.energy[0].position = Vector2(NAN, 0)
 	cases.append([nonfinite, "nonfinite projectile pose"])
@@ -419,6 +487,11 @@ func _check_view(
 			record.call(
 				sprite.texture == actual.texture,
 				"native effects: " + detail + " preserves native type texture"
+			)
+			record.call(
+				node.get_node("shadow").texture == actual.shadow_texture
+				and node.get_node("shadow").visible == actual.shadow_visible,
+				"native effects: " + detail + " preserves native shadow texture and visibility"
 			)
 			record.call(
 				sprite.flip_h == actual.flip and is_equal_approx(sprite.rotation, actual.rotation),
@@ -512,7 +585,7 @@ func _check_template_lifecycle(mod: Node, game: Node, record: Callable) -> void:
 
 
 func _sample_native_capture(mod: Node, record: Callable) -> void:
-	# Actual installed native 6-droplet + 1-projectile capture and validation.
+	# Actual installed native 7-droplet + 1-projectile capture and validation.
 	# These timings are deliberately separate from the synthetic 128-node replay.
 	var samples: Array = []
 	var valid = true
@@ -527,7 +600,7 @@ func _sample_native_capture(mod: Node, record: Callable) -> void:
 		"NATIVE_EFFECT_METRICS ",
 		JSON.stringify(
 			{
-				"workload": "actual native 6 droplets + 1 energy + 6 pockets",
+				"workload": "actual native 7 droplets + 1 energy + 6 pockets",
 				"frame_cap": Engine.max_fps,
 				"capture_and_validation_ms": _distribution(samples)
 			}
@@ -682,6 +755,26 @@ func _with_effects(baseline: Dictionary, effects: Dictionary) -> Dictionary:
 	var result = baseline.duplicate(true)
 	result["effects"] = effects.duplicate(true)
 	return result
+
+
+func _remember_native_drop(drop: Node) -> void:
+	_native_visuals[drop.get_instance_id()] = {
+		"texture": drop.get_node("MainSprite").texture,
+		"flip": drop.get_node("MainSprite").flip_h,
+		"rotation": drop.get_node("MainSprite").rotation,
+		"color": drop.get_node("MainSprite").self_modulate,
+		"flower": drop.get_node("Flower").visible,
+		"label": drop.get_node("%FlowerLabel").text,
+		"shadow_texture": drop.get_node("shadow").texture,
+		"shadow_visible": drop.get_node("shadow").visible
+	}
+
+
+func _native_event_cursor(mod: Node) -> Array:
+	var events = mod.get_node("/root/Global").eventManager
+	# Guests intentionally discard native gameplay managers. If a manager exists
+	# underneath a watched table, visual replay must not enqueue events on it.
+	return [events.get_instance_id(), events._q_tail] if is_instance_valid(events) else []
 
 
 func _freeze_ball(ball: Node):

@@ -8,6 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $modId = 'UltrapoolTogether'
 $manifestName = 'ultrapool-together-install.json'
+$supportedGameVersion = '0.17.2'
+$supportedSteamBuild = '25727180'
 $runtimeFiles = @('game.exe', 'libgodotsteam.windows.template_release.x86_64.dll', 'steam_api64.dll')
 
 function Find-Ultrapool {
@@ -55,6 +57,76 @@ function Assert-PlainPath([string]$Path) {
             }
         }
         $current = [System.IO.Path]::GetDirectoryName($current)
+    }
+}
+
+function Read-SteamAppMetadata([string]$Text) {
+    # Validate Valve's quoted key/value and nested-object structure. Only root
+    # AppState fields identify this installation; depot metadata is unrelated.
+    $invalid = 'The Ultrapool Steam manifest is missing or has invalid game/build metadata.'
+    $tokens = [regex]::Matches($Text, '"(?:\\.|[^"\\])*"|[{}]|\S+')
+    if ($tokens.Count -lt 3 -or $tokens[0].Value -cne '"AppState"' -or $tokens[1].Value -ne '{') {
+        throw $invalid
+    }
+    $levels = [System.Collections.Generic.List[hashtable]]::new()
+    $levels.Add(@{ expects_value = $false; key = '' })
+    $fields = @{}
+    for ($index = 2; $index -lt $tokens.Count; $index++) {
+        if ($levels.Count -eq 0) { throw $invalid }
+        $level = $levels[$levels.Count - 1]
+        $token = $tokens[$index].Value
+        if ($token -eq '}') {
+            if ($level.expects_value) { throw $invalid }
+            $levels.RemoveAt($levels.Count - 1)
+            if ($levels.Count -gt 0) { $levels[$levels.Count - 1].expects_value = $false }
+        } elseif ($token -eq '{') {
+            if (-not $level.expects_value) { throw $invalid }
+            if ($levels.Count -eq 1 -and $level.key -in @('appid', 'buildid', 'installdir')) { throw $invalid }
+            $levels.Add(@{ expects_value = $false; key = '' })
+        } else {
+            if ($token -notmatch '^"(?:\\.|[^"\\])*"$') { throw $invalid }
+            $value = $token.Substring(1, $token.Length - 2)
+            if ($level.expects_value) {
+                if ($levels.Count -eq 1 -and $level.key -in @('appid', 'buildid', 'installdir')) {
+                    if ($fields.ContainsKey($level.key) -or [string]::IsNullOrWhiteSpace($value)) { throw $invalid }
+                    $fields[$level.key] = $value
+                }
+                $level.expects_value = $false
+            } else {
+                $level.key = $value
+                $level.expects_value = $true
+            }
+        }
+    }
+    if ($levels.Count -ne 0 -or $fields.Count -ne 3) { throw $invalid }
+    return $fields
+}
+
+function Assert-SupportedGame([string]$Root) {
+    # Use Steam build metadata rather than assuming the executable version is
+    # the game release. Validate the source before copying any files.
+    Assert-PlainPath $Root
+    $steamApps = Split-Path -Parent (Split-Path -Parent $Root)
+    if ((Split-Path -Leaf $steamApps) -ine 'steamapps') {
+        throw "Cannot verify the Ultrapool build. Select its Steam library installation: $Root"
+    }
+    $appManifest = Join-Path $steamApps 'appmanifest_4195110.acf'
+    Assert-PlainPath $appManifest
+    if (-not (Test-Path -LiteralPath $appManifest -PathType Leaf)) {
+        throw "Cannot verify the Ultrapool build. Select its Steam library installation: $Root"
+    }
+    $metadata = Read-SteamAppMetadata (Get-Content -LiteralPath $appManifest -Raw)
+    if ($metadata.appid -ne '4195110') { throw 'The Steam manifest does not identify Ultrapool.' }
+    $directory = $metadata.installdir
+    if ($directory -match '[\\/:]' -or $directory -in @('.', '..') -or $directory -match '[. ]$') {
+        throw 'The Ultrapool Steam manifest has an invalid installation directory.'
+    }
+    $expectedRoot = Get-FullDirectory (Join-Path (Join-Path $steamApps 'common') $directory)
+    if (-not $Root.Equals($expectedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The Ultrapool Steam manifest does not identify the selected game directory.'
+    }
+    if ($metadata.buildid -ne $supportedSteamBuild) {
+        throw "This mod supports Ultrapool $supportedGameVersion, Steam build $supportedSteamBuild; install a compatible mod release."
     }
 }
 
@@ -139,6 +211,7 @@ foreach ($name in $runtimeFiles) {
         throw "Missing Ultrapool game file: $(Join-Path $gameRoot $name)"
     }
 }
+Assert-SupportedGame $gameRoot
 
 $sourceRoot = Get-FullDirectory $PSScriptRoot
 $sourceMod = Join-Path $sourceRoot 'mod'
@@ -235,8 +308,8 @@ $manifest = [ordered]@{
     installed_at = [DateTime]::UtcNow.ToString('o')
     state = 'installing'
     source_exe_sha256 = (Get-FileHash -LiteralPath (Join-Path $gameRoot 'game.exe') -Algorithm SHA256).Hash
-    supported_game_version = '0.15.7'
-    supported_steam_build = '25298901'
+    supported_game_version = $supportedGameVersion
+    supported_steam_build = $supportedSteamBuild
     files = $installedFiles
 }
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null

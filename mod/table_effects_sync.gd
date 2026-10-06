@@ -17,7 +17,9 @@ const MAX_TRAILS = 4
 const MAX_TRAIL_POINTS = 32
 const MAX_TRAIL_NODES = 256
 const MAX_BYTES = 96 * 1024
-const KINDS = [0, 1, 2, 3, 4, 5]
+# Installed 0.17.2 Droplet enum: FLOWER, OIL, THORN, LAUNCHPAD, STOVE,
+# FLAME, CANDY. Keep this explicit; received values never select resources.
+const KINDS = [0, 1, 2, 3, 4, 5, 6]
 const REASONS = [
 	"droplet candidates",
 	"droplets",

@@ -6,6 +6,12 @@ Native scope: read-only, in-memory inspection of the installed pack directory (*
 
 Related: [implementation and historical fixture evidence](TABLE_EFFECTS.md), [performance backlog](PERFORMANCE.md), **GAP-007 / issue #48**. The table leader owns gameplay; the room host can be a different peer and relay its messages. “Host” below means the authoritative table leader unless stated otherwise.
 
+## Native 0.17.2 scope
+
+The current compatibility target is mod **0.11.0 / protocol 11 / native 0.17.2**. The **87-row, 90.5% ledger below remains the native 0.15.7 PR #53 baseline**, with its original weights and recorded evidence. It is not a rescored or complete inventory of the newer game. No baseline rewrite is justified by a compatibility version change alone.
+
+Candy is a new seventh floor kind (`6`) with capture, strict validation and shared guest/spectator presentation implemented; native pickup/replacement and callback-isolation fixtures passed on macOS 0.17.2 in `20261006T053409Z-b08bd486` (19,443 checks, 112 screenshots). It remains an **unscored addition** until the 0.17.2 inventory audit defines the expanded ledger. Creative mode is a lifecycle/authority concern: normal multiplayer clears inherited Creative state and replica grant controls are contained, while guest teardown restores the prior local context. Its passing bounded lifecycle checks do not add effect-parity points. See [TABLE_EFFECTS.md](TABLE_EFFECTS.md) for the current implementation and acceptance scope.
+
 ## Current assessment
 
 Scoring/effect bursts still promote whole-table snapshots to reliable delivery on sampled effect births/removals, and active effects keep full snapshots running every 100 ms. R1 removed duplicate guest validation, coalesced disposable snapshots within a receive drain, and retained ball/material identity for score-only updates. The current follow-up adds sampled native drawing and ball art, which increases payloads and presentation work. These are implemented, unmeasured changes; no matched runtime comparison has identified the cause of reported scoring stalls.
@@ -34,7 +40,7 @@ Rules: a gate is static evidence that a redundant-work pattern is gone, never a 
 | --- | --- | --- | --- | --- |
 | Baseline `5520b0a` | 59.2% | 3/15 | 19,708 B / 39,736 B per snapshot | Dictionary keys are ~60% of every snapshot's bytes (PERF-008 compact encoding candidate). |
 | R1–R2 historical | 67.5% | 13/15 | unchanged | Wire format untouched in those rounds. G08 lifecycle separation and G09 fleeting cleanup were open. |
-| R3 current implementation | 90.5% | 14/15 | 31,928 B / 89,852 B | New sampled visual paths; G09 now traces the explicit fleeting inverse. G08 remains open. The final macOS fixture passed; live and expanded Windows acceptance remain open. |
+| R3 / native 0.15.7 baseline | 90.5% | 14/15 | 31,928 B / 89,852 B | New sampled visual paths; G09 now traces the explicit fleeting inverse. G08 remains open. The final macOS fixture passed; live and expanded Windows acceptance remain open. |
 
 The score is **157.5 weighted side-points out of 174**: guest 75 I / 5 G / 3 P / 3 M / 1 ?, spectator 72 I / 5 G / 2 P / 7 M / 1 ?. It is an implementation ledger, not a percentage of native tests passing or complete game parity. There are 125 source corroborations with no mismatch at this revision.
 

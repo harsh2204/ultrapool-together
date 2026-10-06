@@ -35,7 +35,7 @@ class OfflineTransport:
 
 	var people: Array = []
 	var is_host = true
-	var room_code = "UP10-RENDER-FIXTURE"
+	var room_code = "UP11-RENDER-FIXTURE"
 	var sent: Array = []
 
 	func session_open() -> bool:
@@ -253,9 +253,14 @@ func _check_native_play_menu(mod: Node, capture: Callable) -> void:
 		and original_children == original_panels
 		and original_difficulties.size() > 0
 	)
-	for pips in original_pips.values():
-		aligned = aligned and pips.size() == original_difficulties.size()
-	_record(aligned, "native difficulty arrays, panels and every deck's pips remain aligned")
+	for panel in menu.decks_panels:
+		# Native DeckPanel omits difficulty pips for no_crowns decks, including Creative.
+		var expected_pips: int = 0 if panel.deck.no_crowns else original_difficulties.size()
+		aligned = aligned and original_pips[panel.get_instance_id()].size() == expected_pips
+	_record(
+		aligned,
+		"native difficulty arrays and panels align; decks have all pips or none when no_crowns"
+	)
 	for repeat in 2:
 		mod.run_setup.available_choices()
 	var preserved: bool = (
@@ -483,7 +488,7 @@ func capture_lobby_preview(mod: Node, capture: Callable) -> void:
 	await _settle_lobby_preview(mod)
 	await capture.call("lobby-home", "Lobby home with the enlarged logo.")
 	_check_lobby_logo_fit(panel, "home")
-	panel.set_connection("UP10-RENDER-FIXTURE", true, true)
+	panel.set_connection("UP11-RENDER-FIXTURE", true, true)
 	panel.render(_lobby([0, 0, 1, 1, 2, 2, 3, 3], 4), 1, true)
 	await _settle_lobby_preview(mod)
 	await capture.call("lobby-eight-players", "Eight players across four tables with the enlarged logo.")
@@ -543,7 +548,7 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 	coop.players[2].ready = false
 	coop.players[3].ready = false
 	coop.can_start = false
-	panel.set_connection("UP10-RENDER-FIXTURE", true, true)
+	panel.set_connection("UP11-RENDER-FIXTURE", true, true)
 	panel.render(coop, 1, true)
 	await capture.call("lobby-choosing-seats", "Four-player co-op with one player choosing a seat.")
 	var card_style = _first_table_card_style(panel)

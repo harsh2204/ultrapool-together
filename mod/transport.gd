@@ -11,9 +11,9 @@ signal room_ready
 ## newest coalesced sample once per frame without adding a frame of delay (PERF-002).
 signal receive_drained
 
-const PROTOCOL := 10
+const PROTOCOL := 11
 const MAX_PLAYERS := 8
-const GAME_VERSION := "0.15.7"
+const GAME_VERSION := "0.17.2"
 const MOD_ID := "ultrapool-together"
 const MAX_PACKET_BYTES := 262144
 const STEAM_CHANNEL := 47
@@ -146,7 +146,7 @@ func host_steam() -> Error:
 
 func join_steam(code: String) -> Error:
 	var parts := code.strip_edges().split("-")
-	if parts.size() != 2 or parts[0] != "UP10" or not parts[1].is_valid_int():
+	if parts.size() != 2 or parts[0] != "UP11" or not parts[1].is_valid_int():
 		return ERR_INVALID_PARAMETER
 	return _join_lobby(int(parts[1]))
 
@@ -585,7 +585,7 @@ func _on_lobby_created(result: int, lobby_id: int) -> void:
 		if not bool(_steam.call("setLobbyData", _lobby_id, key, metadata[key])):
 			_fail_room("Steam could not prepare the room. Try again.")
 			return
-	room_code = "UP10-%d" % _lobby_id
+	room_code = "UP11-%d" % _lobby_id
 	_update_joinable()
 	status_changed.emit("Invite friends or share your room code.")
 	room_ready.emit()
@@ -619,7 +619,7 @@ func _on_lobby_joined(lobby_id: int, _permissions: int, _locked: bool, response:
 		return
 	_host_id = owner
 	_add_peer(owner)
-	room_code = "UP10-%d" % _lobby_id
+	room_code = "UP11-%d" % _lobby_id
 	status_changed.emit("Connecting to the host...")
 	_send_hello()
 

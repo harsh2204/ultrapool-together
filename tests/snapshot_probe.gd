@@ -636,11 +636,14 @@ func _check_inventory(sync: Node, state: Dictionary) -> void:
 	ball.shielded = true
 	var passive = BallItem.new()
 	passive.data = database.id_to_passive.values()[0]
+	var brain = BallItem.new()
+	brain.data = database.id_to_passive["GUMMY-BRAIN"]
+	brain.set_copy_id("CRISPS")
 	var cube = BallItem.new()
 	cube.data = database.cubes[0]
 	info.build.assign([ball, null, ball.duplicate(true)])
 	info.build.resize(16)
-	info.passives.assign([null, passive, null, null])
+	info.passives.assign([null, passive, brain, null])
 	info.cubes.assign([cube])
 	info.snack_tickets = 3
 	info.cocktail_tickets = 2
@@ -659,6 +662,17 @@ func _check_inventory(sync: Node, state: Dictionary) -> void:
 	var with_inventory = state.duplicate(true)
 	with_inventory.inventory = payload
 	_check(sync._valid_snapshot(with_inventory), "table snapshot includes native inventory")
+	for value in [null, 17, false, "PLAYER", "res://injected.tres", "missing-passive", "A".repeat(129)]:
+		var invalid_copy = with_inventory.duplicate(true)
+		invalid_copy.inventory.passives[2].copy_id = value
+		_check(not sync._valid_snapshot(invalid_copy), "invalid copied passive identity rejected: " + str(value))
+	var invalid_copy = with_inventory.duplicate(true)
+	invalid_copy.inventory.build[0]["copy_id"] = "CRISPS"
+	_check(not sync._valid_snapshot(invalid_copy), "copied passive identity rejected on a ball inventory item")
+	invalid_copy = with_inventory.duplicate(true)
+	invalid_copy.inventory.passives[1].data = "CRISPS"
+	invalid_copy.inventory.passives[1]["copy_id"] = "CRISPS"
+	_check(not sync._valid_snapshot(invalid_copy), "copied identity rejected on a passive without native copy behavior")
 	for field in ["build", "passives", "cubes"]:
 		var invalid = with_inventory.duplicate(true)
 		invalid.inventory[field].resize(129)
