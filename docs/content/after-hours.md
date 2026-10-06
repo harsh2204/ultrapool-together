@@ -1,6 +1,6 @@
 # After the final shot
 
-**Coming in a future update.** This ending screen is not in the latest download.
+**New in v0.12.0:** compare final builds and talk through each table’s rack before moving on.
 
 ## Look back at your build
 

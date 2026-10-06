@@ -1,10 +1,8 @@
 # Versions and troubleshooting
 
-Before playing, check that everyone has the **same Together release** and the Ultrapool version listed in its release notes.
+**Together v0.12.0 requires Ultrapool 0.17.2.** Everyone in the room needs v0.12.0 and a new **UP12** room code. Older Together versions cannot join these rooms.
 
-[Check the releases](https://github.com/harsh2204/ultrapool-together/releases)
-
-**Some features in this guide are not in the latest download yet.** The release notes tell you what your version includes.
+[Download v0.12.0 and read its release notes](https://github.com/harsh2204/ultrapool-together/releases/tag/v0.12.0).
 
 ## We can’t join the same room
 

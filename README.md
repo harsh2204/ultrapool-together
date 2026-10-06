@@ -4,13 +4,11 @@ Play Ultrapool with **2–8 players through Steam**. Share one table in co-op, r
 
 **[Get started](https://harsh2204.github.io/ultrapool-together/get-started.html)** · **[Player guide](https://harsh2204.github.io/ultrapool-together/)** · **[Screenshots](https://harsh2204.github.io/ultrapool-together/gallery.html)**
 
-Together is an unofficial mod and is still in development. Every player needs their own Steam copy of Ultrapool and the same compatible version of the mod.
-
-Some features described here are not in the latest download yet. Check the supported Ultrapool version on the [download page](https://github.com/harsh2204/ultrapool-together/releases) before installing.
+**Together v0.12.0 requires Ultrapool 0.17.2.** Every player needs their own Steam copy of Ultrapool and the same Together release. Together is an unofficial mod and is still in development.
 
 ## Install
 
-1. [Download](https://github.com/harsh2204/ultrapool-together/releases) and extract the matching `UltrapoolTogether` ZIP.
+1. [Download v0.12.0](https://github.com/harsh2204/ultrapool-together/releases/tag/v0.12.0) and extract the `UltrapoolTogether` ZIP.
 2. Close Ultrapool.
 3. On **Windows**, run `Install.cmd`. On **macOS**, install [Python 3.9 or newer](https://www.python.org/downloads/macos/) if needed, then run `Install.command`.
 4. Open `UltrapoolTogether/Launch.cmd` on Windows or `UltrapoolTogether/Launch.command` on macOS, inside the game's installation folder.
@@ -29,7 +27,7 @@ To update, close the game and rerun the installer from the new download. Reinsta
 4. Choose the number of tables. Vote for a starting set, difficulty, and match mode.
 5. Join a table and select **Ready up**. The host selects **Start match** when everyone is ready.
 
-Changing seats, settings, or votes clears readiness. New players can join between matches.
+Changing seats, settings, or votes clears readiness. New players can join between matches. Everyone needs **v0.12.0** and a new **UP12** room code; older versions cannot join.
 
 ## Ways to play
 
@@ -44,6 +42,10 @@ Each table has its own board, shop, and run. Teams can have different numbers of
 Between rounds, teammates share money and items. Everyone can shop and arrange the inventory, then everyone selects **Ready** to continue. You can browse a different counter from your teammates. To follow the table host's counter automatically, turn on **Follow host shop view** in Mod settings.
 
 Press **F8 → Watch** to spectate another table. You can return to your own at any time.
+
+## After the final shot
+
+Browse each table's final rack before moving on. See its balls, reserve, snacks, and saved ball values, then drag or swap balls to discuss the build together. Everyone viewing that rack sees the changes. **Reset arrangement** restores the recorded layout; scores and saved builds stay unchanged. [After-hours guide](docs/content/after-hours.md).
 
 ## Optional upgrades
 
@@ -73,7 +75,7 @@ To uninstall on Windows, right-click `Uninstall.ps1` in the installed mod folder
 
 ## Contributing
 
-Current source: **v0.12.0**, protocol **12 / UP12**, targeting **Ultrapool 0.17.2** (Steam build **25727180**). Published packages may be older.
+Version **v0.12.0** uses protocol **12 / UP12** and targets **Ultrapool 0.17.2** (Steam build **25727180**).
 
 Start with the [development guide](.agents/skills/ultrapool-development/SKILL.md) and [agent rules](AGENTS.md). See [tests and coverage](tests/README.md), the [performance tracker](docs/PERFORMANCE.md), and [native compatibility](docs/NATIVE_COMPATIBILITY.md) for technical details and open work.
 
