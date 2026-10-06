@@ -27,7 +27,7 @@ SPEC.loader.exec_module(MAC)
 FIXTURES = (
     "mod/main.gd", "tests/render_bootstrap.gd", "tests/render_talo.gd",
     "tests/render_settings.gd", "tests/render_ui_fixtures.gd", "tests/spectator_fixtures.gd",
-    "tests/round_flow_fixtures.gd", "tests/shop_input_fixture.gd", "tests/native_aim_fixture.gd", "tests/render_probe.gd",
+    "tests/round_flow_fixtures.gd", "tests/shop_input_fixture.gd", "tests/native_aim_fixture.gd", "tests/native_version_fixture.gd", "tests/native_snack_fixture.gd", "tests/render_probe.gd",
     "tests/render_gallery.html", "tests/team_vote_probe.gd", "tests/lobby_probe.gd",
     "tests/presence_probe.gd", "tests/router_probe.gd", "tests/controller_probe.gd",
     "tests/shop_layout_probe.gd", "tests/snapshot_probe.gd", "tests/transport_budget_probe.gd",

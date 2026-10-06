@@ -9,6 +9,7 @@ var _last_layout_build_size := -1
 
 
 func _ready() -> void:
+	_disable_creative_controls()
 	Global.shopManager = self
 	player_info = Global.gameManager.get_node("PlayerInfo")
 	inventory.setup()
@@ -26,6 +27,28 @@ func _ready() -> void:
 	girl.react_none()
 	hide()
 	process_mode = Node.PROCESS_MODE_DISABLED
+
+
+## Native 0.17.2 leaves CreativeBallsButton visible in the packed scene and hides
+## it in open_shop(). Replicas bypass that gameplay method, so contain these
+## direct inventory grants at construction instead of exposing them to guests.
+func _disable_creative_controls() -> void:
+	for button in [
+		get_node_or_null("%CreativeBallsButton"),
+		tapas_bar.get_node_or_null("%CreativePassivesButton")
+	]:
+		if button == null:
+			continue
+		button.hide()
+		button.set_disabled(true)
+		for connection in button.pressed.get_connections():
+			button.pressed.disconnect(connection.callable)
+
+
+func _on_creative_balls_button_pressed() -> void:
+	# Also contain direct calls to the inherited normal-shop callback. This script
+	# is installed only on replica shops; native solo Creative remains available.
+	pass
 
 
 func _process(delta: float) -> void:

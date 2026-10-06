@@ -2,7 +2,7 @@
 
 Steam multiplayer for **2–8 players**. Share a table in co-op, race other tables to the end of a run, or compete on score. Each table has its own board, shop, and run.
 
-**Source version: v0.10.0** · Requires **Ultrapool 0.15.7**, Steam build **25298901**, on Windows or macOS. [Released builds](https://github.com/harsh2204/ultrapool-together/releases) may be older than this branch.
+**Source version: v0.11.0** · Requires **Ultrapool 0.17.2**, Steam build **25727180**, on Windows or macOS. [Released builds](https://github.com/harsh2204/ultrapool-together/releases) may be older than this branch.
 
 ## Install
 
@@ -35,7 +35,7 @@ To copy newer Steam progress after installation, close the normal game, then ope
 4. The host chooses the number of tables. Vote for a **Starting set** using the shop's set cards and choose **Difficulty** from the buttons beside them. Player initials show live votes; hover for full names. A chalk check marks your vote, and a gold gem marks the current result. With multiple tables, everyone can also vote for **Race** or **Score PvP**.
 5. Join a table and select **Ready up**. The host selects **Start match** once everyone is ready and every table has a player.
 
-Everyone must use v0.10.0 and a **UP10** room code (protocol 10). Older versions cannot join these rooms. Changing seats, settings, or a vote clears readiness. Each connected player has one vote per choice; **No preference** abstains. The most votes wins, with ties resolved in the displayed option order. Without votes, the host's initial native selection applies. Choices use the host's unlocked standard sets and difficulties; every table receives the same frozen result and seed.
+Everyone must use v0.11.0 and a **UP11** room code (protocol 11). Older versions cannot join these rooms. See the [native compatibility notes](docs/NATIVE_COMPATIBILITY.md) for this upgrade. Changing seats, settings, or a vote clears readiness. Each connected player has one vote per choice; **No preference** abstains. The most votes wins, with ties resolved in the displayed option order. Without votes, the host's initial native selection applies. Choices use the host's unlocked standard sets and difficulties; every table receives the same frozen result and seed.
 
 ## Match rules
 
@@ -43,8 +43,8 @@ Everyone must use v0.10.0 and a **UP10** room code (protocol 10). Older versions
 - **Race:** the first table to successfully finish the full run wins. Tables share a seed, deck, and difficulty; there is no shot cap. Other tables can keep playing for their finishing place. The room host records finish order as results arrive, and elapsed time includes loading, shops, and pauses.
 - **Score PvP:** independent runs with an equal shot budget per table—six by default, configurable from 1 to 20. The highest score from completed shots wins; a run ending early also ends that table's match. Uneven groups such as 2v1 and 1v1v1v2 work in either mode.
 - Teammates take turns in seat order using the normal mouse or controller controls. **Pass** hands over the turn without spending a shot.
-- Guests and spectators mirror native floor flowers, oil, fire, stoves, thorns and launchpads, plus wormhole visuals, energy projectiles and transient effects such as wisps, explosions and lightning. Use v0.10.0 on the host and clients. See the [effect coverage and verification record](docs/TABLE_EFFECTS.md).
-- Everyone at a table can shop and arrange items with the game's native ball and snack dragging. Each connected teammate must select **Ready** before leaving the shop. Purchases, rearrangements, and membership changes clear shop readiness. Teammate cursors and aiming are visible on that table.
+- Guests and spectators mirror native floor flowers, oil, fire, stoves, thorns, launchpads and candy, plus wormhole visuals, energy projectiles and transient effects such as wisps, explosions and lightning. Use v0.11.0 on the host and clients. See the [effect coverage and verification record](docs/TABLE_EFFECTS.md).
+- Everyone at a table can shop and arrange items with the game's native ball and snack dragging. Bought snacks and their counters are also shown beside the table on guests and spectators. Each connected teammate must select **Ready** before leaving the shop. Purchases, rearrangements, and membership changes clear shop readiness. Teammate cursors and aiming are visible on that table.
 - Choose your own shop, snack-bar or mixer view by default. To follow the host's view automatically, open the **Mod settings** gear beside **Lobby · F8** and enable **Follow host shop view**. This personal choice persists; shared shopping remains available with it off.
 - Each player sees the game's native round payout and selects **Continue** before shopping. Clients use the native shop, inventory, settings, and run results. Simple purchases, moves, sales, and Ready respond locally while the table host confirms them; rejected actions restore the shared state.
 - Press **F8** for standings and **Watch** to spectate another table. Switch tables in the spectator view or return to your own table; your run remains loaded. A table in its shop shows its last board with a shopping status.
@@ -70,7 +70,7 @@ The personal finish picker remains available in **Mod settings → Your starting
 
 This source build is experimental; live Steam sessions, latency, and concurrent remote shopping still need playtesting.
 
-- Standard runs only; daily challenges are unsupported.
+- Standard runs only; daily challenges and Creative mode are unsupported.
 - Start a new run when upgrading from a version with custom multiplayer balls. Those unfinished runs are unsupported; their save files are preserved.
 - New players join between matches. A table host disconnecting ends that table; the room host leaving closes the lobby. Host migration is unsupported.
 - Effect replication has explicit capacity limits and reports overflow while ordinary table updates continue. Native visual assets are mirrored; particle randomness and every native sound are not synchronized exactly. See the [client/spectator effect record](docs/TABLE_EFFECTS.md). Local ball simulation uses corrections from the table host.

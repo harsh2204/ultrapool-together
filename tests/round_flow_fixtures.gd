@@ -26,7 +26,7 @@ class Wire:
 	extends Node
 	var is_host = true
 	var id = 1
-	var room_code = "UP10-ROUND-FLOW"
+	var room_code = "UP11-ROUND-FLOW"
 	var packets: Array = []
 
 	func local_id() -> int:
@@ -65,6 +65,7 @@ var payout: Dictionary = {}
 var endings: Dictionary = {}
 var run_config: Dictionary = {}
 var ready_request: Dictionary = {}
+var snack_fixture: RefCounted
 var _mod: Node
 var _wire: Wire
 
@@ -268,6 +269,8 @@ func record_host(mod: Node, capture: Callable):
 	)
 	_phase("next")
 	await capture.call("62-host-next-round", "Host · next round after both teammates ready")
+	if snack_fixture != null:
+		await snack_fixture.record_host_round(mod, _check, capture)
 	await _record_endings(capture)
 	_restore(saved)
 
@@ -440,6 +443,8 @@ func replay_guest(mod: Node, capture: Callable) -> Array[Dictionary]:
 	await capture.call(
 		"66-guest-next-round", "Guest · next round remains playable after delayed old shop messages"
 	)
+	if snack_fixture != null:
+		await snack_fixture.check_routed_guest_round(mod, _check, capture)
 	var ui = mod.get_node("/root/UIManager")
 	ui.open_settings()
 	await _delay(0.3)

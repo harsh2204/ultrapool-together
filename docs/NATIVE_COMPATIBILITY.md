@@ -1,0 +1,29 @@
+# Native game compatibility
+
+The current source targets **Ultrapool 0.17.2**, Steam build **25727180**, with Together **0.11.0 / protocol 11**. Every participant needs this version and a new **UP11** room code. The installers reject unsupported native versions before replacing the mod runtime; Steam itself remains untouched.
+
+## Changes from 0.15.7
+
+- Candy is the seventh native floor effect. The table leader owns pickup, its native event and replacement spawn; guests and spectators render the captured native texture, shadow and identity changes. Descriptor and queue limits remain unchanged. Protocol 11 prevents clients with the six-kind validator from joining.
+- Gummy Brain carries its native copied-snack identity through inventory snapshots. Only that snack can carry a bounded known passive ID, and an absent or empty value clears stale guest state when the host returns to the shop.
+- Bought snacks now have a shared native-art table display for guests and spectators. It reads the existing validated inventory, retains up to four slot visuals, and updates native textures, rarity plates and counters without invoking native setup, achievements or gameplay registration. Dedicated purchase/round/counter checks pass in the shared fixture gallery.
+- The scriptless spectator scene reader ignores obsolete inherited node overrides in the new rotated table. Valid overrides still apply; missing tutorial parents cannot trigger a native `add_child` crash.
+- Normal multiplayer startup clears the new Creative flag and forced selections. Guest entry saves and clears the local Creative context, then restores it on exit. Replica shops hide and disable Creative inventory-grant controls. Native solo Creative mode remains available; Creative multiplayer is unsupported.
+- Native aiming, hit prediction and physics interfaces are unchanged. Existing client native aim rendering is retained. Native 0.17.2 fixes the deathline node reference; the mod fallback only applies when the reference is missing.
+- The native save-recovery file `save_overwritten.tres` is preserved by updates and explicit progress imports, including rollback. Existing unfinished mod runs remain unsupported across upgrades; start a new run. Native 0.17.2 renames Halo-Halo's resource and reuses its old UID for Halloween Munch, so an older saved daily/run graph can resolve the old snack incorrectly. Together does not rewrite those native files or support continuing old daily runs. The manual importer retains the local daily state while copying progression; a legacy-reference fixture checks that boundary.
+
+## Verification
+
+Static native-pack comparison, strict protocol-boundary fixtures, isolated installer preservation tests and the shared native rendering fixtures cover this port. The macOS capture `20261006T053409Z-b08bd486` passed **19,443/19,443 checks** and produced **112 screenshots** on the new native build. It used one muted isolated process, the compatibility renderer at 1280×720, a 30 FPS cap and a 300-second watchdog, and exited normally in about 147 seconds. There were no script errors; normal saves and game files were unchanged, and the private runtime was removed. Native candy, Gummy Brain copy/count/clear, Creative containment/restore, menu alignment, native aim, and legacy progress-import boundaries passed. Representative table/aim/shop screenshots were reviewed.
+
+A real macOS update from the previous native runtime also completed: installed mod files match the passing candidate, the native pack matches Steam, the copied app signature verifies, and vanilla files plus both progression profiles were unchanged.
+
+The final snack/display capture `20261006T074652Z-6d474540` passed **19,775/19,775 checks**, including **329 snack assertions**, and produced **121 screenshots** in about 151 seconds under the same isolation and rendering settings. The actual bought Black Olive appears in host and guest shops, next-round guest tables, a second fresh guest receiving routed phase messages, and the spectator. Native Crisps and copied Gummy Brain counters visibly update **17 → 25**. Four-slot bounds, retained identities, removal/reset, table switching, rotated scene reconstruction and unchanged gameplay/achievement state pass. The client native aim/contact/deflection screenshot and all snack proof images were visually reviewed. These are serial native fixture roles, not live multi-machine sessions. The final run exited 0 with no script errors and preserved normal saves/game files.
+
+The preceding snack candidate exposed a scene-path lookup mismatch and an obsolete inherited tutorial override that crashed rotated spectator construction. Both production defects were fixed; the full rerun retains assertions for those paths.
+
+All 126 GDScripts parse. Fourteen macOS installer tests (including real signing of an inert fixture), nine mocked capture tests and eleven benchmark self-tests pass. Windows manifest rejection/update fixtures are authored and statically reviewed; PowerShell and Windows native execution remain unverified here. This is separate from live Steam and Windows/macOS multiplayer acceptance. Existing engine shutdown diagnostics remain: 63 CanvasItems, nine materials, one shader, six textures and 18 resources. No performance improvement or long-session stability claim is made.
+
+The new sparse Gummy Brain field adds a modeled 24 bytes for an explicit clear or 32 bytes for a `CRISPS` copy. It appears only on that passive; packet limits are unchanged. These are synthetic serialized-size estimates, not measured traffic or latency.
+
+The 87-row **90.5%** effect ledger remains the sampled **0.15.7 baseline**. Candy is a new unscored family until the expanded native inventory is audited; the baseline is not a percentage claim for all new 0.17.2 content. See [table effect coverage](TABLE_EFFECTS.md).

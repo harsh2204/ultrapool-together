@@ -20,8 +20,8 @@ MANIFEST = "ultrapool-together-install.json"
 IMPORT_MARKER = "ultrapool-together-progress-import.json"
 APP_NAME = "Ultrapool.app"
 EXECUTABLE = "Contents/MacOS/Ultrapool"
-GAME_VERSION = "0.15.7"
-STEAM_BUILD = "25298901"
+GAME_VERSION = "0.17.2"
+STEAM_BUILD = "25727180"
 
 
 def full_path(value):

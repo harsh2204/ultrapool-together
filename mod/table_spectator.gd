@@ -13,6 +13,7 @@ const BallVisualState = preload("ball_visual_state.gd")
 const NativeDrawView = preload("table_native_draw_view.gd")
 const TableEffectsView = preload("table_effects_view.gd")
 const TableVisualFxView = preload("table_visual_fx_view.gd")
+const TablePassivesView = preload("table_passives_view.gd")
 const AbilityOverlay = preload("ability_overlay.gd")
 const BountyRace = preload("bounty_race.gd")
 
@@ -46,6 +47,7 @@ var _last_received = 0.0
 var _effects_view = TableEffectsView.new()
 var _visual_fx_view = TableVisualFxView.new()
 var _native_draw_view = NativeDrawView.new()
+var _passives_view = TablePassivesView.new()
 var _effects_frame: Dictionary = {}
 ## PERF-022: table HUD nodes resolved once per board, and the last display inputs.
 var _ui_nodes: Dictionary = {}
@@ -156,6 +158,7 @@ func tick(_delta: float) -> void:
 		_effects_view.apply(after.data.get("effects", {}), after.data.table_position, _scene_key)
 		_visual_fx_view.apply(after.data.get("visual_fx", {}), after.data.table_position, _scene_key)
 		_native_draw_view.apply(after.data.get("native_draw", {}), after.data.table_position, _scene_key)
+		_passives_view.apply(after.data.inventory)
 		_update_pockets(after.data)
 		_update_table_ui(after.data)
 		_layout()
@@ -294,7 +297,8 @@ func _pick_table(index: int) -> void:
 func _create_table(data: Dictionary) -> void:
 	var game_scene: PackedScene = get_node("/root/Global").SCENE_GAME
 	var property = "table_rotated_scene" if data.rotated else "table_scene"
-	_table = _scene_reader.create(_scene_reader.exported(game_scene, property))
+	var native_table_scene: PackedScene = _scene_reader.exported(game_scene, property)
+	_table = _scene_reader.create(native_table_scene)
 	_world.add_child(_table)
 	_table.position = Vector2.ZERO
 	_ui_nodes = {
@@ -315,6 +319,7 @@ func _create_table(data: Dictionary) -> void:
 	_effects_view.setup(_world, game_scene)
 	_visual_fx_view.setup(_world, game_scene)
 	_native_draw_view.setup(_world, game_scene)
+	_passives_view.setup(_table, get_node("/root/BallDatabase"), native_table_scene)
 	BallVisualState.prepare()
 	var points: Array[Vector2] = []
 	for pocket in data.pockets:
@@ -622,9 +627,13 @@ func _draw_abilities(canvas: CanvasItem) -> void:
 func _layout() -> void:
 	_layout_size = _root.size
 	var area = Rect2(Vector2(24, 64), _root.size - Vector2(48, 120))
-	var factor = minf(area.size.x / _bounds.size.x, area.size.y / _bounds.size.y)
+	var bounds = _bounds
+	var snacks = _passives_view.get_bounds()
+	if snacks.has_area():
+		bounds = bounds.merge(snacks)
+	var factor = minf(area.size.x / bounds.size.x, area.size.y / bounds.size.y)
 	_world.scale = Vector2.ONE * factor
-	_world.position = area.get_center() - _bounds.get_center() * factor
+	_world.position = area.get_center() - bounds.get_center() * factor
 
 
 ## Lobby-summary delivery can finalize a Bounty while this table is already
@@ -658,6 +667,7 @@ func _clear_board() -> void:
 	_effects_view.dispose()
 	_visual_fx_view.clear()
 	_native_draw_view.dispose()
+	_passives_view.dispose()
 	for child in _world.get_children():
 		child.free()
 	_table = null
@@ -680,6 +690,7 @@ func _exit_tree() -> void:
 	_effects_view.dispose()
 	_visual_fx_view.clear()
 	_native_draw_view.dispose()
+	_passives_view.dispose()
 
 
 func _hide_named(root: Node, node_name: String) -> void:

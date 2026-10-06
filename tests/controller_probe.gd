@@ -6,7 +6,7 @@ class TransportStub:
 	var is_host = false
 	var id = 20
 	var coordinator = 10
-	var room_code = "UP10-test"
+	var room_code = "UP11-test"
 	var sent: Array = []
 	var on_send: Callable
 

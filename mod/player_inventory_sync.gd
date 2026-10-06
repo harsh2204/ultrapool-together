@@ -33,6 +33,10 @@ static func capture(info: Node) -> Dictionary:
 				entry[key] = item.get(key)
 			for key in FLAGS:
 				entry[key] = item.get(key)
+			if group == "passives" and entry.data == "GUMMY-BRAIN":
+				# Native round setup copies the first passive; go_shop clears it.
+				# Preserve the authoritative identity, including the explicit clear.
+				entry["copy_id"] = item.copy_id
 			slots.append(entry)
 		result[group] = slots
 	return result
@@ -57,7 +61,7 @@ static func valid(data, database: Node) -> bool:
 		for item in data[group]:
 			if item == null:
 				continue
-			if not item is Dictionary or not _valid_item(item, resources):
+			if not item is Dictionary or not _valid_item(item, resources, group == "passives"):
 				return false
 			if group == "cubes" and not _is_negative_cube(resources[item.data]):
 				return false
@@ -88,11 +92,17 @@ static func apply(info: Node, data: Dictionary, database: Node) -> void:
 				item.set(key, entry[key])
 			for key in FLAGS:
 				item.set(key, entry[key])
+			if group == "passives" and entry.data == "GUMMY-BRAIN":
+				# PlayerInfo.passives is a plain field; expose complete items without
+				# rerunning native round setup against a stale guest first slot.
+				item.copy_id = entry.get("copy_id", "")
 			slots.append(item)
 		info.set(group, slots)
 
 
-static func _valid_item(item: Dictionary, resources: Dictionary) -> bool:
+static func _valid_item(
+	item: Dictionary, resources: Dictionary, passive_slot: bool = false
+) -> bool:
 	if (
 		not item.get("data") is String
 		or not resources.has(item.data)
@@ -100,6 +110,13 @@ static func _valid_item(item: Dictionary, resources: Dictionary) -> bool:
 		or (item.mixed != "" and not resources.has(item.mixed))
 	):
 		return false
+	if item.has("copy_id"):
+		if (
+			not passive_slot or item.data != "GUMMY-BRAIN"
+			or not item.copy_id is String or item.copy_id.length() > 128
+			or (item.copy_id != "" and not resources.has(item.copy_id))
+		):
+			return false
 	for key in NUMBERS:
 		if not item.get(key) is int or item[key] < NUMBERS[key][0] or item[key] > NUMBERS[key][1]:
 			return false

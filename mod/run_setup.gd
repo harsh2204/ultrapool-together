@@ -113,6 +113,11 @@ func start(config: Dictionary, catalog: Node = null) -> Error:
 	var global_node = get_node("/root/Global")
 	var database = get_node("/root/BallDatabase")
 	DifficultyCatalog.register(database)
+	# Native 0.17.2 normally clears Creative mode in DecksMenu. Multiplayer starts
+	# from its own validated normal-run config, bypassing that native callback.
+	global_node.set_creative(false)
+	global_node.force_selected_item = null
+	global_node.force_selected_object = null
 	global_node.chosen_run_state = null
 	global_node.chosen_deck = database.id_to_deck[config.deck]
 	_original_deck = null
