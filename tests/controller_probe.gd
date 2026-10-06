@@ -71,6 +71,11 @@ class AdapterStub:
 	func can_shoot() -> bool:
 		return ready_to_shoot
 
+	func aim_context() -> Array:
+		if not ready_to_shoot or not state.get("can_shoot", false):
+			return []
+		return [state.get("rounds_played", 0), state.get("round", 0)]
+
 	func shoot(vector: Vector2, accepted: Callable = Callable()) -> bool:
 		if not ready_to_shoot:
 			return false
@@ -97,6 +102,9 @@ class TableStub:
 	extends Node
 	var ended = 0
 	var active_effects = false
+	var spawn_blocked = false
+	var input_ready = false
+	var readiness_states: Array = []
 	var validations = 0
 	var shots: Array[Vector2] = []
 	var captured: Dictionary = {"available": false}
@@ -131,7 +139,11 @@ class TableStub:
 		return result
 
 	func spawn_barrier_active() -> bool:
-		return false
+		return spawn_blocked
+
+	func ready_for_state(state: Dictionary) -> bool:
+		readiness_states.append(state.duplicate(true))
+		return input_ready
 
 	func effects_active() -> bool:
 		return active_effects
@@ -177,6 +189,7 @@ class ShopStub:
 	extends Node
 	var ended = 0
 	var captures = 0
+	var validations = 0
 	var state = {"open": false, "revision": 1}
 
 	func capture() -> Dictionary:
@@ -201,7 +214,16 @@ class ShopStub:
 	func end_session():
 		ended += 1
 
+	func valid_state(data: Dictionary) -> bool:
+		validations += 1
+		return data.get("open") is bool and data.get("revision") is int and data.revision >= 0
+
 	func apply_state(data: Dictionary) -> bool:
+		if not valid_state(data):
+			return false
+		return apply_validated_state(data)
+
+	func apply_validated_state(data: Dictionary) -> bool:
 		state = data.duplicate(true)
 		return true
 
@@ -280,6 +302,7 @@ class RunStub:
 	var validations = 0
 	var starts = 0
 	var cancelled = 0
+	var input_ready = true
 
 	func at_main_menu() -> bool:
 		return false
@@ -289,7 +312,7 @@ class RunStub:
 		return true
 
 	func ready_for_input() -> bool:
-		return true
+		return input_ready
 
 	func start(_config: Dictionary) -> Error:
 		starts += 1
@@ -336,6 +359,9 @@ func _initialize() -> void:
 	_cue_shop_run_setting()
 	_topology_keyframes()
 	_first_shot_phase_order()
+	_phase_publish_retry()
+	_aim_context_readiness()
+	_bundled_shop_prevalidation()
 	_snapshot_slot_and_single_validation()
 	_watcher_forwarding_is_gated()
 	_race_and_score_limits()
@@ -628,6 +654,11 @@ func _run_closes_during_shot():
 func _targeted_shop_sync():
 	var controller = _controller()
 	controller.active = true
+	controller.adapter.state.merge({"available": true, "in_shop": true, "round": 1, "rounds_played": 1}, true)
+	controller.table_sync.captured = {
+		"available": true, "scene_id": 301, "round": 0, "rounds_played": 1,
+		"rotated": false, "results": {"phase": "shop"}, "balls": [], "pockets": []
+	}
 	controller.shop_sync.state = {"open": true, "revision": 2}
 	controller.last_shop_state = {"open": true, "revision": 1}
 	controller._publish_state(30)
@@ -672,6 +703,11 @@ func _shop_capture_reuse_after_send():
 	# capture reuse in the normal path, but never publish stale shop consent.
 	var controller = _controller()
 	controller.active = true
+	controller.adapter.state.merge({"available": true, "in_shop": true, "round": 1, "rounds_played": 1}, true)
+	controller.table_sync.captured = {
+		"available": true, "scene_id": 301, "round": 0, "rounds_played": 1,
+		"rotated": false, "results": {"phase": "shop"}, "balls": [], "pockets": []
+	}
 	controller.lobby.revision = 7
 	var captured = {
 		"open": true,
@@ -744,6 +780,15 @@ func _rejected_shots_preserve_turn_state():
 		"invalid baseline preserves the turn and publishes no invalid shot-start"
 	)
 	controller.table_sync.captured = {"available": false}
+	controller.table_sync.spawn_blocked = true
+	_check(not controller._take_shot(20, Vector2(100, 0), 0), "initializing native body blocks even a schema-valid shot baseline")
+	_check(not controller._pass(20, 0) and controller.turn_owner == 20 and controller.shot_number == 0, "delayed pass intent cannot advance ownership while a native body initializes")
+	_check(controller.adapter.accepted_shots == 0 and controller.transport.sent.is_empty() and controller.used_shots == 0, "spawn barrier rejection cannot spend a shot or publish an incomplete rack")
+	controller.table_sync.spawn_blocked = false
+	controller.run_setup.input_ready = false
+	_check(not controller._pass(20, 0) and not controller._take_shot(20, Vector2(100, 0), 0), "pass and shot intents wait for run setup completion")
+	_check(controller.turn_owner == 20 and controller.shot_number == 0, "setup rejection preserves the authoritative turn")
+	controller.run_setup.input_ready = true
 	_check(not controller._take_shot(30, Vector2(100, 0), 0), "nonowner shot is rejected")
 	_check(not controller._take_shot(20, Vector2(100, 0), 1), "future turn is rejected")
 	_check(not controller._take_shot(20, Vector2(20, 0), 0), "weak shot is rejected")
@@ -1036,6 +1081,151 @@ func _first_shot_phase_order():
 	_check(guest.table_sync.shots.size() == 1, "a repeated first-shot packet cannot launch twice")
 	guest.free()
 	host.free()
+
+
+func _phase_publish_retry():
+	var host = _controller()
+	host.active = true
+	host.adapter.state.merge({
+		"available": true, "table_active": true, "can_shoot": true,
+		"round": 1, "rounds_played": 1
+	}, true)
+	host.table_sync.captured = {
+		"available": true, "scene_id": 401, "round": 0, "rounds_played": 1,
+		"rotated": false, "results": {"phase": "play"}, "balls": [], "pockets": []
+	}
+	host.table_sync.spawn_blocked = true
+	host.shop_sync.state = {"open": true, "revision": 2, "scene": 402}
+	host._publish_state()
+	_check(host._last_phase.is_empty() and host.snapshot_id == 0, "a held phase retains its reliable baseline debt")
+	_check(host.last_shop_state.is_empty(), "held shop phase does not consume standalone shop publication")
+	_check(not host.latest_state.can_shoot, "a held native rack publishes no shot readiness")
+	host._spawn_barrier_since_msec = Time.get_ticks_msec() - host.SPAWN_BARRIER_WARNING_MSEC
+	host._publish_state()
+	_check(host._spawn_barrier_warned and host.snapshot_id == 0, "an expired spawn diagnostic never permits an incomplete snapshot")
+	host._publish_state(30)
+	_check(host._last_phase.is_empty() and host.snapshot_id == 0, "targeted resync also waits for every native body")
+	var sent_early_shop = false
+	for frame in host.transport.sent:
+		sent_early_shop = sent_early_shop or frame.message.get("payload", {}).get("kind") == "shop_state"
+	_check(not sent_early_shop and host.last_shop_state.is_empty(), "neither broadcast nor targeted open shop can appear over an incomplete phase")
+	host.table_sync.spawn_blocked = false
+	host._publish_state(30)
+	_check(host._last_phase.is_empty() and host._spawn_barrier_held, "successful targeted recovery preserves the broadcast phase debt")
+	host.transport.sent.clear()
+	host._publish_state()
+	var recovered: Dictionary = {}
+	var readiness_sent = false
+	for frame in host.transport.sent:
+		var payload: Dictionary = frame.message.get("payload", {})
+		if payload.get("kind") == "snapshot":
+			recovered = payload
+			_check(not frame.unreliable and payload.has("shop"), "unchanged phase retries with its reliable complete baseline")
+		if payload.get("kind") == "state":
+			readiness_sent = payload.can_shoot
+	_check(not host._last_phase.is_empty() and not host._spawn_barrier_held and not host._spawn_barrier_warned, "complete broadcast commits phase and clears diagnostic state")
+	_check(readiness_sent, "readiness recovery is a reliable state change even without score or turn changes")
+	var previous_snapshot: int = host.snapshot_id
+	host.transport.sent.clear()
+	host.shop_sync.state.revision += 1
+	host._publish_state()
+	_check(host.snapshot_id == previous_snapshot and host.transport.sent.back().message.payload.kind == "shop_state", "same-phase shop revisions still update without rebuilding the table")
+	var guest = _controller()
+	guest.active = true
+	guest._local_id = 30
+	guest.transport.id = 30
+	if not recovered.is_empty():
+		_deliver(guest, 20, recovered)
+	_check(guest.table_sync.applied.get("scene_id") == 401 and not guest._guest_phase.is_empty(), "guest hydrates the phase after delayed body completion")
+	var committed_phase: Array = host._last_phase.duplicate()
+	host.adapter.state.round = 2
+	host.adapter.state.rounds_played = 2
+	host.table_sync.captured.available = "invalid"
+	host.shop_sync.state = {"open": false, "revision": 4}
+	var previous_id: int = host.snapshot_id
+	host._publish_state()
+	_check(host._last_phase == committed_phase and host.snapshot_id == previous_id, "invalid capture cannot consume a new round's reliable transition")
+	_check(host.last_shop_state.open, "invalid next-round capture keeps the prior shop presentation committed")
+	host.table_sync.captured.available = true
+	host.table_sync.captured.round = 1
+	host.table_sync.captured.rounds_played = 2
+	host._publish_state()
+	var next_round: Dictionary = {}
+	for frame in host.transport.sent:
+		var payload: Dictionary = frame.message.get("payload", {})
+		if payload.get("kind") == "snapshot":
+			next_round = payload
+	_check(host._last_phase != committed_phase and next_round.has("shop"), "same round state retries after invalid capture recovery")
+	_deliver(guest, 20, next_round)
+	_check(guest.table_sync.applied.get("rounds_played") == 2, "guest accepts the recovered round through its real phase barrier")
+	host.adapter.state.round += 1
+	host.adapter.state.rounds_played += 1
+	# Make state current first, then fail precisely during the owed snapshot send.
+	host.table_sync.spawn_blocked = true
+	host.adapter.state.can_shoot = false
+	host._publish_state()
+	host.table_sync.spawn_blocked = false
+	host.transport.on_send = func():
+		host.active = false
+		host._last_phase.clear()
+	host._publish_state()
+	_check(host._last_phase.is_empty(), "synchronous session loss during send cannot resurrect a committed phase")
+	guest.free()
+	host.free()
+
+
+func _aim_context_readiness():
+	var controller = _controller()
+	controller.active = true
+	controller.adapter.ready_to_shoot = true
+	controller.adapter.state.merge({"can_shoot": true, "rounds_played": 4, "round": 5}, true)
+	controller.shot_number = 9
+	_check(controller.aim_view_context() == [9, 4, 5] and controller._turn_ready(), "host exposes the native ready round and current shot")
+	controller.turn_owner = 30
+	_check(controller.aim_view_context() == [9, 4, 5] and not controller._turn_ready(), "off-turn peers can view a coherent aim but cannot take control")
+	controller.table_sync.spawn_blocked = true
+	_check(controller.aim_view_context().is_empty(), "host native aim waits for its complete rack")
+	controller.table_sync.spawn_blocked = false
+	controller._local_id = 30
+	controller.transport.id = 30
+	controller.latest_state = {"rounds_played": 4, "round": 5, "can_shoot": true}
+	_check(controller.aim_view_context().is_empty(), "new reliable readiness cannot expose an uncommitted guest scene")
+	controller.table_sync.input_ready = true
+	_check(controller.aim_view_context() == [9, 4, 5] and controller._turn_ready(), "guest input and aim share committed state readiness")
+	_check(controller.table_sync.readiness_states.back() == controller.latest_state, "guest coherence checks the actual newest reliable state")
+	for field in ["finished", "shot_pending"]:
+		controller.set(field, true)
+		_check(controller.aim_view_context().is_empty(), "aim context closes immediately for " + field)
+		controller.set(field, false)
+	controller.awaiting_shot_turn = 9
+	_check(controller.aim_view_context().is_empty(), "pending local submission hides the old aim context")
+	controller.awaiting_shot_turn = -1
+	controller.panel.show()
+	_check(controller.aim_view_context().is_empty(), "mod menu hides native aim context")
+	controller.panel.hide()
+	controller.shop_sync.state.open = true
+	_check(controller.aim_view_context().is_empty(), "shop transition hides native aim context")
+	controller.free()
+
+
+func _bundled_shop_prevalidation():
+	var guest = _controller()
+	guest.active = true
+	guest._local_id = 30
+	guest.transport.id = 30
+	var scene = {"available": false}
+	guest._received_table(20, {
+		"kind": "snapshot", "id": 1, "scene": scene,
+		"shop": {"open": false, "revision": 1}
+	})
+	_check(guest.table_sync.applied == scene and guest.shop_sync.validations == 1, "valid bundled shop commits once through the prevalidated apply")
+	guest.table_sync.applied = {}
+	guest._received_table(20, {
+		"kind": "snapshot", "id": 2, "scene": scene,
+		"shop": {"open": "invalid", "revision": 2}
+	})
+	_check(guest.table_sync.applied.is_empty(), "invalid bundled shop rejects before any table or results mutation")
+	guest.free()
 
 
 func _host_controller(mode: String):

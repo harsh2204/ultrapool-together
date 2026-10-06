@@ -195,7 +195,7 @@ func _run():
 	_check(not mod.run_controls._bindings.is_empty(), "native run exits route to lobby voting")
 	_check_run_config("host")
 	_check_balls(game.balls, "host")
-	await native_aim.check(mod, game, "host", _check)
+	await native_aim.check(mod, game, "host", _check, _capture)
 	await native_pocket.check_host(mod, game, _check, _capture)
 	await native_effects.check_host(mod, game, _check, _capture)
 	await native_visual_fx.check_host(mod, game, _check, _capture)
@@ -306,7 +306,7 @@ func _run():
 		if game.player_ball.has_method("_hide_cue_pivot"):
 			game.player_ball._hide_cue_pivot()
 	await _capture("30-guest-table", "Guest table · reconstructed from the host snapshot")
-	await native_aim.check(mod, game, "guest", _check)
+	await native_aim.check(mod, game, "guest", _check, _capture)
 	await native_pocket.check_guest(mod, snapshot, _check, _capture)
 	await native_effects.check_guest(mod, snapshot, _check, _capture)
 	await native_visual_fx.check_guest(mod, snapshot, _check, _capture)

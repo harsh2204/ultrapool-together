@@ -207,6 +207,7 @@ func _run() -> void:
 		"oversized pocket list is invalid for host publish"
 	)
 	_check_identity_rebuild(sync, state, cue)
+	_check_committed_readiness(sync, state)
 	_check_potted_rail(sync, cue)
 	var original_game = get_node("/root/Global").gameManager
 	_check(not sync.apply_snapshot(state), "snapshot outside session rejected")
@@ -368,9 +369,11 @@ func _check_pocket_capture(sync: Node, state: Dictionary) -> void:
 
 class _ResultsStub:
 	extends Node
+	var during_apply: Callable
 
 	func apply(_data: Dictionary) -> void:
-		pass
+		if during_apply.is_valid():
+			during_apply.call()
 
 	func clear() -> void:
 		pass
@@ -383,6 +386,10 @@ class _BallStub:
 	extends Node
 	var is_player = false
 	var ball_item = null
+	var visible = true
+	var alive = true
+	var spawned = true
+	var falling = false
 
 
 class _ReplicaStub:
@@ -393,8 +400,15 @@ class _ReplicaStub:
 	var player_ball = null
 	var selected_ball = null
 	var applied: Array = []
+	var native_ready = true
+	var during_apply: Callable
+
+	func can_shoot() -> bool:
+		return native_ready
 
 	func apply_table(data: Dictionary) -> void:
+		if during_apply.is_valid():
+			during_apply.call()
 		applied.append(data.duplicate(true))
 		for body in data.balls:
 			if not replicas.has(body.id):
@@ -473,6 +487,80 @@ func _check_identity_rebuild(sync: Node, state: Dictionary, cue: Dictionary) -> 
 	sync._results = null
 	replica.queue_free()
 	results.queue_free()
+
+
+func _check_committed_readiness(sync: Node, state: Dictionary) -> void:
+	var replica = _ReplicaStub.new()
+	sync.add_child(replica)
+	var results = _ResultsStub.new()
+	sync.add_child(results)
+	sync._guest = true
+	sync._scene_key = "%s:%s" % [state.scene_id, state.rotated]
+	sync._replica = replica
+	sync._results = results
+	sync._committed_context = {}
+	var authority = {
+		"available": true, "table_active": true, "can_shoot": true,
+		"rounds_played": state.rounds_played, "round": state.round + 1
+	}
+	_check(not sync.ready_for_state(authority), "ready state waits for initial replica hydration")
+	_check(sync.apply_snapshot(state) and sync.ready_for_state(authority), "complete play frame commits readiness for its matching one-based round")
+	var mid_apply: Array = []
+	replica.during_apply = func(): mid_apply.append(sync.ready_for_input())
+	results.during_apply = func(): mid_apply.append(sync.ready_for_input())
+	var next_round = state.duplicate(true)
+	next_round.round += 1
+	next_round.rounds_played += 1
+	var next_authority = authority.duplicate(true)
+	next_authority.round += 1
+	next_authority.rounds_played += 1
+	_check(not sync.ready_for_state(next_authority), "new reliable round cannot borrow the old native rack's readiness")
+	_check(sync.apply_snapshot(next_round), "new ready round applies through production snapshot boundary")
+	_check(mid_apply == [false, false], "table hydration and native results callbacks cannot observe half-committed readiness")
+	_check(not sync.ready_for_state(authority) and sync.ready_for_state(next_authority), "only the fully committed round matches subsequent authority")
+	for field in ["available", "table_active", "can_shoot"]:
+		var blocked = next_authority.duplicate(true)
+		blocked[field] = false
+		_check(not sync.ready_for_state(blocked), "committed scene still obeys authoritative " + field)
+	for field in ["in_menu", "in_shop", "round_ended", "game_over", "round_result_open", "pending", "finished"]:
+		var blocked = next_authority.duplicate(true)
+		blocked[field] = true
+		_check(not sync.ready_for_state(blocked), "new authoritative phase closes readiness before scene arrival: " + field)
+	var wrong_round = next_authority.duplicate(true)
+	wrong_round.round = next_round.round
+	_check(not sync.ready_for_state(wrong_round), "zero-based authority round is not mistaken for its one-based counterpart")
+	var wrong_count = next_authority.duplicate(true)
+	wrong_count.rounds_played += 1
+	_check(not sync.ready_for_state(wrong_count), "same displayed level with another rounds-played epoch remains blocked")
+	next_round.round += 5
+	_check(sync.ready_for_state(next_authority), "committed readiness does not alias the caller's mutable snapshot")
+	next_round.round -= 5
+	for phase in ["payout", "shop", "ended"]:
+		var transition = next_round.duplicate(true)
+		transition.results.phase = phase
+		_check(sync.apply_snapshot(transition) and not sync.ready_for_state(next_authority), "native-ready result frame never exposes aim during " + phase)
+	_check(sync.apply_snapshot(next_round) and sync.ready_for_state(next_authority), "complete later play frame restores readiness without a timer")
+	replica.native_ready = false
+	_check(not sync.ready_for_state(next_authority), "native popup/settings readiness remains authoritative locally")
+	replica.native_ready = true
+	for field in ["visible", "alive", "spawned", "falling"]:
+		replica.player_ball.set(field, field == "falling")
+		_check(not sync.ready_for_state(next_authority), "cue must be physically eligible before input: " + field)
+		replica.player_ball.set(field, field != "falling")
+	for body in replica.replicas.values():
+		if is_instance_valid(body):
+			body.free()
+	for pocket in replica.pocket_replicas.values():
+		if is_instance_valid(pocket):
+			pocket.free()
+	var global_node = get_node("/root/Global")
+	var original_game = global_node.gameManager
+	sync._clear_replica()
+	global_node.gameManager = original_game
+	_check(sync._committed_context.is_empty() and not sync.ready_for_state(next_authority), "scene cleanup drops readiness and round context")
+	sync._guest = false
+	sync._results = null
+	results.free()
 
 
 func _check_potted_rail(sync: Node, cue: Dictionary) -> void:

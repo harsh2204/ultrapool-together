@@ -16,6 +16,10 @@ func _process(delta):
 		# Ensure native cue stick / aim line / reticle path runs (#18).
 		if is_instance_valid(game) and not game.playing:
 			game.playing = true
+		if _remote_aim_active:
+			# A teammate pose must not survive the turn becoming local. The native
+			# process below owns the new player's prediction (PERF-027/029).
+			prediction.hide_prediction()
 		_remote_aim_active = false
 		# Native _process polls the initial click/controller aim and calls can_shoot().
 		# Keep the real menu state here or an idle player can never start aiming.
@@ -29,7 +33,7 @@ func _process(delta):
 	game.in_menu = true
 	super._process(delta)
 	game.in_menu = was_in_menu
-	_apply_teammate_aim_chrome()
+	_apply_teammate_aim_chrome(delta)
 
 
 func _input(event: InputEvent) -> void:
@@ -68,9 +72,8 @@ func _ensure_aim_chrome() -> void:
 	var ui = get("shoot_ui")
 	if ui is CanvasItem and preparing_shot:
 		ui.visible = true
-	var pred = get("prediction")
-	if pred is CanvasItem and preparing_shot:
-		pred.visible = true
+	# Native prediction decides visibility, including its minimum shot length.
+	# Re-showing it here revives the collision marker below the native threshold.
 	var gauge = get("chargeGauge")
 	if gauge == null and get("visuals") != null:
 		gauge = visuals.get_node_or_null("static/chargeGauge")
@@ -84,13 +87,17 @@ func _ensure_aim_chrome() -> void:
 		_hide_cue_pivot()
 
 
-## Non-controllers: drive CuePivot from the turn owner's presence aim vector (#18).
-## Local input is already cancelled; this only sets visual transform.
-func _apply_teammate_aim_chrome() -> void:
+## Non-controllers: present the turn owner's native cue and collision prediction.
+## Presence validates current table/turn context; it never grants input authority.
+## Reuse the installed predictor over this board's retained bodies (PERF-027/029).
+func _apply_teammate_aim_chrome(delta: float = 0.0) -> void:
 	var aim: Dictionary = {}
 	var game = Global.gameManager
 	if (
 		is_instance_valid(game)
+		and spawned
+		and alive
+		and not falling
 		and game.can_shoot()
 		and game.has_shots()
 		and is_instance_valid(together_controller)
@@ -116,10 +123,16 @@ func _apply_teammate_aim_chrome() -> void:
 		and vector.length() > 50.0
 	)
 	if not aiming:
+		prediction.hide_prediction()
 		_hide_cue_pivot()
 		_remote_aim_active = false
 		return
+	vector = vector.limit_length(200.0)
 	_show_cue_aim(vector)
+	# This native helper changes only the prediction nodes. In particular, keep
+	# preparing_shot false: get_shot(), input polling and shot submission stay local.
+	prediction.predictive_stuff(vector, delta, null, true)
+	prediction.set_charge_gauge(vector.length() / 200.0)
 	_remote_aim_active = true
 
 

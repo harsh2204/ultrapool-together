@@ -121,9 +121,11 @@ var bad_snapshot_grace_msec = 3000
 var _bad_snapshot_started_msec = -1
 ## Host mid-round spawn barrier (PERF-008): hold until new bodies inited, then
 ## publish a reliable keyframe so guests materialize the id (#17).
-const SPAWN_BARRIER_MAX_MSEC = 2000
+const SPAWN_BARRIER_WARNING_MSEC = 2000
 var _spawn_barrier_held = false
 var _spawn_barrier_since_msec = -1
+var _spawn_barrier_warned = false
+var _capture_problem = ""
 var _published_ball_ids: Dictionary = {}
 var _published_pocket_ids: Dictionary = {}
 var _published_effect_ids: Dictionary = {}
@@ -1426,6 +1428,8 @@ func _clear_bad_snapshot_streak() -> void:
 func _clear_spawn_barrier() -> void:
 	_spawn_barrier_held = false
 	_spawn_barrier_since_msec = -1
+	_spawn_barrier_warned = false
+	_capture_problem = ""
 	_published_ball_ids.clear()
 	_published_pocket_ids.clear()
 	_published_effect_ids.clear()
@@ -1458,25 +1462,31 @@ func can_control() -> bool:
 	return hovered == null or not ui_root.is_ancestor_of(hovered)
 
 
-func _turn_ready() -> bool:
+## A ready table context can be viewed by an off-turn peer, but only the current
+## owner may submit a shot. Never expose a newer state against an older replica.
+func aim_view_context() -> Array:
 	if (
 		not active
 		or is_spectating()
 		or panel.visible
-		or turn_owner != transport.local_id()
 		or shot_pending
+		or awaiting_shot_turn >= 0
 		or finished
+		or shop_sync.is_open()
 	):
-		return false
-	if shop_sync.is_open():
-		return false
+		return []
 	if is_table_host():
-		return run_setup.ready_for_input() and adapter.can_shoot()
-	return (
-		awaiting_shot_turn < 0
-		and latest_state.get("can_shoot", false)
-		and table_sync.ready_for_input()
-	)
+		if not run_setup.ready_for_input() or table_sync.spawn_barrier_active():
+			return []
+		var native_context: Array = adapter.aim_context()
+		return [shot_number, native_context[0], native_context[1]] if native_context.size() == 2 else []
+	if not table_sync.ready_for_state(latest_state):
+		return []
+	return [shot_number, latest_state.rounds_played, latest_state.round]
+
+
+func _turn_ready() -> bool:
+	return turn_owner == transport.local_id() and not aim_view_context().is_empty()
 
 
 func submit_shot(vector: Vector2) -> bool:
@@ -1502,6 +1512,7 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		return false
 	if (
 		not run_setup.ready_for_input()
+		or table_sync.spawn_barrier_active()
 		or not vector.is_finite()
 		or vector.length() <= 50.0
 		or vector.length() > 200.1
@@ -1611,6 +1622,8 @@ func _pass(player: int, expected_turn: int) -> bool:
 		or player != turn_owner
 		or expected_turn != shot_number
 		or shot_pending
+		or not run_setup.ready_for_input()
+		or table_sync.spawn_barrier_active()
 		or not adapter.can_shoot()
 	):
 		return false
@@ -1806,7 +1819,10 @@ func _publish_state(
 	expansion_balls.prepare_shop()
 	latest_state = adapter.game_data()
 	latest_state.run_won = latest_state.run_won and finished
-	latest_state.can_shoot = latest_state.can_shoot and run_setup.ready_for_input() and not finished
+	latest_state.can_shoot = (
+		latest_state.can_shoot and run_setup.ready_for_input() and not finished
+		and not table_sync.spawn_barrier_active()
+	)
 	latest_state.merge(
 		{
 			"kind": "state",
@@ -1839,6 +1855,12 @@ func _publish_state(
 	var ui_nav: Dictionary = latest_state.get("ui_nav", {})
 	var state_sig = [
 		latest_state.get("available"),
+		latest_state.get("table_active"),
+		latest_state.get("can_shoot"),
+		latest_state.get("in_menu"),
+		latest_state.get("round_ended"),
+		latest_state.get("round_result_open"),
+		latest_state.get("rounds_played"),
 		latest_state.get("settled"),
 		latest_state.get("in_shop"),
 		latest_state.get("game_over"),
@@ -1885,32 +1907,46 @@ func _publish_state(
 		shop_state.get("scene", 0)
 	]
 	if target != 0 or phase != _last_phase:
+		# A held/invalid capture still owes every peer its reliable phase baseline.
+		# Targeted resync must not consume that broadcast debt (PERF-008/014).
+		if not _publish_snapshot(true, target, shop_state):
+			# Opening/closing the standalone shop ahead of this baseline would
+			# combine its new phase with the guest's old board and inventory.
+			return
 		if target == 0:
 			_last_phase = phase
-		_publish_snapshot(true, target, shop_state)
+	if not active or not is_table_host():
+		return
 	if target != 0 or shop_state != last_shop_state:
 		if target == 0:
 			last_shop_state = shop_state.duplicate(true)
 		_table_send({"kind": "shop_state", "shop": shop_state}, target)
 
 
-func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary = {}):
+func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary = {}) -> bool:
 	if not active or not is_table_host() or not adapter.game_data().available:
-		return
-	# Hold ordinary publishes while a mid-round body is still initializing so guests
-	# never stream a table that permanently omits that authoritative id (#17 / PERF-008).
-	if target == 0 and table_sync.spawn_barrier_active():
+		return false
+	# A timeout is diagnostic only: an incomplete rack must never become a valid
+	# baseline, including on targeted resync. Recovery sends one reliable complete
+	# keyframe; no packets are queued while native bodies initialize (PERF-008).
+	if table_sync.spawn_barrier_active():
 		if _spawn_barrier_since_msec < 0:
 			_spawn_barrier_since_msec = Time.get_ticks_msec()
-		if Time.get_ticks_msec() - _spawn_barrier_since_msec < SPAWN_BARRIER_MAX_MSEC:
-			_spawn_barrier_held = true
-			return
-		push_warning("Together: spawn barrier timed out; publishing without incomplete bodies")
+		_spawn_barrier_held = true
+		if (
+			not _spawn_barrier_warned
+			and Time.get_ticks_msec() - _spawn_barrier_since_msec >= SPAWN_BARRIER_WARNING_MSEC
+		):
+			_spawn_barrier_warned = true
+			push_warning("Together: waiting for native bodies before publishing the complete table")
+		return false
 	var scene = table_sync.capture()
 	if not table_sync.valid_capture(scene):
-		var problem = table_sync.snapshot_problem(scene)
-		push_warning("Together: skipped publishing invalid table capture (%s)" % problem)
-		return
+		var problem: String = table_sync.snapshot_problem(scene)
+		if problem != _capture_problem:
+			_capture_problem = problem
+			push_warning("Together: skipped publishing invalid table capture (%s)" % problem)
+		return false
 	var force_reliable = reliable or target != 0
 	# Only broadcasts advance the shared topology cache. A targeted resync must not
 	# consume the reliable update still owed to every other teammate (PERF-008).
@@ -1956,11 +1992,14 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 	if target == 0:
 		_spawn_barrier_held = false
 		_spawn_barrier_since_msec = -1
+		_spawn_barrier_warned = false
+		_capture_problem = ""
 	snapshot_id += 1
 	var message = {"kind": "snapshot", "id": snapshot_id, "scene": scene}
 	if not shop.is_empty():
 		message["shop"] = shop
 	_table_send(message, target, force_reliable)
+	return active and is_table_host()
 
 
 func _report_effect_capacity(effects: Dictionary, visual_fx: Dictionary, native_draw: Dictionary = {}, ball_visual_status: String = "complete", pocket_visual_status: String = "complete") -> void:
@@ -2297,12 +2336,17 @@ func _apply_guest_snapshot(message: Dictionary) -> void:
 	# Ball updates must wait for the reliable scene transition.
 	if not message.has("shop") and phase != _guest_phase:
 		return
-	# PERF-014: validated once above; the internal apply does not re-check.
+	# Validate both parts before either can mutate the table or open native results.
+	if message.has("shop"):
+		if not message.shop is Dictionary or not shop_sync.valid_state(message.shop):
+			_bad_table("shop", "invalid bundled shop")
+			return
+	# PERF-014: validated once above; the internal applies do not re-check.
 	if not table_sync.apply_validated_snapshot(message.scene):
 		_bad_table("table", "apply_snapshot failed")
 		return
 	if message.has("shop"):
-		if not message.shop is Dictionary or not shop_sync.apply_state(message.shop):
+		if not shop_sync.apply_validated_state(message.shop):
 			_bad_table("shop", "shop apply failed")
 			return
 		_guest_phase = phase

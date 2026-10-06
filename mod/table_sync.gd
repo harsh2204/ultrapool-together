@@ -33,6 +33,7 @@ static func ball_on_potted_rail(state: Dictionary) -> bool:
 var _guest = false
 var _replica = null
 var _scene_key = ""
+var _committed_context: Dictionary = {}
 var _saved_global: Dictionary = {}
 var _saved_nodes: Array = []
 var _saved_shapes: Array = []
@@ -370,6 +371,7 @@ func begin_guest(config: Dictionary = {}) -> bool:
 	):
 		return false
 	_guest = true
+	_committed_context = {}
 	for key in [
 		"gameManager",
 		"shopManager",
@@ -485,6 +487,9 @@ func apply_snapshot(data: Dictionary) -> bool:
 func apply_validated_snapshot(data: Dictionary) -> bool:
 	if not _guest:
 		return false
+	# Native setters and result menus can call back during hydration. Readiness is
+	# unavailable until the complete table and phase presentation have committed.
+	_committed_context = {}
 	if not data.available:
 		_clear_replica()
 		return true
@@ -523,6 +528,14 @@ func apply_validated_snapshot(data: Dictionary) -> bool:
 		global_node.camera.make_current()
 	_replica.apply_table(data)
 	_results.apply(data)
+	_committed_context = {
+		"round": data.round,
+		"rounds_played": data.rounds_played,
+		"playable": (
+			data.ready and not data.in_menu and not data.in_shop
+			and not data.round_ended and not data.game_over and data.results.phase == "play"
+		)
+	}
 	return true
 
 
@@ -567,13 +580,33 @@ func begin_shot(vector: Vector2) -> bool:
 
 
 func ready_for_input() -> bool:
-	if not is_instance_valid(_replica) or not _replica.can_shoot():
+	if (
+		not _guest or not _committed_context.get("playable", false)
+		or not is_instance_valid(_replica) or not _replica.can_shoot()
+	):
 		return false
 	var cue = _replica.player_ball
 	return is_instance_valid(cue) and cue.visible and cue.alive and cue.spawned and not cue.falling
 
 
+## Reliable table state may precede its reliable scene baseline. The wire state
+## uses a one-based round while native snapshots retain zero-based level_number.
+func ready_for_state(state: Dictionary) -> bool:
+	if (
+		not ready_for_input() or state.get("available") != true
+		or state.get("table_active") != true or state.get("can_shoot") != true
+		or state.get("rounds_played", -1) != _committed_context.get("rounds_played")
+		or state.get("round", 0) != _committed_context.get("round", -1) + 1
+	):
+		return false
+	for field in ["in_menu", "in_shop", "round_ended", "game_over", "round_result_open", "pending", "finished"]:
+		if state.get(field, false):
+			return false
+	return true
+
+
 func _clear_replica() -> void:
+	_committed_context = {}
 	if is_instance_valid(_results):
 		_results.clear()
 	get_node("/root/Global").clear_hovered_item()

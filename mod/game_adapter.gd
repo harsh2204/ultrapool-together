@@ -168,6 +168,17 @@ func can_shoot() -> bool:
 	)
 
 
+## Small native readiness context for per-frame aim. Avoid game_data's score,
+## progression and result capture when the caller only needs a coherent round.
+func aim_context() -> Array:
+	if not can_shoot():
+		return []
+	var game = _game()
+	if game == null or get_node("/root/UIManager").round_over_menu.is_open:
+		return []
+	return [int(game.rounds_played), int(game.level_number) + 1]
+
+
 func shoot(vector: Vector2, accepted: Callable = Callable()) -> bool:
 	if not vector.is_finite() or vector.length() <= MIN_SHOT_LENGTH or not can_shoot():
 		return false

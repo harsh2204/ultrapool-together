@@ -622,9 +622,19 @@ func apply_result(accepted: bool, reason = "", request_id: int = 0, shop: Dictio
 	_update_cue_ui()
 
 
+func valid_state(data: Dictionary) -> bool:
+	return _valid_state(data)
+
+
 func apply_state(data: Dictionary) -> bool:
-	if not _valid_state(data):
+	if not valid_state(data):
 		return false
+	return apply_validated_state(data)
+
+
+## Internal same-frame apply after main prevalidates a bundled table + shop.
+## Independent callers must use apply_state; no wire flag bypasses validation.
+func apply_validated_state(data: Dictionary) -> bool:
 	if data.get("exclusive_shopper") is int:
 		_exclusive_shopper = maxi(0, int(data.exclusive_shopper))
 	if not data.open:
