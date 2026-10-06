@@ -58,6 +58,7 @@ func _initialize() -> void:
 	_time_limit_allows_first_message()
 	_handshake_version_boundaries()
 	_handshake_authority_and_retired_sessions()
+	_rack_barriers_require_reliable_delivery()
 	for failure in failures:
 		print("TRANSPORT_BUDGET_PROBE FAIL ", failure)
 	print("TRANSPORT_BUDGET_PROBE ", "PASS" if failures.is_empty() else "FAIL", " ", checks)
@@ -379,5 +380,98 @@ func _handshake_authority_and_retired_sessions() -> void:
 		and host_joins.size() == 2 and guest_joins.size() == 2,
 		"retired hello and session data cannot replace or inject into the ready session"
 	)
+	_dispose_wire(host)
+	_dispose_wire(guest)
+
+
+func _rack_barriers_require_reliable_delivery() -> void:
+	# Exercise the actual decoded wire boundary after production session
+	# negotiation. Only writes to a socket are replaced by WireTransport.
+	var host = _new_wire_transport(true)
+	var guest = _new_wire_transport(false)
+	var host_inbox: Array = []
+	var guest_inbox: Array = []
+	host.received.connect(func(sender, data): host_inbox.append({"sender": sender, "data": data}))
+	guest.received.connect(func(sender, data): guest_inbox.append({"sender": sender, "data": data}))
+	guest._send_hello()
+	host._receive_wire(42, _last_wire(guest, "hello").packet)
+	var welcome = _last_wire(host, "welcome")
+	_check(not welcome.is_empty(), "rack channel fixture negotiates a production welcome")
+	if welcome.is_empty():
+		_dispose_wire(host)
+		_dispose_wire(guest)
+		return
+	guest._receive_wire(7, welcome.packet)
+	var ready = _last_wire(guest, "ready")
+	_check(not ready.is_empty(), "rack channel fixture receives a production acknowledgement")
+	if ready.is_empty():
+		_dispose_wire(host)
+		_dispose_wire(guest)
+		return
+	host._receive_wire(42, ready.packet)
+	_check(
+		host.connected_peer and guest.connected_peer,
+		"rack channel fixture uses an authenticated session"
+	)
+	var request = {
+		"kind": "rack_request",
+		"match": 41,
+		"table": 0,
+		"request": {"revision": 0, "action": "begin", "slot": 0}
+	}
+	guest.send_to(7, request)
+	var request_packet: PackedByteArray = _last_wire(guest, "data").packet
+	host._receive_wire(42, request_packet, true)
+	_check(host_inbox.is_empty(), "authenticated pickup request cannot cross the transient channel")
+	host._receive_wire(42, request_packet)
+	_check(
+		host_inbox == [{"sender": 42, "data": request}],
+		"same pickup bytes dispatch once through reliable delivery"
+	)
+	var state = {
+		"kind": "rack_state",
+		"match": 41,
+		"table": 0,
+		"state": {"revision": 1, "order": range(16), "drag": {}},
+		"accepted": true,
+		"action": "begin",
+		"reason": ""
+	}
+	host.send_to(42, state)
+	var state_packet: PackedByteArray = _last_wire(host, "data").packet
+	guest._receive_wire(7, state_packet, true)
+	_check(guest_inbox.is_empty(), "authenticated rack state cannot cross the transient channel")
+	guest._receive_wire(7, state_packet)
+	_check(
+		guest_inbox == [{"sender": 7, "data": state}],
+		"same rack state bytes dispatch through reliable delivery"
+	)
+	var motion = {
+		"kind": "rack_motion",
+		"match": 41,
+		"table": 0,
+		"actor": 42,
+		"token": 1,
+		"seq": 1,
+		"position": Vector2(0.4, 0.6)
+	}
+	guest.send_to(7, motion, true)
+	var motion_wire = _last_wire(guest, "data")
+	_check(motion_wire.transient, "rack motion can use the disposable sending path")
+	host._receive_wire(42, motion_wire.packet, true)
+	_check(
+		host_inbox == [{"sender": 42, "data": request}, {"sender": 42, "data": motion}],
+		"authenticated transient motion still reaches the host after a rejected action"
+	)
+	host.send_to(42, motion, true)
+	guest._receive_wire(7, _last_wire(host, "data").packet, true)
+	_check(
+		guest_inbox == [{"sender": 7, "data": state}, {"sender": 7, "data": motion}],
+		"authenticated transient motion still reaches the guest after a rejected state"
+	)
+	var forged: Dictionary = bytes_to_var(motion_wire.packet)
+	forged.session = "different-session"
+	host._receive_wire(42, var_to_bytes(forged), true)
+	_check(host_inbox.size() == 2, "motion channel exception never bypasses session authentication")
 	_dispose_wire(host)
 	_dispose_wire(guest)

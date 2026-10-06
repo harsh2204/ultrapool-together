@@ -102,6 +102,15 @@ func _prepare_effect_capture(game: Node) -> void:
 	# clearing that registry here would lose startup effects before delivery.
 
 
+## Final-build archival does not depend on render topology/spawn readiness.
+func capture_inventory() -> Dictionary:
+	var global_node = get_node_or_null("/root/Global")
+	var game = global_node.gameManager if global_node != null else null
+	if not is_instance_valid(game) or not is_instance_valid(game.player_info):
+		return {}
+	return PlayerInventory.capture(game.player_info)
+
+
 func capture() -> Dictionary:
 	var game = get_node("/root/Global").gameManager
 	if not is_instance_valid(game) or not is_instance_valid(game.table):

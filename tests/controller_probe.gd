@@ -6,7 +6,7 @@ class TransportStub:
 	var is_host = false
 	var id = 20
 	var coordinator = 10
-	var room_code = "UP11-test"
+	var room_code = "UP12-test"
 	var sent: Array = []
 	var on_send: Callable
 
@@ -109,6 +109,12 @@ class TableStub:
 	var shots: Array[Vector2] = []
 	var captured: Dictionary = {"available": false}
 	var applied: Dictionary = {}
+	var inventory: Dictionary = {}
+	var inventory_captures = 0
+
+	func capture_inventory() -> Dictionary:
+		inventory_captures += 1
+		return inventory.duplicate(true)
 
 	func capture() -> Dictionary:
 		return captured.duplicate(true)
@@ -183,6 +189,17 @@ class SpectatorStub:
 
 	func refresh_summary():
 		summary_refreshes += 1
+
+
+class FinalBuildDatabase:
+	extends Node
+	var id_to_ball: Dictionary = {}
+	var id_to_passive: Dictionary = {}
+
+
+class FinalBuildItem:
+	extends RefCounted
+	var from_set = "CLASSIC"
 
 
 class ShopStub:
@@ -367,6 +384,10 @@ func _initialize() -> void:
 	_race_and_score_limits()
 	_native_score_standings()
 	_race_finishes()
+	_final_build_authority_and_resync()
+	_final_build_client_delivery()
+	_final_build_publish_without_snapshot()
+	_final_rack_discussion_wire()
 	_return_vote_lifecycle()
 	_host_leave_requires_consent()
 	_startup_failure_scope()
@@ -1436,6 +1457,517 @@ func _race_finishes():
 	)
 	_check(losses._finish_count == 0, "loss does not consume first place")
 	losses.free()
+
+
+func _prepare_final_builds(controller):
+	controller._end_run_database = FinalBuildDatabase.new()
+	controller.add_child(controller._end_run_database)
+	controller.final_builds.reset(controller.match_id)
+	controller.end_discussion.reset(controller.match_id)
+
+
+func _final_record(controller, table: int, leader: int) -> Dictionary:
+	var build: Array = []
+	build.resize(16)
+	var cues = load(_base.path_join("cue_inventory.gd")).new()
+	cues.reset(controller._members(table))
+	return {
+		"match": controller.match_id,
+		"table": table,
+		"leader": leader,
+		"inventory":
+		{
+			"build": build,
+			"passives": [null, null, null, null],
+			"cubes": [],
+			"snacks": 2,
+			"cocktails": 1
+		},
+		"cues": cues.snapshot()
+	}
+
+
+func _run_build_messages(controller) -> Array:
+	return controller.transport.sent.filter(
+		func(frame): return frame.message.get("kind") == "run_build"
+	)
+
+
+func _final_build_authority_and_resync():
+	var host = _host_controller("score")
+	host.active = true
+	_prepare_final_builds(host)
+	var record = _final_record(host, 1, 20)
+	_send_table(host, 20, 1, {"kind": "final_build", "record": record})
+	_check(
+		not host.final_builds.has_table(1), "active table cannot publish a premature final build"
+	)
+	_send_table(
+		host,
+		20,
+		1,
+		_state(host, 1, {"game_over": true, "finished": true, "finish_reason": "Run ended"})
+	)
+	_check(host.table_summaries[1].finished, "authenticated terminal state precedes final build")
+	host.transport.sent.clear()
+	for actor in [30, 999]:
+		_send_table(host, actor, 1, {"kind": "final_build", "record": record})
+		_check(
+			not host.final_builds.has_table(1),
+			"guest or outsider cannot publish leader final build"
+		)
+	for change in [{"table": 0}, {"leader": 30}, {"match": host.match_id - 1}]:
+		var forged = record.duplicate(true)
+		forged.merge(change, true)
+		_send_table(host, 20, 1, {"kind": "final_build", "record": forged})
+		_check(
+			not host.final_builds.has_table(1),
+			"record identity must match authenticated route " + str(change)
+		)
+	_send_table(host, 20, 0, {"kind": "final_build", "record": record})
+	_check(not host.final_builds.has_table(1), "other-table envelope cannot submit a final build")
+	_send_table(host, 20, 1, {"kind": "final_build", "record": record}, host.match_id - 1)
+	_check(not host.final_builds.has_table(1), "previous-match envelope cannot publish final build")
+	var forged = record.duplicate(true)
+	forged.cues.players.append(_final_record(host, 0, 10).cues.players[0])
+	_send_table(host, 20, 1, {"kind": "final_build", "record": forged})
+	_check(not host.final_builds.has_table(1), "another table's cue owner cannot enter final build")
+	forged = record.duplicate(true)
+	forged.inventory.snacks = -1
+	_send_table(host, 20, 1, {"kind": "final_build", "record": forged})
+	_check(not host.final_builds.has_table(1), "malformed inventory is rejected before archival")
+	_check(host.transport.sent.is_empty(), "rejected final builds never enter room delivery")
+	_send_table(host, 20, 1, {"kind": "final_build", "record": record})
+	var published = _run_build_messages(host)
+	_check(
+		host.final_builds.get_record(1) == record, "remote table leader archives its final build"
+	)
+	_check(
+		(
+			published.size() == 1
+			and not published[0].unreliable
+			and published[0].recipient == 0
+			and published[0].message.record == record
+		),
+		"first accepted build publishes one reliable room review record"
+	)
+	host.transport.sent.clear()
+	_send_table(host, 20, 1, {"kind": "final_build", "record": record})
+	_check(host.transport.sent.is_empty(), "identical final-build replay does not fan out again")
+	var accepted = record.duplicate(true)
+	record.inventory.snacks = 3
+	_send_table(host, 20, 1, {"kind": "final_build", "record": record})
+	_check(
+		host.transport.sent.is_empty() and host.final_builds.get_record(1) == accepted,
+		"conflicting or caller-mutated build cannot replace the authoritative final record"
+	)
+	_send_table(
+		host,
+		10,
+		0,
+		_state(host, 0, {"game_over": true, "finished": true, "finish_reason": "Run ended"})
+	)
+	var local_record = _final_record(host, 0, 10)
+	_send_table(host, 10, 0, {"kind": "final_build", "record": local_record})
+	_check(
+		host.final_builds.get_record(0) == local_record
+		and host.final_builds.get_record(1) == accepted,
+		"room host and remote leader retain independent completed builds"
+	)
+	host.transport.sent.clear()
+	_send_table(host, 30, 1, {"kind": "sync_request"})
+	var replayed = _run_build_messages(host)
+	_check(
+		(
+			replayed.size() == 2
+			and replayed.all(func(frame): return frame.recipient == 30 and not frame.unreliable)
+			and replayed[0].message.record == local_record
+			and replayed[1].message.record == accepted
+		),
+		"authenticated teammate resync reliably replays every table's archived final build"
+	)
+	var forwarded_sync = host.transport.sent.any(
+		func(frame): return frame.recipient == 20 and frame.message.get("payload", {}).get("kind") == "sync_request"
+	)
+	_check(
+		forwarded_sync,
+		"archive replay preserves ordinary table resynchronization"
+	)
+	host.transport.sent.clear()
+	_send_table(host, 999, 1, {"kind": "sync_request"})
+	_check(host.transport.sent.is_empty(), "outsider cannot request retained room builds")
+	host._peer_left(20, "Finished table host left.")
+	_check(
+		(
+			host.final_builds.get_record(1) == accepted
+			and host.table_summaries[1].status == "Run ended"
+		),
+		"leader departure retains its completed build and original terminal result"
+	)
+	host.transport.sent.clear()
+	_send_table(host, 10, 0, {"kind": "sync_request"})
+	var archived_after_leave = _run_build_messages(host).any(
+		func(frame): return frame.recipient == 10 and not frame.unreliable and frame.message.record == accepted
+	)
+	_check(
+		archived_after_leave,
+		"active table resync still receives an archived build after its source leader leaves"
+	)
+	var generation: int = host.match_id
+	host._reset_match(10)
+	_check(
+		host.match_id == generation + 1
+		and not host.final_builds.has_table(0) and not host.final_builds.has_table(1),
+		"return to lobby advances match identity and clears retained final builds"
+	)
+	host.transport.sent.clear()
+	_send_table(host, 20, 1, {"kind": "final_build", "record": accepted}, generation)
+	_check(
+		not host.final_builds.has_table(1),
+		"late previous-run record cannot restore cleared archive"
+	)
+	host.free()
+	var abandoned = _host_controller("score")
+	abandoned.active = true
+	_prepare_final_builds(abandoned)
+	var abandoned_record = _final_record(abandoned, 1, 20)
+	abandoned._peer_left(20, "Left before finishing.")
+	abandoned._peer_joined(20)
+	_send_table(abandoned, 20, 1, {"kind": "final_build", "record": abandoned_record})
+	_check(
+		not abandoned.final_builds.has_table(1),
+		"reconnected abandoned leader cannot invent a final build"
+	)
+	abandoned.free()
+
+
+func _final_build_client_delivery():
+	var guest = _controller()
+	guest.active = true
+	guest._local_id = 30
+	guest.transport.id = 30
+	_prepare_final_builds(guest)
+	var record = _final_record(guest, 0, 10)
+	var message = {"kind": "run_build", "match": guest.match_id, "record": record}
+	for sender in [20, 999]:
+		guest._received(sender, message)
+		_check(
+			not guest.final_builds.has_table(0),
+			"room review accepts delivery only from coordinator"
+		)
+	var invalid = message.duplicate(true)
+	invalid.match -= 1
+	guest._received(10, invalid)
+	_check(not guest.final_builds.has_table(0), "guest rejects previous-match review envelope")
+	invalid = message.duplicate(true)
+	invalid.record.match -= 1
+	guest._received(10, invalid)
+	_check(not guest.final_builds.has_table(0), "guest rejects mismatched review record generation")
+	invalid = message.duplicate(true)
+	invalid.record.leader = 20
+	guest._received(10, invalid)
+	_check(
+		not guest.final_builds.has_table(0),
+		"guest rejects record attributed to another table leader"
+	)
+	invalid = message.duplicate(true)
+	invalid.record.cues.players.append(_final_record(guest, 1, 20).cues.players[0])
+	guest._received(10, invalid)
+	_check(not guest.final_builds.has_table(0), "guest rejects cue owner from a different table")
+	invalid = message.duplicate(true)
+	invalid.record.table = 2
+	guest._received(10, invalid)
+	_check(not guest.final_builds.has_table(2), "guest rejects table beyond the current room")
+	guest._received(10, message)
+	_check(
+		guest.final_builds.get_record(0) == record,
+		"room host delivers another table's final build for review"
+	)
+	var departed_record = _final_record(guest, 1, 20)
+	guest.lobby.players[1].connected = false
+	guest._received(10, {"kind": "run_build", "match": guest.match_id, "record": departed_record})
+	_check(
+		guest.final_builds.get_record(1) == departed_record,
+		"archived final build accepts original leader and cue identity after disconnection"
+	)
+	guest.finished = true
+	var panel_before: bool = guest.panel.visible
+	guest._queue_host_ui_nav({"place": "lobby", "section": "", "focus": ""})
+	_check(guest._queued_ui_nav.is_empty() and guest.panel.visible == panel_before,
+		"finished guest keeps its local review when the leader opens the lobby")
+	guest._queued_ui_nav = {"place": "table", "section": "", "focus": ""}
+	guest._try_follow_host_ui_nav()
+	_check(guest._queued_ui_nav.is_empty() and guest.panel.visible == panel_before,
+		"finishing clears already-queued leader navigation without switching the local view")
+	var accepted = record.duplicate(true)
+	guest._received(10, message)
+	message.record.inventory.snacks = 7
+	guest._received(10, message)
+	_check(
+		guest.final_builds.get_record(0) == accepted,
+		"delayed conflicting room delivery preserves first final build"
+	)
+	guest._disconnected("Review fixture disconnect.")
+	_check(
+		not guest.final_builds.has_table(0), "disconnect tears down every retained review record"
+	)
+	guest._received(10, {"kind": "run_build", "match": 5, "record": accepted})
+	_check(
+		not guest.final_builds.has_table(0),
+		"inactive guest cannot be repopulated by late review delivery"
+	)
+	guest.free()
+
+
+func _final_build_publish_without_snapshot():
+	var leader = _controller()
+	leader.active = true
+	leader.finished = true
+	leader.finish_reason = "Run ended"
+	leader.adapter.state.available = true
+	leader.adapter.state.game_over = true
+	leader.table_sync.spawn_blocked = true
+	_prepare_final_builds(leader)
+	leader.cue_inventory.reset(leader._members(leader.table_id))
+	leader._publish_state()
+	_check(
+		not leader._final_build_sent, "missing final inventory remains eligible for capture retry"
+	)
+	leader.table_sync.inventory = _final_record(leader, 1, 20).inventory
+	leader._publish_state()
+	var kinds: Array = leader.transport.sent.map(
+		func(frame): return frame.message.get("payload", {}).get("kind")
+	)
+	var records: Array = leader.transport.sent.filter(
+		func(frame): return frame.message.get("payload", {}).get("kind") == "final_build"
+	)
+	_check(
+		leader._spawn_barrier_held and not kinds.has("snapshot") and records.size() == 1,
+		"held native snapshot does not block independent final inventory publication"
+	)
+	_check(
+		kinds.find("state") >= 0 and kinds.find("state") < kinds.find("final_build"),
+		"finished state is sent before the corresponding final build"
+	)
+	_check(
+		(
+			records.size() == 1
+			and leader._final_build_sent
+			and not records[0].unreliable
+			and records[0].recipient == 10
+		),
+		"remote leader reliably submits final inventory to room host"
+	)
+	var captured: int = leader.table_sync.inventory_captures
+	leader._publish_state()
+	var final_messages = leader.transport.sent.filter(
+		func(frame): return frame.message.get("payload", {}).get("kind") == "final_build"
+	)
+	_check(
+		leader.table_sync.inventory_captures == captured and final_messages.size() == 1,
+		"unchanged finished-state polling neither recaptures nor resends final inventory"
+	)
+	leader._end_table()
+	_check(not leader._final_build_sent, "table teardown clears the final-build publication latch")
+	leader.free()
+	var closing = _controller()
+	closing.active = true
+	closing.finished = true
+	_prepare_final_builds(closing)
+	closing.table_sync.inventory = _final_record(closing, 1, 20).inventory
+	closing.transport.on_send = func(): closing.active = false
+	closing._publish_state()
+	_check(
+		closing.table_sync.inventory_captures == 0 and not closing._final_build_sent,
+		"synchronous session closure during state send prevents stale final-build capture"
+	)
+	closing.free()
+
+
+func _rack_messages(controller, kind: String) -> Array:
+	return controller.transport.sent.filter(func(frame): return frame.message.get("kind") == kind)
+
+
+func _rack_wire(receiver, sender: int, message: Dictionary) -> void:
+	# Exercise the actual controller dispatch after serialization, including the
+	# exact outer schema and coordinator sender checks used by real peers.
+	receiver._received(sender, bytes_to_var(var_to_bytes(message)))
+
+
+func _discussion_guest(id: int, record: Dictionary):
+	var guest = _controller()
+	guest.active = true
+	guest.finished = true
+	guest.transport.id = id
+	guest._local_id = id
+	_prepare_final_builds(guest)
+	guest._end_run_database.id_to_ball["ORB"] = FinalBuildItem.new()
+	_rack_wire(guest, 10, {"kind": "run_build", "match": guest.match_id, "record": record})
+	return guest
+
+
+func _final_rack_discussion_wire():
+	var host = _host_controller("score")
+	host.active = true
+	host.finished = true
+	_prepare_final_builds(host)
+	host._end_run_database.id_to_ball["ORB"] = FinalBuildItem.new()
+	host.table_summaries[0].finished = true
+	var record = _final_record(host, 0, 10)
+	var item = {"data": "ORB", "mixed": "", "base_score": 5, "temp_extra_score": 0,
+		"level": 1, "weight_state": 0, "flaming": false, "fleeting": false,
+		"star_power": false, "shielded": false, "shield_broken": false, "locked": false}
+	record.inventory.build[0] = item
+	record.inventory.build[3] = item.duplicate(true)
+	_check(host._accept_final_build(10, 0, record), "discussion: final archive initializes original native slots")
+	var original = host.final_builds.get_record(0)
+	var guest = _discussion_guest(20, record)
+	var other = _discussion_guest(30, record)
+	var changes: Array = []
+	var rejections: Array = []
+	guest.end_run_discussion_changed.connect(func(table): changes.append(table))
+	other.end_run_discussion_rejected.connect(func(table, action, reason): rejections.append([table, action, reason]))
+	var baseline = host.end_discussion_snapshot(0)
+	guest.request_end_drag(0, 0)
+	var begin: Dictionary = _rack_messages(guest, "rack_request").back().message
+	_check(not _rack_messages(guest, "rack_request").back().unreliable,
+		"discussion: begin uses a reliable coordinator request")
+	host.transport.sent.clear()
+	_rack_wire(host, 20, begin)
+	_check(host.end_discussion_snapshot(0) == baseline,
+		"discussion: a player whose own table is active cannot arrange another final rack")
+	var denial: Dictionary = _rack_messages(host, "rack_state").back()
+	_check(denial.recipient == 20 and not denial.unreliable and not denial.message.accepted,
+		"discussion: rejected begin reliably returns the current arrangement only to its actor")
+	host.table_summaries[1].finished = true
+	for actor in [999]:
+		_rack_wire(host, actor, begin)
+		_check(host.end_discussion_snapshot(0) == baseline, "discussion: outsiders cannot edit archived tables")
+	var stale = begin.duplicate(true)
+	stale.match -= 1
+	_rack_wire(host, 20, stale)
+	stale = begin.duplicate(true)
+	stale.table = 1
+	_rack_wire(host, 20, stale)
+	_check(host.end_discussion_snapshot(0) == baseline,
+		"discussion: previous matches and tables without archives cannot begin a drag")
+	# Two independent viewers submit against revision zero before either sees a
+	# reply. The coordinator must choose one holder and return rollback to the other.
+	other.request_end_drag(0, 3)
+	var competing: Dictionary = _rack_messages(other, "rack_request").back().message
+	host.transport.sent.clear()
+	_rack_wire(host, 20, begin)
+	var accepted: Dictionary = _rack_messages(host, "rack_state").back()
+	_check(accepted.recipient == 0 and not accepted.unreliable and accepted.message.accepted,
+		"discussion: an accepted grab reliably publishes to every viewer")
+	_rack_wire(guest, 30, accepted.message)
+	_check(guest.end_discussion_snapshot(0) == baseline, "discussion: clients reject rack states from a non-coordinator")
+	_rack_wire(guest, 10, accepted.message)
+	_rack_wire(other, 10, accepted.message)
+	var held = host.end_discussion_snapshot(0)
+	_check(held.drag.actor == 20 and held.drag.slot == 0 and held.drag.seq == 0
+		and guest.end_discussion_snapshot(0) == held and changes == [0],
+		"discussion: serialized accepted begin reaches the actual client schema and change signal")
+	_rack_wire(host, 30, competing)
+	denial = _rack_messages(host, "rack_state").back()
+	_rack_wire(other, 10, denial.message)
+	_check(host.end_discussion_snapshot(0) == held and other.end_discussion_snapshot(0) == held
+		and denial.recipient == 30 and rejections.size() == 1 and rejections[0][1] == "begin",
+		"discussion: simultaneous stale grab rolls back through explicit rejection even at an unchanged revision")
+	guest.transport.sent.clear()
+	guest.move_end_drag(0, held.drag.token, Vector2(-0.25, 1.5))
+	var motion_frame: Dictionary = _rack_messages(guest, "rack_motion").back()
+	var motion: Dictionary = motion_frame.message
+	_check(motion_frame.unreliable and motion.position == Vector2(0, 1),
+		"discussion: visible drag motion is clamped and uses the disposable channel")
+	var forged = motion.duplicate(true)
+	forged.actor = 30
+	_rack_wire(host, 20, forged)
+	_check(host.end_discussion_snapshot(0) == held, "discussion: motion cannot impersonate another actor")
+	forged = motion.duplicate(true)
+	forged.token += 1
+	_rack_wire(host, 20, forged)
+	_check(host.end_discussion_snapshot(0) == held, "discussion: motion requires the coordinator's current hold token")
+	host.transport.sent.clear()
+	_rack_wire(host, 20, motion)
+	var forwarded = _rack_messages(host, "rack_motion")
+	_check(forwarded.size() == 2 and forwarded.all(func(frame): return frame.unreliable),
+		"discussion: the coordinator relays motion to both connected remote viewers")
+	for viewer in [guest, other]:
+		_rack_wire(viewer, 10, motion)
+		_check(viewer.end_discussion_snapshot(0).drag.position == Vector2(0, 1)
+			and viewer.end_discussion_snapshot(0).drag.seq == motion.seq,
+			"discussion: a second viewer sees the held ball before the reliable drop")
+	_rack_wire(guest, 10, accepted.message)
+	_check(guest.end_discussion_snapshot(0).drag.seq == motion.seq,
+		"discussion: reliable begin resync cannot rewind a newer motion sample")
+	guest.drop_end_drag(0, held.drag.token, 99)
+	_rack_wire(host, 20, _rack_messages(guest, "rack_request").back().message)
+	var invalid_drop: Dictionary = _rack_messages(host, "rack_state").back().message
+	_rack_wire(guest, 10, invalid_drop)
+	_check(not invalid_drop.accepted and invalid_drop.action == "drop"
+		and guest.end_discussion_snapshot(0).drag.token == held.drag.token,
+		"discussion: invalid drop returns its still-owned token so the view can cancel or retry")
+	guest.drop_end_drag(0, held.drag.token, 5)
+	var drop_frame: Dictionary = _rack_messages(guest, "rack_request").back()
+	_check(not drop_frame.unreliable, "discussion: drop is a reliable barrier after disposable motion")
+	_rack_wire(host, 20, drop_frame.message)
+	var dropped: Dictionary = _rack_messages(host, "rack_state").back().message
+	for viewer in [guest, other]:
+		_rack_wire(viewer, 10, dropped)
+		_rack_wire(viewer, 10, motion)
+		_check(viewer.end_discussion_snapshot(0).drag.is_empty()
+			and viewer.end_discussion_snapshot(0).order[5] == 0
+			and viewer.end_discussion_snapshot(0).order[0] == 5,
+			"discussion: final swap preserves the displaced empty identity and late motion cannot resurrect the drag")
+	_rack_wire(host, 20, motion)
+	_check(host.end_discussion_snapshot(0).drag.is_empty(), "discussion: host also rejects post-drop motion")
+	_check(host.final_builds.get_record(0) == original and guest.final_builds.get_record(0) == original,
+		"discussion: shared rearrangement never mutates the captured final inventory")
+	guest.reset_end_discussion(0)
+	_rack_wire(host, 20, _rack_messages(guest, "rack_request").back().message)
+	var reset_message: Dictionary = _rack_messages(host, "rack_state").back().message
+	_rack_wire(guest, 10, reset_message)
+	_rack_wire(other, 10, reset_message)
+	_check(guest.end_discussion_snapshot(0).order == baseline.order,
+		"discussion: reliable reset restores every original native slot")
+	other.request_end_drag(0, 3)
+	_rack_wire(host, 30, _rack_messages(other, "rack_request").back().message)
+	var other_hold: Dictionary = _rack_messages(host, "rack_state").back().message
+	_rack_wire(guest, 10, other_hold)
+	_check(guest.end_discussion_snapshot(0).drag.actor == 30, "discussion: the next viewer can acquire the released rack")
+	host.transport.sent.clear()
+	host._send_final_builds(20)
+	var recovery = host.transport.sent
+	_check(recovery.size() == 2 and recovery[0].message.kind == "run_build"
+		and recovery[1].message.kind == "rack_state" and not recovery[1].unreliable
+		and recovery[1].message.state == host.end_discussion_snapshot(0),
+		"discussion: authenticated resync orders the immutable archive before its current held arrangement")
+	var held_before_resync = guest.end_discussion_snapshot(0)
+	for frame in recovery:
+		_rack_wire(guest, 10, frame.message)
+	_check(guest.end_discussion_snapshot(0) == held_before_resync,
+		"discussion: replaying archive and state does not reset an already held viewer's arrangement")
+	host.transport.sent.clear()
+	host._peer_left(30, "Review viewer disconnected.")
+	var release: Dictionary = _rack_messages(host, "rack_state").back()
+	_rack_wire(guest, 10, release.message)
+	_rack_wire(guest, 10, other_hold)
+	_check(not release.unreliable and release.message.action == "disconnect"
+		and guest.end_discussion_snapshot(0).drag.is_empty(),
+		"discussion: disconnect reliably releases ownership and delayed begin cannot resurrect it")
+	_check(host.final_builds.get_record(0) == original, "discussion: disconnect retains the untouched final archive")
+	var departed_request = {"kind": "rack_request", "match": host.match_id, "table": 0,
+		"request": {"action": "begin", "slot": 3, "revision": host.end_discussion_snapshot(0).revision}}
+	_rack_wire(host, 30, departed_request)
+	_check(host.end_discussion_snapshot(0).drag.is_empty(),
+		"discussion: a disconnected viewer cannot reacquire a hold using its former identity")
+	host._end_table()
+	_rack_wire(host, 20, begin)
+	_check(host.end_discussion_snapshot(0).is_empty() and host._end_motion_sent.is_empty(),
+		"discussion: teardown clears presentation state and ignores previous-session edits")
+	for controller in [guest, other, host]:
+		controller.free()
 
 
 func _return_vote_lifecycle():

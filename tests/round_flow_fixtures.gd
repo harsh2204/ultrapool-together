@@ -1,6 +1,8 @@
 extends RefCounted
 
 const PlayerInventory = preload("../mod/player_inventory_sync.gd")
+const EndRunState = preload("../mod/end_run_state.gd")
+const EndRunDiscussion = preload("../mod/end_run_discussion.gd")
 const CONTROLLER_FIELDS = [
 	"active",
 	"_local_id",
@@ -12,21 +14,36 @@ const CONTROLLER_FIELDS = [
 	"snapshot_id",
 	"last_guest_snapshot",
 	"_last_phase",
+	"_last_state_sig",
 	"_guest_phase",
 	"finished",
 	"finish_reason",
 	"saw_table",
 	"latest_state",
 	"last_shop_state",
-	"table_summaries"
+	"table_summaries",
+	"final_builds",
+	"end_discussion",
+	"_end_motion_sent",
+	"_final_build_sent",
+	"cue_inventory",
+	"lobby_model"
 ]
+
+
+class ReviewLobby:
+	extends RefCounted
+	var state: Dictionary = {}
+
+	func snapshot() -> Dictionary:
+		return state.duplicate(true)
 
 
 class Wire:
 	extends Node
 	var is_host = true
 	var id = 1
-	var room_code = "UP11-ROUND-FLOW"
+	var room_code = "UP12-ROUND-FLOW"
 	var packets: Array = []
 
 	func local_id() -> int:
@@ -68,6 +85,7 @@ var ready_request: Dictionary = {}
 var snack_fixture: RefCounted
 var _mod: Node
 var _wire: Wire
+var _trace_count = 0
 
 
 func check_host_shop_drag(mod: Node, capture: Callable):
@@ -446,8 +464,11 @@ func replay_guest(mod: Node, capture: Callable) -> Array[Dictionary]:
 	if snack_fixture != null:
 		await snack_fixture.check_routed_guest_round(mod, _check, capture)
 	var ui = mod.get_node("/root/UIManager")
+	_trace_stage("guest-settings-before-open")
 	ui.open_settings()
+	_trace_stage("guest-settings-after-open-before-delay")
 	await _delay(0.3)
+	_trace_stage("guest-settings-after-open-delay")
 	_check(
 		ui.settings_menu.is_open and ui.settings_menu.can_process(),
 		"round flow: guest native settings open and process"
@@ -460,18 +481,32 @@ func replay_guest(mod: Node, capture: Callable) -> Array[Dictionary]:
 		"round flow: guest settings retain native in-run actions"
 	)
 	_check(not mod.table_sync.ready_for_input(), "round flow: guest settings block shot input")
+	_trace_stage("guest-settings-before-close")
 	ui.settings_menu.just_opened_or_closed = false
 	ui.settings_menu.instant_close_menu()
 	ui.update_pause()
+	_trace_stage("guest-settings-after-close-before-delay")
 	await _delay(0.1)
+	_trace_stage("guest-settings-after-close-delay")
 	_check(mod.table_sync.ready_for_input(), "round flow: closing guest settings restores aiming")
 	for phase in ["win", "loss"]:
 		if not phases.has(phase):
 			_check(false, "round flow: native " + phase + " traffic is available")
 			continue
+		_mod.final_builds.reset(_mod.match_id)
+		_mod.end_discussion.reset(_mod.match_id)
+		_trace_stage("guest-" + phase + "-before-review-session")
+		_mod.end_run_review.begin_session()
+		_trace_stage("guest-" + phase + "-before-terminal-replay")
 		_replay(phases[phase])
+		_trace_stage("guest-" + phase + "-after-terminal-replay-before-delay")
 		await _delay(0.6)
+		_trace_stage("guest-" + phase + "-after-terminal-delay")
 		var ending = mod.get_node("/root/UIManager").game_over_menu
+		await _check_review("guest-" + phase, endings[phase].inventory, capture)
+		_trace_stage("guest-" + phase + "-before-continue")
+		mod.end_run_review._continue.pressed.emit()
+		_trace_stage("guest-" + phase + "-after-continue")
 		_check(ending.is_open and ending.canvas.visible, "round flow: guest sees native " + phase)
 		_check(
 			ending.win == endings[phase].won and ending.score_label.text == endings[phase].score,
@@ -508,11 +543,18 @@ func replay_guest(mod: Node, capture: Callable) -> Array[Dictionary]:
 			"round flow: guest " + phase + " native summary renders the host passives"
 		)
 		await capture.call("69-guest-" + phase, "Guest · native run " + phase + " result")
+	_trace_stage("guest-before-staggered-review")
+	await _check_staggered_review(capture)
+	_trace_stage("guest-after-staggered-review")
 	ui.game_over_menu.just_opened_or_closed = false
 	ui.game_over_menu.instant_close_menu()
 	ui.update_pause()
+	mod.end_run_review.end_session()
+	_trace_stage("guest-teardown-settings-before-open")
 	ui.open_settings()
+	_trace_stage("guest-teardown-settings-after-open-before-delay")
 	await _delay(0.2)
+	_trace_stage("guest-teardown-settings-after-open-delay")
 	_check(ui.settings_menu.is_open, "round flow: teardown starts with native settings open")
 	mod.shop_sync.end_session()
 	mod.adapter.end_session()
@@ -542,16 +584,24 @@ func _cold_loss(capture: Callable):
 	_mod._guest_phase = []
 	_mod.last_guest_snapshot = 0
 	_mod.finished = false
+	_mod.final_builds.reset(_mod.match_id)
+	_mod.end_discussion.reset(_mod.match_id)
+	_mod.end_run_review.begin_session()
 	_check(
 		_mod.table_sync.begin_guest(run_config),
 		"round flow: cold guest starts without a previous native shop"
 	)
 	_mod.shop_sync.begin_session(_mod)
 	_mod.adapter.begin_session(_mod)
+	_trace_stage("guest-cold-loss-before-terminal-replay")
 	_replay(phases.loss)
+	_trace_stage("guest-cold-loss-after-terminal-replay-before-delay")
 	await _delay(0.6)
+	_trace_stage("guest-cold-loss-after-terminal-delay")
 	var game = global_node.gameManager
 	var ending = _mod.get_node("/root/UIManager").game_over_menu
+	await _check_review("guest-cold-loss", endings.loss.inventory, capture)
+	_mod.end_run_review._continue.pressed.emit()
 	_check(
 		global_node.shopManager == game.shop and not game.shop.is_open and not game.shop.visible,
 		"round flow: cold replica retains an initialized closed native shop"
@@ -585,6 +635,7 @@ func _cold_loss(capture: Callable):
 	_mod.shop_sync.end_session()
 	_mod.adapter.end_session()
 	_mod.table_sync.end_guest()
+	_mod.end_run_review.end_session()
 	_check(
 		global_node.shopManager == null,
 		"round flow: cold guest teardown restores the missing shop reference"
@@ -648,8 +699,616 @@ func _record_ending(phase: String, capture: Callable):
 		"balls_rendered": card.get_node("%Balls").get_child_count(),
 		"passives_rendered": card.get_node("%Passives").get_child_count()
 	}
+	_prepare_end_review()
 	_phase(phase)
+	await _check_review("host-" + phase, endings[phase].inventory, capture)
+	_mod.end_run_review._continue.pressed.emit()
+	_check(menu.canvas.visible, "after hours: Continue restores the original native card")
 	await capture.call("68-host-" + phase, "Host · native run " + phase + " result")
+	_mod.end_run_review.end_session()
+
+
+func _prepare_end_review() -> void:
+	# Start the summary in its real pre-terminal state, then let _phase publish
+	# native adapter results through _record_summary and the final-build route.
+	var model = ReviewLobby.new()
+	model.state = _mod.lobby.duplicate(true)
+	_mod.lobby_model = model
+	_mod.table_summaries = [{
+		"table": 0, "leader_id": 1, "score": 0.0, "base_score": 0.0,
+		"bounty_shot": 0, "shots_used": 0, "finished": false, "status": "Playing",
+		"round": 1, "elapsed_ms": 0
+	}]
+	_mod.final_builds.reset(_mod.match_id)
+	_mod.end_discussion.reset(_mod.match_id)
+	_mod._final_build_sent = false
+	_mod._last_state_sig = []
+	_mod.cue_inventory = load(_mod.get_script().resource_path.get_base_dir().path_join("cue_inventory.gd")).new()
+	_mod.cue_inventory.reset(_mod._members(0, false))
+	_mod.end_run_review.begin_session()
+
+
+func _check_review(role: String, inventory: Dictionary, capture: Callable) -> void:
+	var review = _mod.end_run_review
+	_trace_stage(role + "-before-review-refresh")
+	review.refresh()
+	_trace_stage(role + "-after-review-refresh-before-delay")
+	await _delay(0.1)
+	_trace_stage(role + "-after-review-delay")
+	var ui = _mod.get_node("/root/UIManager")
+	_check(review.is_open(), "after hours: " + role + " opens the final rack")
+	_check(
+		ui.game_over_menu.is_open and not ui.game_over_menu.canvas.visible
+		and ui.active_popups.has(ui.game_over_menu),
+		"after hours: " + role + " covers native results without replaying finalization"
+	)
+	_check(
+		_mod.final_builds.get_record(0).get("inventory", {}) == inventory,
+		"after hours: " + role + " reviews the production final inventory"
+	)
+	_check(not review._continue.disabled, "after hours: final summary and build enable Continue")
+	_check_review_inventory(inventory, role)
+	var first_balls = _review_ball_nodes(review._rack)
+	review.refresh()
+	_check(_review_ball_nodes(review._rack) == first_balls,
+		"after hours: repeated summary retains native ball nodes")
+	_trace_stage(role + "-before-review-capture")
+	await capture.call("after-hours-" + role, "After-hours rack · " + role)
+	_trace_stage(role + "-after-review-capture")
+
+
+func _review_ball_nodes(rack: Control) -> Dictionary:
+	var result: Dictionary = {}
+	for original in rack.items:
+		result[original] = rack.items[original].node
+	return result
+
+
+func _check_native_marker_alignment(rack: Control, context: String, held_original: int = -1) -> void:
+	# Read the actual native marker transforms after Container layout. Comparing
+	# against the component's cached slot positions would miss a stale 8px inset.
+	var base = "PanelContainer/VBoxContainer/TextureRect"
+	var inventory_node = rack.native_root.get_node(base + "/Node2D/Inventory")
+	var markers: Array = inventory_node.get_node("Triangle").get_children()
+	markers.append_array(inventory_node.get_node("Reserve").get_children())
+	for display_slot in range(mini(16, rack.displayed_order.size())):
+		var original: int = rack.displayed_order[display_slot]
+		var marker_position: Vector2 = markers[display_slot].global_position
+		_check(rack.slots[display_slot].button.get_global_rect().get_center().distance_to(marker_position) < 0.1,
+			"after hours: " + context + " native slot hit target follows its real marker")
+		if original != held_original and rack.items.has(original):
+			_check(rack.items[original].node.global_position.distance_to(marker_position) < 0.1,
+				"after hours: " + context + " undragged ball is centered on its real native marker")
+	var snack_markers: Array = rack.native_root.get_node(base + "/PassivesInfo").get_children()
+	for index in rack.passive_items:
+		_check(rack.passive_items[index].node.global_position.distance_to(snack_markers[index].global_position) < 0.1,
+			"after hours: " + context + " snack is centered on its real native marker")
+	for index in rack.cube_items:
+		_check(rack.cube_items[index].node.global_position.distance_to(rack.cube_slots[index].global_position) < 0.1,
+			"after hours: " + context + " supplemental cube is centered on its marker")
+
+
+func _check_review_inventory(inventory: Dictionary, context: String) -> void:
+	var rack = _mod.end_run_review._rack
+	var database = _mod.get_node("/root/BallDatabase")
+	_check(rack.native_root != null and rack.native_root.get_script() == null,
+		"after hours: " + context + " uses the scriptless native final-build scene")
+	_check_native_marker_alignment(rack, context)
+	_check(rack.slots.size() == inventory.build.size()
+		and rack.displayed_order == range(inventory.build.size()),
+		"after hours: " + context + " preserves every original rack and reserve slot")
+	var occupied_build = inventory.build.filter(func(item): return item != null)
+	_check(rack.items.size() == occupied_build.size(),
+		"after hours: " + context + " preserves occupied slots and empty holes")
+	# Independent native 0.17.2 ContinueRunInfo scene centers, relative to its
+	# 600x376 background: ten triangular slots, then six reserve slots.
+	var native_centers = [Vector2(301, 276), Vector2(261, 220), Vector2(337, 220),
+		Vector2(225, 168), Vector2(301, 168), Vector2(373, 168), Vector2(185, 112),
+		Vector2(261, 112), Vector2(341, 112), Vector2(413, 112), Vector2(428, 268),
+		Vector2(492, 268), Vector2(556, 268), Vector2(428, 332), Vector2(492, 332),
+		Vector2(556, 332)]
+	var background = rack.native_root.get_node("PanelContainer/VBoxContainer/TextureRect")
+	var inverse: Transform2D = background.get_global_transform().affine_inverse()
+	for index in range(mini(16, rack.slots.size())):
+		_check((inverse * rack.slot_center(index)).is_equal_approx(native_centers[index]),
+			"after hours: " + context + " slot " + str(index) + " matches native triangle/reserve geometry")
+	for index in inventory.build.size():
+		var state = inventory.build[index]
+		if state == null:
+			_check(not rack.items.has(index) and rack.slots[index].button.tooltip_text == "Empty slot",
+				"after hours: " + context + " null slot " + str(index) + " stays empty")
+			continue
+		if not _check(rack.items.has(index), "after hours: original ball identity is retained"):
+			continue
+		var item: Dictionary = rack.items[index]
+		_check(item.state == state and item.node.position.is_equal_approx(rack.slots[index].position),
+			"after hours: " + context + " ball stays in its captured native slot")
+		_check_review_ball(item, state, context)
+		var expected = database.id_to_ball[state.data].get_formatted_name()
+		if state.mixed != "":
+			expected += " + " + database.id_to_ball[state.mixed].get_formatted_name()
+		_check(rack.slots[index].button.tooltip_text.begins_with(expected + "\n"),
+			"after hours: native localized ball name remains available for inspection")
+	var passive_centers = [Vector2(500, 120), Vector2(556, 120), Vector2(500, 172), Vector2(556, 172)]
+	_check(rack.passive_slots.size() == 4, "after hours: all four native snack positions remain")
+	for index in 4:
+		_check((inverse * rack.passive_slots[index].global_position).is_equal_approx(passive_centers[index]),
+			"after hours: " + context + " snack slot matches native geometry")
+		var state = inventory.passives[index]
+		_check(rack.passive_items.has(index) == (state != null),
+			"after hours: " + context + " preserves the exact snack slot, including empties")
+		if state != null and rack.passive_items.has(index):
+			var item: Dictionary = rack.passive_items[index]
+			_check(item.state == state and item.item.texture == database.id_to_passive[state.data].texture,
+				"after hours: native snack art retains the captured identity")
+			_check(item.node.global_position.is_equal_approx(rack.passive_slots[index].global_position),
+				"after hours: snack art occupies its native slot")
+	_check(rack.cube_slots.size() == inventory.cubes.size(),
+		"after hours: supplemental cube strip preserves its original slot count")
+	for index in inventory.cubes.size():
+		var state = inventory.cubes[index]
+		_check(rack.cube_items.has(index) == (state != null),
+			"after hours: supplemental cubes preserve identities and empty slots")
+		if state != null and rack.cube_items.has(index):
+			_check_review_ball(rack.cube_items[index], state, context + " cube")
+
+
+func _check_review_ball(item: Dictionary, state: Dictionary, context: String) -> void:
+	var database = _mod.get_node("/root/BallDatabase")
+	var native_item = BallItem.new()
+	native_item.data = database.id_to_ball[state.data]
+	if state.mixed != "":
+		native_item.mixed_data = database.id_to_ball[state.mixed]
+	for field in PlayerInventory.NUMBERS:
+		native_item.set(field, state[field])
+	for field in PlayerInventory.FLAGS:
+		native_item.set(field, state[field])
+	var expected_score = native_item.get_score()
+	var expected_text = _mod.get_node("/root/Global").format_number(absi(expected_score), 4, 0)
+	if expected_score < 0:
+		expected_text = "-" + expected_text
+	_check(item.points == expected_score and item.label.text == expected_text
+		and item.label.is_visible_in_tree(),
+		"after hours: " + context + " always shows the captured native ball points")
+	_check_review_label(item.label, context + " points")
+	_check(item.sphere.material.get_shader_parameter("tex") == database.id_to_ball[state.data].texture,
+		"after hours: native sphere material uses the captured ball atlas")
+	if state.mixed != "":
+		_check(item.sphere.material.get_shader_parameter("mixed_tex") == database.id_to_ball[state.mixed].texture,
+			"after hours: mixed ball keeps both native atlases")
+
+
+func _check_review_label(label: Label, context: String) -> void:
+	_check(
+		label.get_line_count() > 0
+		and label.get_visible_line_count() >= label.get_line_count()
+		and label.size.y + 1.0 >= label.get_line_count() * label.get_line_height(),
+		"after hours: " + context + " renders every text line"
+	)
+
+
+func _check_review_bounds(context: String) -> void:
+	var review = _mod.end_run_review
+	var bounds: Rect2 = review._root.get_global_rect().grow(1.0)
+	for label in [review._heading, review._status, review._table_title, review._stats,
+		review._discussion_hint, review._cue_label]:
+		if not label.visible:
+			continue
+		_check_review_label(label, context)
+		_check(bounds.encloses(label.get_global_rect()), "after hours: " + context + " heading fits viewport")
+	for button in review._tabs + [review._continue, review._reset]:
+		if not button.visible:
+			continue
+		_check(
+			bounds.encloses(button.get_global_rect())
+			and button.size.x + 1.0 >= button.get_combined_minimum_size().x,
+			"after hours: " + context + " navigation text and control fit viewport"
+		)
+
+
+func _record_from_ending(phase: String) -> Dictionary:
+	for packet in phases.get(phase, []):
+		var message: Dictionary = bytes_to_var(packet.bytes)
+		if message.get("kind") == "run_build":
+			return message.record.duplicate(true)
+	return {}
+
+
+func _deliver_review(message: Dictionary) -> void:
+	# Reuse the normal serialized coordinator -> guest receive path. This is a
+	# deterministic room-presentation fixture, not a second running native table.
+	_replay([{"recipient": 2, "bytes": var_to_bytes(message)}])
+
+
+func _check_staggered_review(capture: Callable) -> void:
+	var own_record = _record_from_ending("loss")
+	var other_record = _record_from_ending("win")
+	if not _check(
+		not own_record.is_empty() and not other_record.is_empty(),
+		"after hours: staggered room uses both production native ending records"
+	):
+		return
+	_check(
+		own_record.inventory.build != other_record.inventory.build,
+		"after hours: native purchase and fresh-run records provide distinct racks"
+	)
+	var saved_lobby: Dictionary = _mod.lobby.duplicate(true)
+	var saved_archive = _mod.final_builds
+	var saved_discussion = _mod.end_discussion
+	var saved_motion: Dictionary = _mod._end_motion_sent.duplicate(true)
+	var native_inventory = PlayerInventory.capture(_mod.get_node("/root/Global").gameManager.player_info)
+	var room: Dictionary = saved_lobby.duplicate(true)
+	room.table_count = 2
+	room.match_mode = "score"
+	room.players.append({"id": 3, "name": "Night Shift", "table": 1, "slot": 0, "connected": true})
+	var own_summary: Dictionary = room.table_summaries[0].duplicate(true)
+	var other_summary: Dictionary = own_summary.duplicate(true)
+	other_summary.merge({
+		"table": 1, "leader_id": 3, "finished": false, "run_won": false,
+		"status": "Playing", "score": own_summary.score + 10.0,
+		"base_score": own_summary.score + 10.0
+	}, true)
+	room.table_summaries = [own_summary, other_summary]
+	other_record.table = 1
+	other_record.leader = 3
+	var cue: Dictionary = other_record.cues.players[0].duplicate(true)
+	cue.id = 3
+	other_record.cues.players = [cue]
+	_mod.final_builds = EndRunState.new()
+	_mod.final_builds.reset(_mod.match_id)
+	_mod.end_discussion = EndRunDiscussion.new()
+	_mod.end_discussion.reset(_mod.match_id)
+	_mod._end_motion_sent = {}
+	var review = _mod.end_run_review
+	review.begin_session()
+	_deliver_review({"kind": "lobby_state", "lobby": room})
+	_deliver_review({"kind": "run_build", "match": _mod.match_id, "record": own_record})
+	await _delay(0.1)
+	_check(review._tabs.filter(func(button): return button.visible).size() == 2,
+		"after hours: both room tables have review controls")
+	review._tabs[1].pressed.emit()
+	review._tabs[1].grab_focus()
+	await _delay(0.1)
+	_check(
+		review._selected == 1 and review._empty.visible
+		and review._empty.text == "Still playing. Its final build will appear here."
+		and review._continue.disabled and is_zero_approx(review._felt.chalk),
+		"after hours: selecting an unfinished table waits without a winner or early exit"
+	)
+	_check_review_bounds("waiting table")
+	_check_review_label(review._empty, "waiting table status")
+	await capture.call("after-hours-two-tables-waiting", "After-hours rack · browsing the table still playing")
+	other_summary.finished = true
+	other_summary.status = "Finished"
+	_deliver_review({"kind": "lobby_state", "lobby": room})
+	_check(
+		review._selected == 1 and review._empty.text == "Setting out the final rack…"
+		and review._continue.disabled,
+		"after hours: terminal summary preserves selection and waits for its delayed build"
+	)
+	var chalk_tween = review._chalk_tween
+	await _delay(0.75)
+	_check(
+		is_equal_approx(review._felt.chalk, 0.9)
+		and chalk_tween != null and not chalk_tween.is_running()
+		and review._tabs[1].text == "Table 2 · chalked"
+		and review._tabs[0].text == "Table 1"
+		and review._heading.text == "Table 2 leaves its mark.",
+		"after hours: final score leader receives one completed finite chalk flourish"
+	)
+	_deliver_review({"kind": "run_build", "match": _mod.match_id, "record": other_record})
+	await _delay(0.1)
+	_check(
+		review._selected == 1 and not review._empty.visible and not review._continue.disabled
+		and _mod.get_viewport().gui_get_focus_owner() == review._tabs[1],
+		"after hours: delayed build hydrates the selected table and preserves focus"
+	)
+	_check_review_inventory(other_record.inventory, "second table")
+	review._tabs[0].pressed.emit()
+	await _delay(0.1)
+	_check_review_inventory(own_record.inventory, "first table after switching")
+	review._tabs[1].pressed.emit()
+	await _delay(0.1)
+	_check_review_inventory(other_record.inventory, "second table after switching back")
+	var retained_balls = _review_ball_nodes(review._rack)
+	_deliver_review({"kind": "lobby_state", "lobby": room})
+	_check(
+		_review_ball_nodes(review._rack) == retained_balls and review._chalk_tween == chalk_tween
+		and is_equal_approx(review._felt.chalk, 0.9) and not chalk_tween.is_running(),
+		"after hours: unchanged results retain native balls and cannot restart the chalk tween"
+	)
+	_check_review_bounds("final second table")
+	await capture.call("after-hours-two-tables-final", "After-hours rack · Table 2's final build and settled chalk")
+	await _check_shared_native_drag(other_record, capture)
+	review._continue.pressed.emit()
+	await _delay(0.1)
+	var menu = _mod.get_node("/root/UIManager").game_over_menu
+	_check(
+		not review.is_open() and menu.is_open and menu.canvas.visible,
+		"after hours: two-table Continue restores the native result card"
+	)
+	_check(
+		PlayerInventory.capture(_mod.get_node("/root/Global").gameManager.player_info) == native_inventory,
+		"after hours: inspecting both captured builds never mutates native inventory"
+	)
+	await capture.call("after-hours-two-tables-continue", "After-hours rack · native controls restored after both builds arrive")
+	review.end_session()
+	_mod.final_builds = saved_archive
+	_mod.end_discussion = saved_discussion
+	_mod._end_motion_sent = saved_motion
+	_mod.lobby = saved_lobby
+
+
+func _relay_rack_requests(host_model: RefCounted, stale_drop: bool = false) -> Array:
+	# One native process, two independent discussion models. Deliver actual
+	# serialized guest output through the production room-host receive boundary.
+	var requests = _wire.drain()
+	var guest_model = _mod.end_discussion
+	var guest_actor = _mod._local_id
+	var guest_motion: Dictionary = _mod._end_motion_sent
+	var summaries: Array = _mod.table_summaries
+	var blocked: bool = _mod.is_blocking_signals()
+	_mod.set_block_signals(true)
+	_mod.end_discussion = host_model
+	_mod._end_motion_sent = {}
+	_mod._local_id = 1
+	_mod.table_summaries = _mod.lobby.table_summaries
+	_wire.id = 1
+	_wire.is_host = true
+	for packet in requests:
+		var message: Dictionary = bytes_to_var(packet.bytes)
+		if packet.recipient == 1 and message.get("kind") in ["rack_request", "rack_motion"]:
+			if stale_drop and message.get("request", {}).get("action") == "drop":
+				# A stale reliable action must release its optimistic hold when
+				# rejected; the server still owns the real hold until cancel arrives.
+				message.request.revision -= 1
+				message = bytes_to_var(var_to_bytes(message))
+			_mod._received(2, message)
+	var replies = _wire.drain()
+	_mod.end_discussion = guest_model
+	_mod._end_motion_sent = guest_motion
+	_mod._local_id = guest_actor
+	_mod.table_summaries = summaries
+	_wire.id = 2
+	_wire.is_host = false
+	_mod.set_block_signals(blocked)
+	_replay(replies)
+	return replies
+
+
+func _rack_action_count(packets: Array, action: String) -> int:
+	var count = 0
+	for packet in packets:
+		var message: Dictionary = bytes_to_var(packet.bytes)
+		if message.get("kind") == "rack_request" and message.get("request", {}).get("action") == action:
+			count += 1
+	return count
+
+
+func _apply_rack_peer(peer: RefCounted, packets: Array, rack: Control, table: int) -> void:
+	# The coordinator's broadcast bytes also feed an independent second renderer.
+	# This proves shared-state presentation, not Steam delivery to another machine.
+	for packet in packets:
+		if packet.recipient != 2:
+			continue
+		var message: Dictionary = bytes_to_var(packet.bytes)
+		if message.get("kind") == "rack_state":
+			_check(peer.apply_state(message.table, message.state),
+				"after hours: second viewer accepts the host's ordered rack state")
+		elif message.get("kind") == "rack_motion":
+			_check(peer.apply_motion(message.table, message.actor, message.token, message.seq, message.position),
+				"after hours: second viewer accepts the shared held-ball position")
+	rack.apply_discussion(peer.snapshot(table), 3, "Guest")
+
+
+func _review_pointer_button(position: Vector2, pressed: bool) -> void:
+	var event = InputEventMouseButton.new()
+	event.position = position
+	event.global_position = position
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed else 0
+	event.pressed = pressed
+	_mod.get_viewport().push_input(event, true)
+
+
+func _review_pointer_motion(position: Vector2) -> void:
+	var event = InputEventMouseMotion.new()
+	event.position = position
+	event.global_position = position
+	event.button_mask = MOUSE_BUTTON_MASK_LEFT
+	_mod.get_viewport().push_input(event, true)
+
+
+func _check_shared_native_drag(record: Dictionary, capture: Callable) -> void:
+	var review = _mod.end_run_review
+	var rack = review._rack
+	var table: int = record.table
+	var archive_before = _mod.final_builds.get_record(table)
+	var info = _mod.get_node("/root/Global").gameManager.player_info
+	var native_before = PlayerInventory.capture(info)
+	var ball_nodes = _review_ball_nodes(rack)
+	var occupied = rack.items.keys()
+	if not _check(occupied.size() >= 2, "after hours: shared drag has two captured native balls"):
+		return
+	occupied.sort()
+	var source: int = occupied[0]
+	var target: int = occupied[1]
+	var initial_order: Array = rack.displayed_order.duplicate()
+	var host_model = EndRunDiscussion.new()
+	host_model.reset(_mod.match_id)
+	host_model.ensure_table(table, record.inventory.build)
+	var peer_model = EndRunDiscussion.new()
+	peer_model.reset(_mod.match_id)
+	peer_model.ensure_table(table, record.inventory.build)
+	var peer_rack = rack.get_script().new()
+	review._root.add_child(peer_rack)
+	peer_rack.setup(_mod)
+	peer_rack.position = review._root.get_global_transform().affine_inverse() * rack.global_position
+	peer_rack.size = rack.size
+	peer_rack.present(record)
+	await _delay(0.1)
+	_check_native_marker_alignment(peer_rack, "fresh peer view after its first visible layout")
+	peer_rack.hide()
+	peer_rack.apply_discussion(peer_model.snapshot(table), 3)
+	_wire.drain()
+	_trace_stage("shared-native-rack-before-pickup")
+	_review_pointer_button(rack.slot_center(source), true)
+	_check(rack._local_slot == source and rack._pointer_held and rack.items[source].node.z_index == 100,
+		"after hours: native GUI press picks up a ball immediately before host acknowledgement")
+	var replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(_mod.end_discussion.snapshot(table).drag.get("actor") == 2
+		and peer_model.snapshot(table) == host_model.snapshot(table),
+		"after hours: production host grants the same hold to both viewers")
+	var held_position: Vector2 = rack.slot_center(target) + Vector2(0, -64)
+	_review_pointer_motion(held_position)
+	_check(rack.items[source].node.global_position.distance_to(held_position) < 0.5,
+		"after hours: native ball and its points follow the local pointer without a round trip")
+	var has_disposable_motion = false
+	for packet in _wire.packets:
+		if packet.unreliable and bytes_to_var(packet.bytes).get("kind") == "rack_motion":
+			has_disposable_motion = true
+	_check(has_disposable_motion,
+		"after hours: held motion uses the disposable channel")
+	replies = _relay_rack_requests(host_model)
+	var motion_packets = replies.duplicate(true)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(peer_rack.items[source].node.position.is_equal_approx(rack.items[source].node.position)
+		and peer_rack.point_labels[source].text == rack.point_labels[source].text,
+		"after hours: second viewer sees the same held ball and captured points")
+	_check(peer_model.snapshot(table) == _mod.end_discussion.snapshot(table),
+		"after hours: coordinator, guest and second viewer agree after shared motion")
+	await capture.call("after-hours-shared-native-drag", "After-hours rack · shared native ball drag with points")
+	# Render the same authoritative packet as the second viewer, using the real
+	# review callback and independent native component. No second game is launched.
+	rack.hide()
+	peer_rack.show()
+	review._rack = peer_rack
+	_mod._local_id = 3
+	review.refresh_discussion(table)
+	await _delay(0.1)
+	_check_native_marker_alignment(peer_rack, "second viewer during shared drag", source)
+	_check(review._discussion_hint.text == "Guest is moving a ball." and peer_rack._actor_label.visible,
+		"after hours: second viewer identifies who is discussing the held ball")
+	await capture.call("after-hours-shared-native-peer", "After-hours rack · second viewer sees the shared drag")
+	_mod._local_id = 2
+	review._rack = rack
+	peer_rack.hide()
+	rack.show()
+	review.refresh_discussion(table)
+	_review_pointer_button(rack.slot_center(target), false)
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	var expected_order = initial_order.duplicate()
+	expected_order[source] = target
+	expected_order[target] = source
+	_check(rack.displayed_order == expected_order and peer_rack.displayed_order == expected_order
+		and host_model.snapshot(table).drag.is_empty(),
+		"after hours: release swaps native slots identically for every viewer")
+	_check(rack.items[source].node.position.is_equal_approx(rack.slots[target].position)
+		and rack.items[target].node.position.is_equal_approx(rack.slots[source].position),
+		"after hours: swapped balls settle into the native triangle positions")
+	_check(_review_ball_nodes(rack) == ball_nodes,
+		"after hours: shared arrangement retains the native ball nodes")
+	_replay(motion_packets)
+	_check(_mod.end_discussion.snapshot(table).drag.is_empty()
+		and rack.items[source].node.position.is_equal_approx(rack.slots[target].position),
+		"after hours: delayed old motion cannot resurrect a completed drag")
+	await capture.call("after-hours-shared-native-swapped", "After-hours rack · shared rearrangement keeps native slots and points")
+	review._reset.pressed.emit()
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(rack.displayed_order == initial_order and peer_rack.displayed_order == initial_order,
+		"after hours: Reset arrangement restores the original rack for both viewers")
+	_check_review_inventory(record.inventory, "reset shared rack")
+	_check(_mod.final_builds.get_record(table) == archive_before and PlayerInventory.capture(info) == native_before,
+		"after hours: pickup, shared motion, swap and reset never mutate archived or live inventory")
+	await capture.call("after-hours-shared-native-reset", "After-hours rack · original native arrangement restored")
+	# Fast users can release or switch tables before reliable begin returns.
+	# Exercise those paths from actual pointer/GUI events, without granting a
+	# hold or writing the expected order directly into either discussion model.
+	var before_pickup_state = host_model.snapshot(table)
+	_review_pointer_button(rack.slot_center(source), true)
+	_review_pointer_motion(rack.slot_center(target))
+	_deliver_review({"kind": "rack_state", "match": _mod.match_id, "table": table,
+		"state": before_pickup_state, "accepted": true, "action": "", "reason": ""})
+	_check(rack._local_slot == source and rack._pointer_held and rack._awaiting_pickup
+		and rack.items[source].node.global_position.distance_to(rack.slot_center(target)) < 0.5,
+		"after hours: an older empty snapshot cannot cancel a pickup still awaiting its grant")
+	_review_pointer_button(rack.slot_center(target), false)
+	_check(review._pending_release == target and host_model.snapshot(table).drag.is_empty(),
+		"after hours: quick release retains one drop while the pickup is unacknowledged")
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(_rack_action_count(_wire.packets, "drop") == 1,
+		"after hours: pickup acknowledgement sends the retained drop with the host token")
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(rack.displayed_order == expected_order and peer_rack.displayed_order == expected_order
+		and host_model.snapshot(table).drag.is_empty() and review._holding_table == -1,
+		"after hours: release before pickup acknowledgement completes once without a stranded hold")
+	review._reset.pressed.emit()
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_review_pointer_button(rack.slot_center(source), true)
+	review._tabs[0].pressed.emit()
+	_check(review._selected == 0, "after hours: table switching stays local while pickup is pending")
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(_rack_action_count(_wire.packets, "cancel") == 1,
+		"after hours: delayed pickup on a departed table immediately requests cancellation")
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(host_model.snapshot(table).drag.is_empty() and _mod.end_discussion.snapshot(table).drag.is_empty()
+		and review._selected == 0 and review._holding_table == -1,
+		"after hours: table switch before acknowledgement leaves no remote hold and preserves selection")
+	review._tabs[1].pressed.emit()
+	await _delay(0.1)
+	_review_pointer_button(rack.slot_center(source), true)
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(host_model.snapshot(table).drag.get("actor") == 2 and review._holding_table == table
+		and review._pending_pickup == -1,
+		"after hours: acknowledged hold exists before switching away from its table")
+	review._tabs[0].pressed.emit()
+	_check(review._selected == 0 and _rack_action_count(_wire.packets, "cancel") == 1,
+		"after hours: leaving an acknowledged hold sends one cancellation")
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(host_model.snapshot(table).drag.is_empty() and peer_model.snapshot(table).drag.is_empty()
+		and review._selected == 0 and review._holding_table == -1
+		and review._pending_pickup == -1 and review._pending_release == -2
+		and not review._have_drag_position,
+		"after hours: hidden-table cancel acknowledgement clears local hold bookkeeping")
+	review._tabs[1].pressed.emit()
+	await _delay(0.1)
+	_review_pointer_button(rack.slot_center(source), true)
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(host_model.snapshot(table).drag.get("actor") == 2,
+		"after hours: another pickup succeeds after hidden-table cancellation")
+	_review_pointer_button(rack.slot_center(target), false)
+	replies = _relay_rack_requests(host_model, true)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	var drop_rejected = false
+	for packet in replies:
+		if bytes_to_var(packet.bytes).get("accepted") == false:
+			drop_rejected = true
+	_check(drop_rejected and host_model.snapshot(table).drag.get("actor") == 2,
+		"after hours: stale drop is rejected while the server still holds that ball")
+	_check(_rack_action_count(_wire.packets, "cancel") == 1,
+		"after hours: rejected drop sends exactly one reliable cancellation")
+	replies = _relay_rack_requests(host_model)
+	_apply_rack_peer(peer_model, replies, peer_rack, table)
+	_check(host_model.snapshot(table).drag.is_empty() and _mod.end_discussion.snapshot(table).drag.is_empty()
+		and review._holding_table == -1 and rack.displayed_order == initial_order
+		and peer_rack.displayed_order == initial_order,
+		"after hours: rejected drop recovers both viewers without stranding the rack")
+	_check(_mod.final_builds.get_record(table) == archive_before and PlayerInventory.capture(info) == native_before,
+		"after hours: delayed acknowledgements, tab changes and rejection preserve saved and live builds")
+
+	_trace_stage("shared-native-rack-after-reset")
+	peer_rack.free()
 
 
 func _guest_purchase(capture: Callable):
@@ -962,6 +1621,12 @@ func _setup(id: int):
 	_mod.table_leader_id = 1
 	_mod.turn_owner = 2
 	_mod.match_id = 41
+	_mod.final_builds = EndRunState.new()
+	_mod.final_builds.reset(_mod.match_id)
+	_mod.end_discussion = EndRunDiscussion.new()
+	_mod.end_discussion.reset(_mod.match_id)
+	_mod._end_motion_sent = {}
+	_mod._final_build_sent = false
 	_mod.snapshot_id = 0
 	_mod.last_guest_snapshot = 0
 	_mod.last_shop_state = {}
@@ -993,6 +1658,7 @@ func _save() -> Dictionary:
 
 
 func _restore(saved: Dictionary):
+	_mod.end_run_review.end_session()
 	for key in saved:
 		_mod.set(key, saved[key])
 	_wire.free()
@@ -1068,6 +1734,44 @@ func _wait(condition: Callable) -> bool:
 			return true
 		await _delay(0.1)
 	return false
+
+
+## Fixture-only bounded checkpoint: stdout may remain buffered on a watchdog
+## failure. Overwrite and flush one small record at explicit phase boundaries.
+## No frame callbacks, extra game process, or normal save directory is involved.
+func _trace_stage(stage: String) -> void:
+	if _trace_count >= 128 or not OS.get_user_data_dir().contains("UltrapoolTogetherRenderTest"):
+		return
+	var args = OS.get_cmdline_user_args()
+	var output_index = args.find("--output")
+	if output_index < 0 or output_index + 1 >= args.size():
+		return
+	var directory: String = args[output_index + 1]
+	if not DirAccess.dir_exists_absolute(directory):
+		return
+	var file = FileAccess.open(directory.path_join("round-flow-stage.json"), FileAccess.WRITE)
+	if file == null:
+		return
+	_trace_count += 1
+	var ui = _mod.get_node("/root/UIManager")
+	var checkpoint = {
+		"stage": stage.left(120),
+		"checkpoint": _trace_count,
+		"ticks_ms": Time.get_ticks_msec(),
+		"process_frames": Engine.get_process_frames(),
+		"paused": _mod.get_tree().paused,
+		"time_scale": Engine.time_scale,
+		"active": _mod.active,
+		"finished": _mod.finished,
+		"ui_process_mode": ui.process_mode,
+		"settings_open": ui.settings_menu.is_open,
+		"native_ending_open": ui.game_over_menu.is_open,
+		"review_open": _mod.end_run_review.is_open(),
+		"popup_count": ui.active_popups.size()
+	}
+	file.store_string(JSON.stringify(checkpoint, "\t"))
+	file.flush()
+	file.close()
 
 
 func _delay(seconds: float):

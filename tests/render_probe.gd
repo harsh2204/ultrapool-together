@@ -131,6 +131,7 @@ func _run():
 		"presence_probe",
 		"router_probe",
 		"controller_probe",
+		"end_run_probe",
 		"transport_budget_probe",
 		"shop_layout_probe",
 		"cue_models_probe",
