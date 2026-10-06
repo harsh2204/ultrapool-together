@@ -97,7 +97,7 @@ func _run() -> void:
 	check(host_node.host_id() == host_node.local_id(), "host identity is separate from guest slots")
 	check(guests[0].host_id() == host_node.local_id(), "guest knows coordinator identity")
 	check(
-		guests[0].join_steam("UP11-123") == ERR_ALREADY_IN_USE, "invite preserves active connection"
+		guests[0].join_steam("UP12-123") == ERR_ALREADY_IN_USE, "invite preserves active connection"
 	)
 	for guest in guests:
 		guest.send({"kind": "input", "claimed_actor": first_id, "actual": guest.local_id()})
@@ -229,7 +229,7 @@ func _run() -> void:
 	check(host_disconnect_events == 0, "peer faults never end coordinator session")
 	for code in [
 		"invalid", "UP1-123-token", "UP2-123", "UP3-123", "UP4-123", "UP7-123", "UP8-123",
-		"UP9-123", "UP10-123", "UP11-0"
+		"UP9-123", "UP10-123", "UP11-123", "UP12-0"
 	]:
 		check(
 			rejected.join_steam(code) == ERR_INVALID_PARAMETER, "reject old or malformed room code"
@@ -283,7 +283,7 @@ func _steam_room_check() -> void:
 		if host_node.invite_ready() or not host_node.is_host:
 			break
 		await pause(0.2)
-	check(host_node.invite_ready() and host_node.room_code.begins_with("UP11-"), "Steam room ready")
+	check(host_node.invite_ready() and host_node.room_code.begins_with("UP12-"), "Steam room ready")
 	if host_node._lobby_id != 0:
 		check(
 			(

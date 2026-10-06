@@ -1,6 +1,6 @@
 # Cue Workshop
 
-Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. The cue mechanics and Rook presentation have bounded Windows native functional evidence, including actual viewport animation frames. **Live multiplayer, macOS, performance and balance acceptance remain open.** Source v0.10.0 uses protocol 10 / UP10 rooms, so every player needs the same compatible build.
+Issue [#20](https://github.com/harsh2204/ultrapool-together/issues/20) expands personal cue cosmetics into a complete cue shop. The cue mechanics and Rook presentation have bounded Windows native functional evidence, including actual viewport animation frames. **Live multiplayer, macOS, performance and balance acceptance remain open.** Every player needs the same compatible build; see the [current game and protocol requirements](NATIVE_COMPATIBILITY.md).
 
 ## Location and interaction
 
@@ -20,7 +20,7 @@ The host can turn **Cue shop** off in the lobby's **Mod settings** before starti
 
 With the option off, every table uses House cues without handling changes or scoring perks. The cue counter and its navigation controls are not constructed, and cue purchase/equip/finish requests are rejected without changing money or equipment. Personal starting finishes remain cosmetic and available. The setting is independent of shared shop access and multiplayer-ball drops; the balls, mixer and snack counters continue normally.
 
-The host sends the boolean in the frozen match configuration. Table leaders, guests and reconnecting peers use that same value; later lobby state cannot override it. Protocol 10 / UP10 rooms exclude earlier builds that would ignore the disabled rule.
+The host sends the boolean in the frozen match configuration. Table leaders, guests and reconnecting peers use that same value; later lobby state cannot override it. This rule was introduced with protocol 10; current rooms also require the [latest compatible protocol](NATIVE_COMPATIBILITY.md).
 
 ## Ownership and economy
 

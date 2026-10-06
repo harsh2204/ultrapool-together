@@ -35,7 +35,7 @@ class OfflineTransport:
 
 	var people: Array = []
 	var is_host = true
-	var room_code = "UP11-RENDER-FIXTURE"
+	var room_code = "UP12-RENDER-FIXTURE"
 	var sent: Array = []
 
 	func session_open() -> bool:
@@ -488,7 +488,7 @@ func capture_lobby_preview(mod: Node, capture: Callable) -> void:
 	await _settle_lobby_preview(mod)
 	await capture.call("lobby-home", "Lobby home with the enlarged logo.")
 	_check_lobby_logo_fit(panel, "home")
-	panel.set_connection("UP11-RENDER-FIXTURE", true, true)
+	panel.set_connection("UP12-RENDER-FIXTURE", true, true)
 	panel.render(_lobby([0, 0, 1, 1, 2, 2, 3, 3], 4), 1, true)
 	await _settle_lobby_preview(mod)
 	await capture.call("lobby-eight-players", "Eight players across four tables with the enlarged logo.")
@@ -548,7 +548,7 @@ func capture_all_menu(mod: Node, capture: Callable) -> void:
 	coop.players[2].ready = false
 	coop.players[3].ready = false
 	coop.can_start = false
-	panel.set_connection("UP11-RENDER-FIXTURE", true, true)
+	panel.set_connection("UP12-RENDER-FIXTURE", true, true)
 	panel.render(coop, 1, true)
 	await capture.call("lobby-choosing-seats", "Four-player co-op with one player choosing a seat.")
 	var card_style = _first_table_card_style(panel)

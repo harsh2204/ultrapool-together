@@ -1,6 +1,6 @@
 # Native game compatibility
 
-The current source targets **Ultrapool 0.17.2**, Steam build **25727180**, with Together **0.11.0 / protocol 11**. Every participant needs this version and a new **UP11** room code. The installers reject unsupported native versions before replacing the mod runtime; Steam itself remains untouched.
+The current source targets **Ultrapool 0.17.2**, Steam build **25727180**, with Together **0.12.0 / protocol 12**. Every participant needs this version and a new **UP12** room code. Protocol 12 adds final-build records and shared rack arrangements for the After-hours review; older peers cannot join because they would omit the review data. The native game requirement is unchanged. The installers reject unsupported native versions before replacing the mod runtime; Steam itself remains untouched.
 
 ## Changes from 0.15.7
 

@@ -1,6 +1,9 @@
 extends Node
 
-const VERSION = "0.11.0"
+signal end_run_discussion_changed(table: int)
+signal end_run_discussion_rejected(table: int, action: String, reason: String)
+
+const VERSION = "0.12.0"
 const GAME_VERSION = "0.17.2"
 const SNAPSHOT_INTERVAL = 0.10
 const SHOP_SNAPSHOT_INTERVAL = 0.50
@@ -26,6 +29,8 @@ const VisualFx = preload("table_visual_fx.gd")
 const NativeDraw = preload("table_native_draw.gd")
 const CueEffects = preload("cue_effects.gd")
 const ProgressImport = preload("progress_import.gd")
+const EndRunState = preload("end_run_state.gd")
+const EndRunDiscussion = preload("end_run_discussion.gd")
 
 var transport: Node
 var adapter: Node
@@ -35,6 +40,12 @@ var presence: Node
 var run_setup: Node
 var spectator: Node
 var run_controls: Node
+var end_run_review: Node
+var final_builds = EndRunState.new()
+var end_discussion = EndRunDiscussion.new()
+var _end_motion_sent: Dictionary = {}
+var _final_build_sent = false
+var _end_run_database: Node
 var multiplayer_balls: Node
 var expansion_balls: Node
 var set_voting: Node
@@ -48,6 +59,7 @@ var panel: Control
 var turn_label: Label
 var score_label: Label
 var pass_button: Button
+var review_button: Button
 var settings_button: Button
 var turn_banner: Control
 var _turn_banner_showing: bool = false
@@ -161,6 +173,8 @@ func _ready():
 	run_setup = load(base.path_join("run_setup.gd")).new()
 	spectator = load(base.path_join("table_spectator.gd")).new()
 	run_controls = load(base.path_join("run_controls.gd")).new()
+	end_run_review = load(base.path_join("end_run_review.gd")).new()
+	_end_run_database = get_node("/root/BallDatabase")
 	multiplayer_balls = load(base.path_join("multiplayer_balls.gd")).new()
 	expansion_balls = load(base.path_join("expansion_balls.gd")).new()
 	set_voting = load(base.path_join("set_voting.gd")).new()
@@ -177,6 +191,7 @@ func _ready():
 		expansion_balls,
 		spectator,
 		run_controls,
+		end_run_review,
 		set_voting,
 		cue_effects
 	]:
@@ -185,6 +200,7 @@ func _ready():
 	spectator.setup(self)
 	spectator.watch_changed.connect(_watch_changed)
 	run_controls.setup(self)
+	end_run_review.setup(self)
 	set_voting.setup(self)
 	cue_effects.setup(self)
 	if not multiplayer_balls.setup(self):
@@ -245,6 +261,9 @@ func _build_ui():
 	pass_button = _button("Pass", _request_pass)
 	pass_button.hide()
 	row.add_child(pass_button)
+	review_button = _button("Final racks", _reopen_end_review)
+	review_button.hide()
+	row.add_child(review_button)
 	var lobby_button = _button("Lobby · F8", _toggle_panel)
 	if skin.has_art():
 		_tint_hud_button(lobby_button, "hud_tag_purple")
@@ -622,7 +641,7 @@ func _join(code: String):
 		_status("Return to the main menu before joining a lobby.")
 		return
 	if transport.join_steam(code.strip_edges()) != OK:
-		_status("Could not join. Everyone needs v0.11.0 and a new UP11 room code.")
+		_status("Could not join. Everyone needs v0.12.0 and a new UP12 room code.")
 	_render_lobby()
 
 
@@ -680,6 +699,8 @@ func _peer_left(id: int, reason: String):
 		return
 	_watchers.erase(id)
 	_starting_players.erase(id)
+	for table in end_discussion.release_actor(id):
+		_send_end_discussion(table, "disconnect")
 	if lobby_model.started:
 		for summary in table_summaries:
 			if summary.leader_id == id:
@@ -934,6 +955,12 @@ func _begin_table(config: Dictionary):
 	_clear_spawn_barrier()
 	presence.clear()
 	active = true
+	final_builds.reset(match_id)
+	end_discussion.reset(match_id)
+	_end_motion_sent = {}
+	_final_build_sent = false
+	if end_run_review != null:
+		end_run_review.begin_session()
 	cue_inventory.reset(_members(table_id))
 	if cue_effects != null:
 		cue_effects.begin_session()
@@ -1001,6 +1028,12 @@ func _reset_match(sender: int, failed_start = false):
 func _end_table():
 	var return_native = active and is_table_host()
 	active = false
+	if end_run_review != null:
+		end_run_review.end_session()
+	final_builds.reset(0)
+	end_discussion.reset(0)
+	_end_motion_sent = {}
+	_final_build_sent = false
 	if spectator != null:
 		spectator.close()
 	if run_controls != null:
@@ -1281,6 +1314,7 @@ func _roster_changed():
 	# finished watched table has stopped sending state. Refresh that label here.
 	if spectator != null:
 		spectator.refresh_summary()
+	_refresh_end_review()
 	if panel.visible:
 		_render_lobby()
 
@@ -1635,6 +1669,8 @@ func _pass(player: int, expected_turn: int) -> bool:
 
 func _update_hud():
 	var watching = is_spectating()
+	if review_button != null:
+		review_button.visible = active and finished and not end_run_review.is_open()
 	var popup_open = _native_ui != null and _native_ui.is_popup_open()
 	turn_label.visible = not watching and not popup_open
 	score_label.visible = not watching and not popup_open
@@ -1887,6 +1923,12 @@ func _publish_state(
 	# session. Such changes invalidate shop consent even without an await.
 	if not active or not is_table_host():
 		return
+	# Final inventory has its own reliable lifecycle. A held render snapshot must
+	# not prevent build review after the finished summary is already authoritative.
+	_publish_final_build()
+	if not active or not is_table_host():
+		return
+	_refresh_end_review()
 	var reuse_shop = (
 		not captured_shop.is_empty() and captured_lobby_revision == lobby.get("revision", -1)
 	)
@@ -2002,6 +2044,254 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 	return active and is_table_host()
 
 
+## Final builds are reliable transactions, not watcher/motion snapshots. Capture
+## once after publishing finished state; retries remain bounded to this one record.
+func _publish_final_build() -> void:
+	if not active or not is_table_host() or not finished or _final_build_sent:
+		return
+	var inventory: Dictionary = table_sync.capture_inventory()
+	if inventory.is_empty():
+		return
+	var record = {
+		"match": match_id,
+		"table": table_id,
+		"leader": table_leader_id,
+		"inventory": inventory,
+		"cues": cue_inventory.snapshot()
+	}
+	if not EndRunState.validate_record(record, _end_run_database):
+		return
+	# Set before sending: synchronous host relay may immediately refresh the view.
+	_final_build_sent = true
+	_table_send({"kind": "final_build", "record": record})
+
+
+func _accept_final_build(actor: int, table: int, record) -> bool:
+	if not transport.is_host or not active or not lobby.get("started", false):
+		return false
+	if not EndRunState.validate_record(record, _end_run_database):
+		return false
+	if record.match != match_id or record.table != table or record.leader != actor:
+		return false
+	if actor != _leader(table) or not _members(table).any(func(member): return member.id == actor):
+		return false
+	var finalized = table_summaries.any(func(summary):
+		return (summary.table == table and summary.get("finished") == true
+			and summary.get("status") != "Table host disconnected")
+	)
+	if not finalized:
+		return false
+	for member in record.cues.players:
+		if player_table(member.id) != table:
+			return false
+	var already_saved = final_builds.has_table(table)
+	if not final_builds.accept(record, _end_run_database):
+		return false
+	_ensure_end_discussion(record)
+	if not already_saved:
+		transport.send({"kind": "run_build", "match": match_id, "record": record})
+		_refresh_end_review()
+		end_run_discussion_changed.emit(record.table)
+	return true
+
+
+func _receive_final_build(message: Dictionary) -> void:
+	if not active or message.get("match") != match_id:
+		return
+	var record = message.get("record")
+	if not EndRunState.validate_record(record, _end_run_database):
+		return
+	if record.match != match_id or record.table >= int(lobby.get("table_count", 0)):
+		return
+	if record.leader != _leader(record.table):
+		return
+	for member in record.cues.players:
+		if player_table(member.id) != record.table:
+			return
+	if final_builds.accept(record, _end_run_database):
+		_ensure_end_discussion(record)
+		_refresh_end_review()
+		end_run_discussion_changed.emit(record.table)
+
+
+func _send_final_builds(recipient: int) -> void:
+	# At most eight individual bounded reliable records on an authenticated resync.
+	for table in range(mini(int(lobby.get("table_count", 0)), EndRunState.MAX_TABLES)):
+		if final_builds.has_table(table):
+			transport.send_to(recipient, {
+				"kind": "run_build", "match": match_id, "record": final_builds.get_record(table)
+			})
+			_send_end_discussion(table, "", recipient)
+
+
+func _ensure_end_discussion(record: Dictionary) -> void:
+	if end_discussion.match_id != match_id:
+		end_discussion.reset(match_id)
+		_end_motion_sent = {}
+	end_discussion.ensure_table(record.table, record.inventory.build)
+
+
+func end_discussion_snapshot(table: int) -> Dictionary:
+	return end_discussion.snapshot(table)
+
+
+func request_end_drag(table: int, slot: int) -> bool:
+	return _request_end_discussion(table, {"action": "begin", "slot": slot})
+
+
+func drop_end_drag(table: int, token: int, target_slot: int) -> bool:
+	return _request_end_discussion(table, {"action": "drop", "token": token, "target": target_slot})
+
+
+func cancel_end_drag(table: int, token: int) -> bool:
+	return _request_end_discussion(table, {"action": "cancel", "token": token})
+
+
+func reset_end_discussion(table: int) -> bool:
+	return _request_end_discussion(table, {"action": "reset"})
+
+
+func _request_end_discussion(table: int, request: Dictionary) -> bool:
+	var state = end_discussion.snapshot(table)
+	if not active or not finished or state.is_empty():
+		end_run_discussion_rejected.emit(table, request.action, "Finish your run before arranging a final rack.")
+		return false
+	request["revision"] = state.revision
+	var message = {"kind": "rack_request", "match": match_id, "table": table, "request": request}
+	if transport.is_host:
+		_receive_end_discussion_request(transport.local_id(), message)
+	else:
+		transport.send_to(transport.host_id(), message)
+	return true
+
+
+## UI owns immediate local drag feedback. Only this bounded latest sample goes
+## over the disposable channel; drop/cancel/reset always use reliable messages.
+func move_end_drag(table: int, token: int, position: Vector2) -> void:
+	if not active or not finished or not position.is_finite():
+		return
+	var state = end_discussion.snapshot(table)
+	var drag: Dictionary = state.get("drag", {})
+	if drag.get("actor", 0) != transport.local_id() or drag.get("token", 0) != token:
+		return
+	var now = Time.get_ticks_msec()
+	var previous: Dictionary = _end_motion_sent.get(table, {})
+	if previous.get("token", 0) == token and now - previous.get("time", 0) < EndRunDiscussion.MOTION_INTERVAL_MSEC:
+		return
+	var sequence = maxi(int(drag.seq), int(previous.get("seq", 0)) if previous.get("token", 0) == token else 0) + 1
+	if sequence > EndRunDiscussion.MAX_COUNTER:
+		return
+	_end_motion_sent[table] = {"token": token, "time": now, "seq": sequence}
+	var message = {"kind": "rack_motion", "match": match_id, "table": table,
+		"actor": transport.local_id(), "token": token, "seq": sequence,
+		"position": position.clamp(Vector2.ZERO, Vector2.ONE)}
+	if transport.is_host:
+		_receive_end_discussion_motion(transport.local_id(), message)
+	else:
+		transport.send_to(transport.host_id(), message, true)
+
+
+func _end_discussion_actor_allowed(actor: int, table: int) -> bool:
+	if not active or not lobby.get("started", false) or not final_builds.has_table(table):
+		return false
+	var own_table = -1
+	for player in lobby.get("players", []):
+		if player.id == actor and player.connected:
+			own_table = player.table
+			break
+	if own_table < 0:
+		return false
+	return table_summaries.any(func(summary): return summary.table == own_table and summary.get("finished") == true)
+
+
+func _receive_end_discussion_request(actor: int, message: Dictionary) -> void:
+	if (not transport.is_host or not _valid_end_discussion_envelope(message, 4)
+		or not message.get("request") is Dictionary):
+		return
+	var request: Dictionary = message.request
+	if request.get("action") not in ["begin", "drop", "cancel", "reset"] or request.size() > 4:
+		return
+	if not _end_discussion_actor_allowed(actor, message.table):
+		_send_end_discussion(message.table, request.action, actor, false,
+			"Finish your run before arranging a final rack.")
+		return
+	var result = end_discussion.transition(message.table, actor, request)
+	_send_end_discussion(message.table, request.action, 0 if result.accepted else actor, result.accepted, result.reason)
+
+
+func _send_end_discussion(table: int, action: String, recipient: int = 0, accepted: bool = true, reason: String = "") -> void:
+	var state = end_discussion.snapshot(table)
+	if state.is_empty():
+		return
+	var generation = match_id
+	var message = {"kind": "rack_state", "match": generation, "table": table, "state": state,
+		"accepted": accepted, "action": action, "reason": reason}
+	if recipient == 0:
+		transport.send(message)
+	elif recipient != transport.local_id():
+		transport.send_to(recipient, message)
+	# Send before local UI callbacks: a synchronous next action must not overtake
+	# the accepted begin/drop that those callbacks are observing.
+	if active and match_id == generation and (recipient == 0 or recipient == transport.local_id()):
+		end_run_discussion_changed.emit(table)
+		if not accepted:
+			end_run_discussion_rejected.emit(table, action, reason)
+
+
+func _receive_end_discussion_state(message: Dictionary) -> void:
+	if (not _valid_end_discussion_envelope(message, 7) or not message.get("state") is Dictionary
+		or not message.get("accepted") is bool or not message.get("reason") is String
+		or message.reason.length() > 128 or message.get("action") not in ["", "begin", "drop", "cancel", "reset", "disconnect"]):
+		return
+	if not end_discussion.apply_state(message.table, message.state):
+		return
+	end_run_discussion_changed.emit(message.table)
+	if not message.accepted:
+		end_run_discussion_rejected.emit(message.table, message.action, message.reason)
+
+
+func _receive_end_discussion_motion(actor: int, message: Dictionary) -> void:
+	if not _valid_end_discussion_envelope(message, 7):
+		return
+	for field in ["actor", "token", "seq"]:
+		if not message.get(field) is int:
+			return
+	if not message.get("position") is Vector2 or not message.position.is_finite():
+		return
+	if transport.is_host:
+		if message.actor != actor or not _end_discussion_actor_allowed(actor, message.table):
+			return
+		if not end_discussion.motion(message.table, actor, message.token, message.seq, message.position, Time.get_ticks_msec()):
+			return
+		var forwarded = message.duplicate()
+		forwarded.position = message.position.clamp(Vector2.ZERO, Vector2.ONE)
+		for player in lobby.get("players", []):
+			if player.connected and player.id != transport.local_id():
+				transport.send_to(player.id, forwarded, true)
+	else:
+		if actor != transport.host_id() or not end_discussion.apply_motion(message.table,
+			message.actor, message.token, message.seq, message.position):
+			return
+	end_run_discussion_changed.emit(message.table)
+
+
+func _valid_end_discussion_envelope(message: Dictionary, fields: int) -> bool:
+	return (active and message.size() == fields and message.get("match") is int
+		and message.match == match_id and message.get("table") is int and message.table >= 0
+		and message.table < mini(int(lobby.get("table_count", 0)), EndRunState.MAX_TABLES)
+		and final_builds.has_table(message.table))
+
+
+func _refresh_end_review() -> void:
+	if end_run_review != null:
+		end_run_review.refresh()
+
+
+func _reopen_end_review() -> void:
+	if end_run_review != null and active and finished:
+		end_run_review.reopen()
+
+
 func _report_effect_capacity(effects: Dictionary, visual_fx: Dictionary, native_draw: Dictionary = {}, ball_visual_status: String = "complete", pocket_visual_status: String = "complete") -> void:
 	var status = "ball presentation bytes; " if ball_visual_status == "overflow" else ""
 	if pocket_visual_status == "overflow":
@@ -2048,6 +2338,11 @@ func _route_table(actor: int, envelope: Dictionary):
 	if _table_abandoned(routed.table):
 		return
 	var payload: Dictionary = routed.payload
+	if payload.kind == "final_build":
+		_accept_final_build(actor, routed.table, payload.get("record"))
+		return
+	if payload.kind == "sync_request":
+		_send_final_builds(actor)
 	if payload.kind == "state":
 		if not _valid_state(payload, routed.table):
 			return
@@ -2122,6 +2417,10 @@ func _received(sender: int, message: Dictionary):
 	var kind = message.get("kind", "")
 	if transport.is_host:
 		match kind:
+			"rack_request":
+				_receive_end_discussion_request(sender, message)
+			"rack_motion":
+				_receive_end_discussion_motion(sender, message)
 			"match_ready":
 				if message.get("match") == match_id:
 					_starting_players.erase(sender)
@@ -2149,6 +2448,12 @@ func _received(sender: int, message: Dictionary):
 	if sender != transport.host_id():
 		return
 	match kind:
+		"rack_state":
+			_receive_end_discussion_state(message)
+		"rack_motion":
+			_receive_end_discussion_motion(sender, message)
+		"run_build":
+			_receive_final_build(message)
 		"watch_state":
 			_receive_watch(message)
 		"lobby_state":
@@ -2279,6 +2584,7 @@ func _received_table(actor: int, message: Dictionary):
 		used_shots = message.used_shots
 		finished = message.finished
 		finish_reason = message.finish_reason
+		_refresh_end_review()
 		if message.get("multiplayer_balls") is Dictionary:
 			multiplayer_balls.apply_state(message.multiplayer_balls)
 		if message.get("expansion_balls") is Dictionary:
@@ -2464,6 +2770,10 @@ func _align_mod_ui_under_crt() -> void:
 ## #16: Queue host screen location; apply at a safe boundary (no mid-drag yank).
 ## Latest target only — each new host nav replaces the queue (bounded).
 func _queue_host_ui_nav(nav: Dictionary) -> void:
+	if finished:
+		# Final-rack inspection and the next view are each player's local choice.
+		_queued_ui_nav.clear()
+		return
 	if is_table_host() or is_spectating():
 		return
 	if str(nav.get("place", "")) in ["shop", "snack_bar"] and not HudPrefs.follow_shop_view_enabled():
@@ -2520,6 +2830,9 @@ func _ui_nav_balls_moving() -> bool:
 
 
 func _try_follow_host_ui_nav() -> void:
+	if finished:
+		_queued_ui_nav.clear()
+		return
 	if _queued_ui_nav.is_empty() or not active or is_table_host() or is_spectating():
 		return
 	if (
