@@ -15,6 +15,7 @@ var _ball_script: Script
 var _native_ball_script: Script
 var _hooked: Dictionary = {}
 var _remote: Dictionary = {}
+var _last_capture: Dictionary = {}
 var _active_flags: Dictionary = {}
 var _active = false
 var _round_key = ""
@@ -59,6 +60,7 @@ func begin_session(flags: Dictionary) -> void:
 	_active = Registry.any_enabled(_active_flags)
 	_round_key = ""
 	_remote.clear()
+	_last_capture = {}
 	_echo_queue.clear()
 	_locked.clear()
 	_closed_pocket = null
@@ -89,6 +91,7 @@ func end_session() -> void:
 	_hooked.clear()
 	_echo_queue.clear()
 	_remote.clear()
+	_last_capture = {}
 	_round_key = ""
 	for set_id in catalogs:
 		catalogs[set_id].set_active(false)
@@ -565,8 +568,16 @@ func prepare_shop() -> void:
 		catalogs[set_id].ensure_shop_offer(shop)
 
 
+## Presentation input for the shared ability overlay (MOD-07..12): the host's
+## latest published capture, or the validated remote state on guests. Never
+## captures per frame (PERF-028).
+func display_state() -> Dictionary:
+	return _last_capture if _controller.is_table_host() else _remote
+
+
 func capture() -> Dictionary:
 	if not _active:
+		_last_capture = {}
 		return {}
 	var data = {"sets": {}, "balls": []}
 	for set_id in _enabled_sets():
@@ -597,6 +608,7 @@ func capture() -> Dictionary:
 				entry.extra[set_id] = rules[set_id].capture_ball(id)
 		data.balls.append(entry)
 		count += 1
+	_last_capture = data
 	return data
 
 
@@ -630,8 +642,11 @@ func valid_state(data) -> bool:
 		return true
 	if not data.get("sets") is Dictionary or not data.get("balls") is Array:
 		return false
-	if data.balls.size() > MAX_BALLS:
+	if data.balls.size() > MAX_BALLS or data.sets.size() > Registry.SET_IDS.size():
 		return false
+	for set_id in data.sets:
+		if set_id not in Registry.SET_IDS or not _valid_shared_display(set_id, data.sets[set_id]):
+			return false
 	var ids: Dictionary = {}
 	for ball in data.balls:
 		if (
@@ -646,13 +661,81 @@ func valid_state(data) -> bool:
 			or ball.name.length() > 160
 			or not ball.get("position") is Vector2
 			or not ball.position.is_finite()
+			or ball.position.length() > 100000
 			or not ball.get("color") is Color
 			or not ball.get("alive") is bool
 			or not ball.get("extra") is Dictionary
 		):
 			return false
+		for channel in [ball.color.r, ball.color.g, ball.color.b, ball.color.a]:
+			if not is_finite(channel):
+				return false
+		var seen_kinds: Dictionary = {}
+		var ball_sets: Dictionary = {}
 		for kind in ball.kinds:
-			if not _kind_to_set.has(kind):
+			if not _kind_to_set.has(kind) or seen_kinds.has(kind):
+				return false
+			seen_kinds[kind] = true
+			ball_sets[_kind_to_set[kind]] = true
+		if ball.extra.size() > ball_sets.size():
+			return false
+		for set_id in ball.extra:
+			if not ball_sets.has(set_id) or not _valid_ball_display(set_id, ball.extra[set_id]):
 				return false
 		ids[ball.id] = true
 	return true
+
+
+## Display schemas are checked at the network boundary before the overlay reads
+## them. Fixed keys bound panel work; ranges match each authoritative rules model.
+func _valid_shared_display(set_id: String, data) -> bool:
+	if not data is Dictionary:
+		return false
+	match set_id:
+		"PHASES":
+			return data.size() == 2 and _display_int(data.get("phase"), 0, 3) and _display_int(data.get("silent"), 0, 2)
+		"TIDE":
+			return data.size() == 1 and _display_int(data.get("height"), 0, 3)
+		"MORPH":
+			return data.size() == 2 and data.get("form_changes") is int and data.form_changes >= 0 and data.get("prime") is bool
+		"RELIC":
+			return data.size() == 2 and data.get("persist") is bool and _display_int(data.get("idol_temps"), 0, 3)
+		"TAROT":
+			if data.size() != 1 or not data.get("spread") is Array or data.spread.size() > 3:
+				return false
+			var seen: Dictionary = {}
+			for kind in data.spread:
+				if _kind_to_set.get(kind, "") != "TAROT" or seen.has(kind):
+					return false
+				seen[kind] = true
+			return true
+		"ZODIAC":
+			if data.size() != 1 or not data.get("align") is Dictionary or data.align.size() != 4:
+				return false
+			for element in ["fire", "earth", "air", "water"]:
+				if not _display_int(data.align.get(element), 0, 3):
+					return false
+			return true
+	return false
+
+
+func _valid_ball_display(set_id: String, data) -> bool:
+	if not data is Dictionary:
+		return false
+	# A registered resource may be captured before its first host rule hook.
+	if data.is_empty():
+		return set_id in ["MORPH", "RELIC", "TAROT", "ZODIAC"]
+	match set_id:
+		"MORPH":
+			return data.size() == 3 and _display_int(data.get("form"), 0, 1) and _display_int(data.get("charge"), 0, 1) and data.get("marked") is bool
+		"RELIC":
+			return data.size() == 1 and _display_int(data.get("dig"), 0, 4)
+		"TAROT":
+			return data.size() == 3 and data.get("upright") is bool and data.get("in_spread") is bool and _display_int(data.get("charge"), 0, 1)
+		"ZODIAC":
+			return data.size() == 1 and _display_int(data.get("charge"), 0, 2)
+	return false
+
+
+static func _display_int(value, minimum: int, maximum: int) -> bool:
+	return value is int and value >= minimum and value <= maximum

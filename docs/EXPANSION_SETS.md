@@ -109,7 +109,7 @@ Each sign has an element (Fire / Earth / Air / Water). Alignment = count of that
 - Wire field: `expansion_balls` on reliable table state (alongside `multiplayer_balls`).
 - Dirty gate: `expansion_balls.display_signature` is part of `main._publish_state`’s `state_sig` (PERF-010).
 - Ball loops capped at 128; shop offer scan capped; queues cleared on round/session end.
-- Expansion display state is carried to guests, but `expansion_balls.apply_state` only stores it; no renderer currently consumes `_remote`. Phase/charge/form/tide/dig/Spread/alignment indicators remain missing on guests and spectators. Final score, money, HP and ball-state outcomes use the ordinary table snapshot. See MOD-07–12 in the [effect replication tracker](EFFECT_REPLICATION_TRACKER.md). TOGETHER UI overlays are separate.
+- Expansion display state is carried to guests and consumed by the shared [ability overlay](../mod/ability_overlay.gd) through `expansion_balls.display_state()`: phase/charge/form/tide/dig/Spread/alignment indicators draw on the playing table (host and guest) and on watched tables (spectator). The overlay draws validated host state only and never reruns an ability. This is authored presentation, not yet rendered in an authorized run. Final score, money, HP and ball-state outcomes use the ordinary table snapshot. See MOD-07–12 in the [effect replication tracker](EFFECT_REPLICATION_TRACKER.md). TOGETHER UI overlays share the same helper.
 
 ## Files
 

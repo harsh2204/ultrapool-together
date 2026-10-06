@@ -83,6 +83,8 @@ static func _visual_node(type: StringName) -> Node:
 	match type:
 		"Sprite2D":
 			return Sprite2D.new()
+		"AnimatedSprite2D":
+			return AnimatedSprite2D.new()
 		"Polygon2D":
 			return Polygon2D.new()
 		"MeshInstance2D":
@@ -97,6 +99,8 @@ static func _visual_node(type: StringName) -> Node:
 			return CPUParticles2D.new()
 		"Label":
 			return Label.new()
+		"RichTextLabel":
+			return RichTextLabel.new()
 		"TextureRect":
 			return TextureRect.new()
 		"NinePatchRect":

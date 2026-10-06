@@ -6,6 +6,8 @@ const ReplicaFx = preload("replica_fx.gd")
 const CueCatalog = preload("cue_catalog.gd")
 const CueModels = preload("cue_models.gd")
 const CueVisuals = preload("cue_visuals.gd")
+const BallVisualState = preload("ball_visual_state.gd")
+const NativeDrawView = preload("table_native_draw_view.gd")
 const BallLevelFx = preload("ball_level_fx.gd")
 const ShotsPips = preload("shots_pips.gd")
 const TableEffectsView = preload("table_effects_view.gd")
@@ -28,6 +30,13 @@ var _ball_bases: Dictionary = {}
 var _fx = ReplicaFx.new()
 var effects_view = TableEffectsView.new()
 var _visual_fx_view = TableVisualFxView.new()
+var _native_draw_view = NativeDrawView.new()
+## PERF-018/019: counts per apply so fixtures can show score-only cascades no
+## longer rebuild items. Cheap integer bookkeeping only.
+var apply_stats: Dictionary = {"full_items": 0, "light_items": 0}
+var _score_label_refresh: Dictionary = {}
+var _local_prediction = false
+var _native_draw_available = false
 
 
 func prepare_scene() -> void:
@@ -101,6 +110,8 @@ func _ready() -> void:
 	balls_spawned = true
 	effects_view.setup(self, Global.SCENE_GAME)
 	_visual_fx_view.setup(self, Global.SCENE_GAME)
+	_native_draw_view.setup(self, Global.SCENE_GAME)
+	BallVisualState.prepare()
 
 
 func _exit_tree() -> void:
@@ -108,12 +119,15 @@ func _exit_tree() -> void:
 	_fx.clear()
 	effects_view.dispose()
 	_visual_fx_view.clear()
+	_native_draw_view.dispose()
 
 
 func _process(_delta: float) -> void:
+	_update_local_prediction()
 	_update_potted_rail_hover()
 	effects_view.tick()
 	_visual_fx_view.tick()
+	_native_draw_view.tick()
 
 
 func _physics_process(delta: float) -> void:
@@ -210,8 +224,11 @@ func apply_table(data: Dictionary) -> void:
 	# GAP-007: native effect presentation has no guest gameplay callbacks.
 	var effect_epoch = "%s:%s" % [data.scene_id, data.rounds_played]
 	effects_view.apply(data.get("effects", {}), Vector2.ZERO, effect_epoch)
-	effects_view.apply_pockets(data.get("effects", {}), pocket_replicas)
+	effects_view.apply_pockets(data.get("effects", {}), pocket_replicas, data.pockets)
 	_visual_fx_view.apply(data.get("visual_fx", {}), Vector2.ZERO, effect_epoch)
+	_native_draw_available = _native_draw_available or data.has("native_draw")
+	_update_local_prediction()
+	_native_draw_view.apply(data.get("native_draw", {}), Vector2.ZERO, effect_epoch)
 	_fx.begin_apply()
 	_fx.observe_round(table, data.rounds_played, data.in_shop)
 	_update_aim_reminder(data.ready and playing)
@@ -226,9 +243,13 @@ func apply_table(data: Dictionary) -> void:
 			_create_ball(state)
 		var body = replicas[id]
 		_fx.observe_ball(body, state, created)
-		var item_changed: bool = body.get_meta("remote_item") != state.item
+		var previous_item: Dictionary = body.get_meta("remote_item", {})
+		var item_changed: bool = previous_item != state.item
 		if item_changed:
-			_set_item(body, state.item)
+			if _item_identity_changed(previous_item, state.item):
+				_set_item(body, state.item)
+			else:
+				_update_item(body, state.item, previous_item)
 		# Local-predictive aim: do not snap the cue while the guest is drawing (#18).
 		var aiming_local: bool = state.player and bool(body.get("preparing_shot"))
 		var simulate: bool = (
@@ -301,6 +322,9 @@ func apply_table(data: Dictionary) -> void:
 			body.visuals.scale = state.visual_scale
 		if body.modulate != state.color:
 			body.modulate = state.color
+		BallVisualState.apply(body, state.get("ball_visual", {}))
+		if data.has("native_draw") and (created or item_changed or not body.has_meta("together_native_draw_hidden")):
+			_suppress_native_draw(body)
 		body.set_process(simulate or state.player)
 		var basis: Basis = body.transform3d.global_transform.basis
 		if item_changed or spin_changed or _ball_bases.get(id) != basis:
@@ -431,7 +455,8 @@ func _update_pockets(states: Array, locale_changed: bool = false) -> void:
 		pocket.extra_multiplier = 0.0
 		pocket.extra_score = state.score
 		if pocket.closed != state.closed:
-			pocket.get_node("%AnimationPlayer").play("close" if state.closed else "open")
+			if not pocket.get_meta("together_pocket_sampled", false):
+				pocket.get_node("%AnimationPlayer").play("close" if state.closed else "open")
 			pocket.closed = state.closed
 		if created or pocket.shielded != state.shielded:
 			pocket.set_shield(state.shielded)
@@ -495,6 +520,7 @@ func _install_native_player(body: Node) -> void:
 
 
 func _set_item(body, item: Dictionary) -> void:
+	apply_stats.full_items += 1
 	var native_item = BallItem.new()
 	native_item.data = BallDatabase.id_to_ball[item.data]
 	if item.mixed != "":
@@ -525,6 +551,7 @@ func _set_item(body, item: Dictionary) -> void:
 		if body.has_method("set_star"):
 			body.set_star(false)
 		_hide_star_chrome(body)
+		body.ball_item.star_power = bool(item.star_power)
 	else:
 		body.set_star(bool(item.star_power))
 		if not bool(item.star_power):
@@ -532,10 +559,14 @@ func _set_item(body, item: Dictionary) -> void:
 	body.set_flame(item.flaming)
 	body.set_shield_broken(item.shield_broken)
 	body.set_shield(item.shielded)
+	# Native set_shield returns early for a broken shield; snapshots carry the
+	# resolved flags, so keep both data and art authoritative after that guard.
+	body.ball_item.shielded = bool(item.shielded)
+	if body.shield_icon:
+		body.shield_icon.visible = bool(item.shielded)
 	if body.freeze_icon:
 		body.freeze_icon.visible = item.locked
-	if item.fleeting:
-		body.set_fleeting()
+	BallLevelFx.set_fleeting(body, bool(item.fleeting))
 	body.flash_alpha = 0.0
 	body.flash_spr.material.set_shader_parameter("alpha", 0.0)
 	# Shop Upgradebar + packed table spark gate (#32).
@@ -544,13 +575,86 @@ func _set_item(body, item: Dictionary) -> void:
 	body.set_meta("remote_item", item.duplicate())
 
 
+## PERF-018/019/024: identity, level and weight changes need the inherited set_item
+## path (native item/material setup, badges, prediction). Fleeting changes use
+## the explicit native visual inverse and retain their item/materials (BOARD-10).
+func _item_identity_changed(previous: Dictionary, item: Dictionary) -> bool:
+	if previous.is_empty():
+		return true
+	for field in ["data", "mixed", "level", "weight_state"]:
+		if previous.get(field) != item.get(field):
+			return true
+	return false
+
+
+## Score and status-only changes: mutate the retained BallItem, refresh the native
+## value label and call only the setters whose flag actually changed. No BallItem
+## allocation, no material duplication, unchanged statuses untouched.
+func _update_item(body, item: Dictionary, previous: Dictionary) -> void:
+	var native_item = body.ball_item
+	if native_item == null:
+		_set_item(body, item)
+		return
+	if (
+		previous.base_score != item.base_score
+		or previous.temp_extra_score != item.temp_extra_score
+	):
+		native_item.base_score = item.base_score
+		native_item.temp_extra_score = item.temp_extra_score
+		if not _refresh_score_label(body):
+			_set_item(body, item)
+			return
+	apply_stats.light_items += 1
+	var is_cue: bool = body == player_ball or item.get("data") == "PLAYER"
+	if previous.star_power != item.star_power and not is_cue:
+		body.set_star(bool(item.star_power))
+		if not bool(item.star_power):
+			_hide_star_chrome(body)
+	if previous.flaming != item.flaming:
+		body.set_flame(item.flaming)
+	if previous.shield_broken != item.shield_broken:
+		body.set_shield_broken(item.shield_broken)
+	if previous.shielded != item.shielded:
+		body.set_shield(item.shielded)
+	if previous.locked != item.locked:
+		native_item.locked = bool(item.locked)
+		if body.freeze_icon:
+			body.freeze_icon.visible = item.locked
+	native_item.star_power = bool(item.star_power)
+	native_item.shielded = bool(item.shielded)
+	if body.shield_icon and body.shield_icon.visible != bool(item.shielded):
+		body.shield_icon.visible = bool(item.shielded)
+	if item.fleeting != previous.fleeting:
+		BallLevelFx.set_fleeting(body, bool(item.fleeting))
+	body.set_meta("remote_item", item.duplicate())
+
+
+## Native Ball.update_score_label() redraws the value label and its high-value
+## particles (BOARD-21). Call it only when the installed method takes no required
+## argument; any mismatch falls back to the full inherited setter.
+func _refresh_score_label(body) -> bool:
+	var key = str(body.get_script().resource_path) if body.get_script() != null else ""
+	if not _score_label_refresh.has(key):
+		var available = false
+		if body.has_method("update_score_label"):
+			for method in body.get_method_list():
+				if method.name == "update_score_label":
+					available = method.args.size() - method.default_args.size() == 0
+					break
+		_score_label_refresh[key] = available
+	if not _score_label_refresh[key]:
+		return false
+	body.update_score_label()
+	return true
+
+
 func _hide_star_chrome(body: Node) -> void:
 	if not is_instance_valid(body):
 		return
 	var visuals = body.get("visuals")
 	if not is_instance_valid(visuals):
 		return
-	for path in ["static/star_indicator", "static/StarEffect", "static/spark"]:
+	for path in ["static/star_indicator", "static/StarEffect"]:
 		var node = visuals.get_node_or_null(path)
 		if node is CanvasItem and node.visible:
 			node.visible = false
@@ -754,3 +858,45 @@ func _potted_rail_ball_at(mouse: Vector2):
 	return best
 
 
+
+
+func _suppress_native_draw(body: Node) -> void:
+	# Dedicated views own sampled trails/tethers. Local LUNA aim remains native:
+	# the host cannot sample a guest's unsubmitted cue shot vector.
+	for path in ["Trail", "visuals/deathline"]:
+		var node = body.get_node_or_null(path)
+		if node is CanvasItem:
+			node.visibility_layer = 0
+	if not body is PlayerBall:
+		var prediction = body.get("prediction_sys")
+		var nodes: Array = []
+		if is_instance_valid(prediction):
+			if prediction is CanvasItem:
+				nodes.append(prediction)
+			nodes.append_array(prediction.find_children("*", "CanvasItem", true, false))
+		for node in nodes:
+			if not node.has_meta("together_prediction_layer"):
+				node.set_meta("together_prediction_layer", node.visibility_layer)
+		body.set_meta("together_prediction_nodes", nodes)
+		_set_prediction_visibility(body, _local_prediction)
+	body.set_meta("together_native_draw_hidden", true)
+
+
+func _update_local_prediction() -> void:
+	if not _native_draw_available:
+		return
+	var local = is_instance_valid(player_ball) and player_ball.has_method("_can_control") and player_ball._can_control()
+	_native_draw_view.set_kind_hidden("prediction", local)
+	if local == _local_prediction:
+		return
+	_local_prediction = local
+	for body in replicas.values():
+		_set_prediction_visibility(body, local)
+
+
+func _set_prediction_visibility(body: Node, enabled: bool) -> void:
+	for node in body.get_meta("together_prediction_nodes", []):
+		if is_instance_valid(node):
+			var layer = node.get_meta("together_prediction_layer", 1) if enabled else 0
+			if node.visibility_layer != layer:
+				node.visibility_layer = layer

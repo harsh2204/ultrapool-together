@@ -2,6 +2,7 @@ extends Node
 
 const SEND_INTERVAL = 0.07
 const STALE_SECONDS = 1.5
+const KEEPALIVE_INTERVAL = 0.5
 # Quantization steps for the dirty check; sub-pixel / sub-degree jitter is not sent.
 const _POS_STEP = 4.0
 const _AIM_STEP = 0.02
@@ -25,6 +26,8 @@ var _shop: Node
 var _layer: CanvasLayer
 var _overlay: CursorOverlay
 var _send_time = 0.0
+var _send_age = 0.0
+var _session: Array = []
 var _name_time = 0.0
 var _sequence = 0
 var _remotes: Dictionary = {}
@@ -55,10 +58,12 @@ func align_under_crt() -> void:
 
 func tick(delta: float, active: bool, can_aim: bool) -> void:
 	if not active:
-		if not _remotes.is_empty():
+		if not _remotes.is_empty() or not _last_sent.is_empty():
 			clear()
 		return
+	_sync_session()
 	_send_time += delta
+	_send_age += delta
 	_name_time += delta
 	if _name_time >= 1.0:
 		_name_time = 0.0
@@ -72,9 +77,10 @@ func tick(delta: float, active: bool, can_aim: bool) -> void:
 	if _send_time >= SEND_INTERVAL and _controller.table_id >= 0:
 		_send_time = 0.0
 		var captured = _capture(can_aim)
-		# Only send when the cursor meaningfully changed; idle or sub-pixel movement
-		# would otherwise broadcast every interval.
-		if _changed(captured):
+		# Dirty-gate motion, but refresh held aim before the receiver expires it.
+		# PERF-027: at most two idle presence packets per second.
+		if _should_send(captured):
+			_send_age = 0.0
 			_last_sent = captured
 			_sequence += 1
 			var message = captured.duplicate()
@@ -101,13 +107,14 @@ func receive(sender: int, message: Dictionary) -> bool:
 		return false
 	if not _valid(message) or message.match != _controller.match_id:
 		return true
+	_sync_session()
 	var actor: int
 	if _transport.is_host:
 		actor = sender
 		if not _transport.connected_peers().has(actor):
 			return true
 		var table: int = _controller.player_table(actor)
-		if table < 0:
+		if table < 0 or message.table != table:
 			return true
 		message = message.duplicate()
 		message.actor = actor
@@ -124,10 +131,13 @@ func receive(sender: int, message: Dictionary) -> bool:
 	):
 		return true
 	var remote: Dictionary = _remotes.get(actor, {})
-	if not remote.is_empty() and remote.age < STALE_SECONDS:
+	if not remote.is_empty():
 		if remote.message.table == message.table and message.seq <= remote.message.seq:
 			return true
-	if remote.is_empty() or remote.age >= STALE_SECONDS or remote.message.space != message.space:
+	if (
+		remote.is_empty() or remote.age >= STALE_SECONDS or remote.message.space != message.space
+		or remote.message.get("aim_context", []) != message.get("aim_context", [])
+	):
 		remote = {"position": message.position, "origin": message.origin, "vector": message.vector}
 	remote.message = message
 	remote.age = 0.0
@@ -145,13 +155,19 @@ func cue_for(actor: int) -> String:
 
 ## Latest interpolated presence aim for a peer (empty if stale / not aiming). Refs #18.
 func remote_aim(actor: int) -> Dictionary:
-	if not _remotes.has(actor):
+	if actor != _controller.turn_owner or not _remotes.has(actor):
 		return {}
 	var remote: Dictionary = _remotes[actor]
 	if remote.age >= STALE_SECONDS:
 		return {}
 	var message: Dictionary = remote.message
-	if message.space != "table" or not bool(message.aiming):
+	var context: Array = _controller.aim_view_context()
+	if (
+		message.space != "table" or not bool(message.aiming)
+		or message.match != _controller.match_id or message.table != _controller.table_id
+		or _controller.player_table(actor) != message.table
+		or context.is_empty() or message.get("aim_context", []) != context
+	):
 		return {}
 	return {
 		"aiming": true,
@@ -180,9 +196,19 @@ func clear() -> void:
 	_names.clear()
 	_cues.clear()
 	_send_time = 0.0
+	_send_age = 0.0
+	_last_sent.clear()
+	_session.clear()
 	_name_time = 1.0
 	if _overlay != null:
 		_overlay.queue_redraw()
+
+
+func _sync_session() -> void:
+	var session = [_controller.match_id, _controller.table_id]
+	if session != _session:
+		clear()
+		_session = session
 
 
 func _capture(can_aim: bool) -> Dictionary:
@@ -193,7 +219,8 @@ func _capture(can_aim: bool) -> Dictionary:
 		"aiming": false,
 		"origin": Vector2.ZERO,
 		"vector": Vector2.ZERO,
-		"cue": _local_cue_id()
+		"cue": _local_cue_id(),
+		"aim_context": []
 	}
 	var viewport = get_viewport()
 	var mouse = viewport.get_mouse_position()
@@ -216,13 +243,22 @@ func _capture(can_aim: bool) -> Dictionary:
 	state.space = "table"
 	state.position = viewport.get_canvas_transform().affine_inverse() * mouse
 	var player = game.player_ball
-	if is_instance_valid(player) and can_aim and player.preparing_shot and player.shot is Vector2:
+	var context: Array = _controller.aim_view_context() if can_aim else []
+	if (
+		is_instance_valid(player) and can_aim and not context.is_empty()
+		and player.preparing_shot and player.shot is Vector2 and player.shot.is_finite()
+	):
+		state.aim_context = context
 		state.aiming = true
 		state.origin = player.global_position
 		state.vector = player.shot.limit_length(200.0)
 		if get_node("/root/InputManager").is_controller():
 			state.position = state.origin + state.vector
 	return state
+
+
+func _should_send(state: Dictionary) -> bool:
+	return _changed(state) or (state.space != "none" and _send_age >= KEEPALIVE_INTERVAL)
 
 
 func _changed(state: Dictionary) -> bool:
@@ -233,6 +269,7 @@ func _changed(state: Dictionary) -> bool:
 		or state.target != _last_sent.target
 		or state.aiming != _last_sent.aiming
 		or state.cue != _last_sent.get("cue", CueCatalog.DEFAULT_ID)
+		or state.get("aim_context", []) != _last_sent.get("aim_context", [])
 	):
 		return true
 	return (
@@ -296,15 +333,6 @@ func _draw_cursor(canvas: Control, id: int, remote: Dictionary) -> void:
 			return
 		var transform = get_viewport().get_canvas_transform()
 		position = transform * remote.position
-		if message.aiming:
-			var start = transform * remote.origin
-			var end = transform * (remote.origin + remote.vector)
-			canvas.draw_line(start, end, color, 2.0, true)
-			canvas.draw_circle(start, 5.0, color, false, 1.5, true)
-			if start.distance_squared_to(end) > 4.0:
-				var direction = (end - start).normalized()
-				canvas.draw_line(end, end - direction.rotated(0.5) * 10, color, 2.0, true)
-				canvas.draw_line(end, end - direction.rotated(-0.5) * 10, color, 2.0, true)
 	if not get_viewport().get_visible_rect().has_point(position):
 		return
 	var pointer = PackedVector2Array(
@@ -342,6 +370,7 @@ func _valid(message: Dictionary) -> bool:
 		or message.target.length() > 128
 		or not message.get("aiming") is bool
 		or not _valid_cue(message.get("cue", CueCatalog.DEFAULT_ID))
+		or not _valid_aim_context(message.get("aim_context", []))
 	):
 		return false
 	for field in ["position", "origin", "vector"]:
@@ -357,6 +386,16 @@ func _valid(message: Dictionary) -> bool:
 	return (
 		message.position.length() <= 100000.0 and (message.space == "table" or not message.aiming)
 	)
+
+
+static func _valid_aim_context(value) -> bool:
+	# Legacy peers may still send a cursor; only scoped packets drive native prediction.
+	if not value is Array or (value.size() != 0 and value.size() != 3):
+		return false
+	for part in value:
+		if not part is int or part < 0:
+			return false
+	return true
 
 
 static func _valid_cue(value) -> bool:

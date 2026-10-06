@@ -40,7 +40,7 @@ const PLAQUE_INK = Color("3b2610")
 const BUTTON_CONTENT = [15, 11, 15, 11]
 const FIELD_CONTENT = [15, 11, 15, 11]
 const DROPDOWN_CONTENT = [15, 11, 30, 11]
-const TABLE_CARD_CONTENT = [16, 14, 16, 14]
+const TABLE_CARD_CONTENT = [16, 10, 16, 10]
 const PLAQUE_CONTENT = [24, 3, 24, 5]
 const ROW_CONTENT = [8, 5, 8, 5]
 const ROW_SPACING = 6
@@ -962,7 +962,7 @@ func _build_tables():
 		card.add_theme_stylebox_override("panel", _table_card_style(color))
 		%Tables.add_child(card)
 		var content = VBoxContainer.new()
-		content.add_theme_constant_override("separation", 8)
+		content.add_theme_constant_override("separation", 4)
 		card.add_child(content)
 		var title = Label.new()
 		title.text = "TABLE %d" % (table_id + 1)
@@ -1239,6 +1239,11 @@ func _skinned() -> bool:
 
 # Pool-hall chalkboard art. Content margins match the flat styles so control sizes stay put.
 func _apply_skin(palette: Theme) -> void:
+	# PERF-026: preserve the 108px logo without pushing the full catalog's table
+	# rosters below the 720px viewport. Reclaim spacing, not label or roster height.
+	$Margin.add_theme_constant_override("margin_top", 4)
+	$Margin/Layout.add_theme_constant_override("separation", 6)
+	%Room.add_theme_constant_override("separation", 6)
 	for state in ["normal", "hover", "pressed", "disabled"]:
 		palette.set_stylebox(state, "Button", skin.button_style("dark", state, BUTTON_CONTENT))
 		var dropdown = (

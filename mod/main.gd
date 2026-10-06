@@ -23,6 +23,8 @@ const HudPrefs = preload("hud_prefs.gd")
 const TurnBanner = preload("turn_banner.gd")
 const TableEffects = preload("table_effects_sync.gd")
 const VisualFx = preload("table_visual_fx.gd")
+const NativeDraw = preload("table_native_draw.gd")
+const CueEffects = preload("cue_effects.gd")
 const ProgressImport = preload("progress_import.gd")
 
 var transport: Node
@@ -78,6 +80,12 @@ var snapshot_time = 0.0
 var state_time = 0.0
 var snapshot_id = 0
 var last_guest_snapshot = 0
+## PERF-002: newest replaceable table sample received during the current receive
+## drain. Phase barriers (snapshots carrying shop state) and shot starts apply
+## immediately; disposable motion samples coalesce to the latest one per frame.
+var _pending_snapshot: Dictionary = {}
+## PERF-007: snapshot id per table that the room host has validated for watchers.
+var _watch_validated: Dictionary = {}
 var last_started_turn = -1
 var last_shop_state: Dictionary = {}
 const CloneRound = preload("clone_round.gd")
@@ -113,13 +121,17 @@ var bad_snapshot_grace_msec = 3000
 var _bad_snapshot_started_msec = -1
 ## Host mid-round spawn barrier (PERF-008): hold until new bodies inited, then
 ## publish a reliable keyframe so guests materialize the id (#17).
-const SPAWN_BARRIER_MAX_MSEC = 2000
+const SPAWN_BARRIER_WARNING_MSEC = 2000
 var _spawn_barrier_held = false
 var _spawn_barrier_since_msec = -1
+var _spawn_barrier_warned = false
+var _capture_problem = ""
 var _published_ball_ids: Dictionary = {}
 var _published_pocket_ids: Dictionary = {}
 var _published_effect_ids: Dictionary = {}
 var _published_visual_fx_ids: Dictionary = {}
+var _published_native_draw_ids: Dictionary = {}
+var _published_presentation_status: Array = []
 var _effect_overflow_status = ""
 var _published_scene_id = 0
 var _progress_importer = ProgressImport.new()
@@ -194,6 +206,7 @@ func _ready():
 	transport.received.connect(_received)
 	transport.status_changed.connect(_status)
 	transport.room_ready.connect(_room_ready)
+	transport.receive_drained.connect(_flush_pending_snapshot)
 	var DifficultyCatalog = load(base.path_join("difficulty_catalog.gd"))
 	DifficultyCatalog.register(get_node_or_null("/root/BallDatabase"))
 	if str(ProjectSettings.get_setting("application/config/version", "")) != GAME_VERSION:
@@ -837,6 +850,7 @@ func _start_match(sender: int):
 	_finish_count = 0
 	_watchers.clear()
 	_watch_snapshots.clear()
+	_watch_validated.clear()
 	_watch_states.clear()
 	_starting_players = lobby_model.snapshot().players.map(func(player): return player.id)
 	table_summaries.clear()
@@ -891,6 +905,7 @@ func _begin_table(config: Dictionary):
 	table_leader_id = _leader(table_id)
 	if table_id < 0 or table_leader_id == 0:
 		return
+	_pending_snapshot = {}
 	run_config = config.duplicate(true)
 	_set_panel(false)
 	turn_owner = table_leader_id
@@ -992,8 +1007,10 @@ func _end_table():
 		run_controls.end_session()
 	_watchers.clear()
 	_watch_snapshots.clear()
+	_watch_validated.clear()
 	_watch_states.clear()
 	_starting_players.clear()
+	_pending_snapshot = {}
 	_restore_menu()
 	presence.clear()
 	_clear_clone_shop_gate()
@@ -1108,21 +1125,44 @@ func _set_watcher(actor: int, message: Dictionary):
 	if _watch_states.has(table):
 		_send_watch(actor, table, _watch_states[table])
 	if _watch_snapshots.has(table):
-		_send_watch(actor, table, _watch_snapshots[table])
+		# Retained unvalidated while nobody watched (PERF-007); validate once now.
+		var cached: Dictionary = _watch_snapshots[table]
+		if _watch_validated.get(table, -1) == cached.id or table_sync._valid_snapshot(cached.scene):
+			_watch_validated[table] = cached.id
+			_send_watch(actor, table, cached)
+		else:
+			_watch_snapshots.erase(table)
+
+
+func _table_watched(table: int) -> bool:
+	for actor in _watchers:
+		if _watchers[actor] == table:
+			return true
+	return false
 
 
 func _forward_watchers(table: int, payload: Dictionary):
+	# table_router.route already produced this private copy (PERF-006); retain it
+	# instead of copying again. Nothing mutates a routed payload after delivery.
 	if payload.kind == "state":
-		_watch_states[table] = payload.duplicate(true)
+		_watch_states[table] = payload
 	elif payload.kind == "snapshot":
 		if (
 			not payload.get("id") is int
 			or payload.id <= _watch_snapshots.get(table, {}).get("id", -1)
 			or not payload.get("scene") is Dictionary
-			or not table_sync._valid_snapshot(payload.scene)
 		):
 			return
-		_watch_snapshots[table] = payload.duplicate(true)
+		if not _table_watched(table):
+			# PERF-007: no watcher, no validation or fan-out. Keep the newest
+			# snapshot so a late joiner still hydrates immediately after one check.
+			_watch_snapshots[table] = payload
+			_watch_validated.erase(table)
+			return
+		if not table_sync._valid_snapshot(payload.scene):
+			return
+		_watch_snapshots[table] = payload
+		_watch_validated[table] = payload.id
 	else:
 		return
 	for actor in _watchers:
@@ -1237,6 +1277,10 @@ func _roster_changed():
 				turn_owner = _next_player()
 				shot_number += 1
 				_publish_state()
+	# Final competitive awards arrive in lobby summaries, possibly after a
+	# finished watched table has stopped sending state. Refresh that label here.
+	if spectator != null:
+		spectator.refresh_summary()
 	if panel.visible:
 		_render_lobby()
 
@@ -1246,6 +1290,9 @@ func _process(delta):
 		_restore_menu()
 		if run_setup.return_menu() == OK:
 			_returning_to_menu = false
+	# Fallback for a drain that ended without its signal; normally already empty.
+	if not _pending_snapshot.is_empty():
+		_flush_pending_snapshot()
 	if panel.visible:
 		_suspend_menu()
 	presence.tick(delta, active and not is_spectating(), can_control())
@@ -1381,10 +1428,14 @@ func _clear_bad_snapshot_streak() -> void:
 func _clear_spawn_barrier() -> void:
 	_spawn_barrier_held = false
 	_spawn_barrier_since_msec = -1
+	_spawn_barrier_warned = false
+	_capture_problem = ""
 	_published_ball_ids.clear()
 	_published_pocket_ids.clear()
 	_published_effect_ids.clear()
 	_published_visual_fx_ids.clear()
+	_published_native_draw_ids.clear()
+	_published_presentation_status.clear()
 	_effect_overflow_status = ""
 	if is_instance_valid(table_sync) and table_sync.has_method("clear_effect_capture"):
 		table_sync.clear_effect_capture()
@@ -1411,25 +1462,31 @@ func can_control() -> bool:
 	return hovered == null or not ui_root.is_ancestor_of(hovered)
 
 
-func _turn_ready() -> bool:
+## A ready table context can be viewed by an off-turn peer, but only the current
+## owner may submit a shot. Never expose a newer state against an older replica.
+func aim_view_context() -> Array:
 	if (
 		not active
 		or is_spectating()
 		or panel.visible
-		or turn_owner != transport.local_id()
 		or shot_pending
+		or awaiting_shot_turn >= 0
 		or finished
+		or shop_sync.is_open()
 	):
-		return false
-	if shop_sync.is_open():
-		return false
+		return []
 	if is_table_host():
-		return run_setup.ready_for_input() and adapter.can_shoot()
-	return (
-		awaiting_shot_turn < 0
-		and latest_state.get("can_shoot", false)
-		and table_sync.ready_for_input()
-	)
+		if not run_setup.ready_for_input() or table_sync.spawn_barrier_active():
+			return []
+		var native_context: Array = adapter.aim_context()
+		return [shot_number, native_context[0], native_context[1]] if native_context.size() == 2 else []
+	if not table_sync.ready_for_state(latest_state):
+		return []
+	return [shot_number, latest_state.rounds_played, latest_state.round]
+
+
+func _turn_ready() -> bool:
+	return turn_owner == transport.local_id() and not aim_view_context().is_empty()
 
 
 func submit_shot(vector: Vector2) -> bool:
@@ -1455,6 +1512,7 @@ func _take_shot(player: int, vector: Vector2, expected_turn: int) -> bool:
 		return false
 	if (
 		not run_setup.ready_for_input()
+		or table_sync.spawn_barrier_active()
 		or not vector.is_finite()
 		or vector.length() <= 50.0
 		or vector.length() > 200.1
@@ -1564,6 +1622,8 @@ func _pass(player: int, expected_turn: int) -> bool:
 		or player != turn_owner
 		or expected_turn != shot_number
 		or shot_pending
+		or not run_setup.ready_for_input()
+		or table_sync.spawn_barrier_active()
 		or not adapter.can_shoot()
 	):
 		return false
@@ -1687,6 +1747,18 @@ func _set_hud_text(turn_text: String, score_text: String):
 
 
 func _result_text() -> String:
+	var text = _match_result_text()
+	if not finished or not _score_match():
+		return text
+	for summary in lobby.get("table_summaries", []):
+		if summary is Dictionary and summary.get("table") == table_id:
+			var award: String = bounty_race.award_text(summary)
+			if award != "":
+				return text + " · " + award
+	return text
+
+
+func _match_result_text() -> String:
 	if not _competitive():
 		return finish_reason
 	var summaries: Array = lobby.get("table_summaries", [])
@@ -1747,7 +1819,10 @@ func _publish_state(
 	expansion_balls.prepare_shop()
 	latest_state = adapter.game_data()
 	latest_state.run_won = latest_state.run_won and finished
-	latest_state.can_shoot = latest_state.can_shoot and run_setup.ready_for_input() and not finished
+	latest_state.can_shoot = (
+		latest_state.can_shoot and run_setup.ready_for_input() and not finished
+		and not table_sync.spawn_barrier_active()
+	)
 	latest_state.merge(
 		{
 			"kind": "state",
@@ -1760,6 +1835,7 @@ func _publish_state(
 			"multiplayer_balls": multiplayer_balls.capture(),
 			"expansion_balls": expansion_balls.capture(),
 			"cues": cue_inventory.snapshot(),
+			"cue_feedback": cue_effects.capture_feedback() if cue_effects != null else {},
 			"clone_round": CloneRound.snapshot(
 				_clone_instances, _clone_active, _clone_winner, _clone_shop_armed
 			),
@@ -1779,6 +1855,12 @@ func _publish_state(
 	var ui_nav: Dictionary = latest_state.get("ui_nav", {})
 	var state_sig = [
 		latest_state.get("available"),
+		latest_state.get("table_active"),
+		latest_state.get("can_shoot"),
+		latest_state.get("in_menu"),
+		latest_state.get("round_ended"),
+		latest_state.get("round_result_open"),
+		latest_state.get("rounds_played"),
 		latest_state.get("settled"),
 		latest_state.get("in_shop"),
 		latest_state.get("game_over"),
@@ -1794,6 +1876,7 @@ func _publish_state(
 		multiplayer_balls.display_signature(balls_state),
 		expansion_balls.display_signature(expansion_state),
 		latest_state.get("cues", {}),
+		latest_state.get("cue_feedback", {}),
 		UiNav.signature(ui_nav)
 	]
 	if target != 0 or state_sig != _last_state_sig:
@@ -1824,32 +1907,46 @@ func _publish_state(
 		shop_state.get("scene", 0)
 	]
 	if target != 0 or phase != _last_phase:
+		# A held/invalid capture still owes every peer its reliable phase baseline.
+		# Targeted resync must not consume that broadcast debt (PERF-008/014).
+		if not _publish_snapshot(true, target, shop_state):
+			# Opening/closing the standalone shop ahead of this baseline would
+			# combine its new phase with the guest's old board and inventory.
+			return
 		if target == 0:
 			_last_phase = phase
-		_publish_snapshot(true, target, shop_state)
+	if not active or not is_table_host():
+		return
 	if target != 0 or shop_state != last_shop_state:
 		if target == 0:
 			last_shop_state = shop_state.duplicate(true)
 		_table_send({"kind": "shop_state", "shop": shop_state}, target)
 
 
-func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary = {}):
+func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary = {}) -> bool:
 	if not active or not is_table_host() or not adapter.game_data().available:
-		return
-	# Hold ordinary publishes while a mid-round body is still initializing so guests
-	# never stream a table that permanently omits that authoritative id (#17 / PERF-008).
-	if target == 0 and table_sync.spawn_barrier_active():
+		return false
+	# A timeout is diagnostic only: an incomplete rack must never become a valid
+	# baseline, including on targeted resync. Recovery sends one reliable complete
+	# keyframe; no packets are queued while native bodies initialize (PERF-008).
+	if table_sync.spawn_barrier_active():
 		if _spawn_barrier_since_msec < 0:
 			_spawn_barrier_since_msec = Time.get_ticks_msec()
-		if Time.get_ticks_msec() - _spawn_barrier_since_msec < SPAWN_BARRIER_MAX_MSEC:
-			_spawn_barrier_held = true
-			return
-		push_warning("Together: spawn barrier timed out; publishing without incomplete bodies")
+		_spawn_barrier_held = true
+		if (
+			not _spawn_barrier_warned
+			and Time.get_ticks_msec() - _spawn_barrier_since_msec >= SPAWN_BARRIER_WARNING_MSEC
+		):
+			_spawn_barrier_warned = true
+			push_warning("Together: waiting for native bodies before publishing the complete table")
+		return false
 	var scene = table_sync.capture()
 	if not table_sync.valid_capture(scene):
-		var problem = table_sync.snapshot_problem(scene)
-		push_warning("Together: skipped publishing invalid table capture (%s)" % problem)
-		return
+		var problem: String = table_sync.snapshot_problem(scene)
+		if problem != _capture_problem:
+			_capture_problem = problem
+			push_warning("Together: skipped publishing invalid table capture (%s)" % problem)
+		return false
 	var force_reliable = reliable or target != 0
 	# Only broadcasts advance the shared topology cache. A targeted resync must not
 	# consume the reliable update still owed to every other teammate (PERF-008).
@@ -1861,6 +1958,8 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 			_published_pocket_ids.clear()
 			_published_effect_ids.clear()
 			_published_visual_fx_ids.clear()
+			_published_native_draw_ids.clear()
+			_published_presentation_status.clear()
 			force_reliable = true
 		var ids: Dictionary = table_sync.ball_ids(scene)
 		var pocket_ids: Dictionary = table_sync.pocket_ids(scene)
@@ -1868,9 +1967,17 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 		var visual_fx: Dictionary = scene.get("visual_fx", {})
 		var effect_ids: Dictionary = TableEffects.topology(effects)
 		var visual_fx_ids: Dictionary = VisualFx.topology(visual_fx)
+		var native_draw: Dictionary = scene.get("native_draw", {})
+		var native_draw_ids: Dictionary = NativeDraw.topology(native_draw)
+		var presentation_status: Array = [
+			scene.get("ball_visual_status", "complete"),
+			scene.get("pocket_visual_status", "complete")
+		]
 		if (
 			ids != _published_ball_ids or pocket_ids != _published_pocket_ids
 			or effect_ids != _published_effect_ids or visual_fx_ids != _published_visual_fx_ids
+			or native_draw_ids != _published_native_draw_ids
+			or presentation_status != _published_presentation_status
 		):
 			force_reliable = true
 		if _spawn_barrier_held:
@@ -1879,20 +1986,27 @@ func _publish_snapshot(reliable: bool = false, target: int = 0, shop: Dictionary
 		_published_pocket_ids = pocket_ids
 		_published_effect_ids = effect_ids
 		_published_visual_fx_ids = visual_fx_ids
-		_report_effect_capacity(effects, visual_fx)
+		_published_native_draw_ids = native_draw_ids
+		_published_presentation_status = presentation_status
+		_report_effect_capacity(effects, visual_fx, native_draw, str(scene.get("ball_visual_status", "complete")), str(scene.get("pocket_visual_status", "complete")))
 	if target == 0:
 		_spawn_barrier_held = false
 		_spawn_barrier_since_msec = -1
+		_spawn_barrier_warned = false
+		_capture_problem = ""
 	snapshot_id += 1
 	var message = {"kind": "snapshot", "id": snapshot_id, "scene": scene}
 	if not shop.is_empty():
 		message["shop"] = shop
 	_table_send(message, target, force_reliable)
+	return active and is_table_host()
 
 
-func _report_effect_capacity(effects: Dictionary, visual_fx: Dictionary) -> void:
-	var status = ""
-	for state in [effects, visual_fx]:
+func _report_effect_capacity(effects: Dictionary, visual_fx: Dictionary, native_draw: Dictionary = {}, ball_visual_status: String = "complete", pocket_visual_status: String = "complete") -> void:
+	var status = "ball presentation bytes; " if ball_visual_status == "overflow" else ""
+	if pocket_visual_status == "overflow":
+		status += "pocket presentation bytes; "
+	for state in [effects, visual_fx, native_draw]:
 		if state.get("status") == "overflow":
 			status += str(state.get("reason", "effect capacity")) + "; "
 	if status == _effect_overflow_status:
@@ -2139,13 +2253,15 @@ func _received_table(actor: int, message: Dictionary):
 		and message.vector.length() <= 200.1
 		and message.get("scene") is Dictionary
 	):
+		# An accepted shot is an action barrier: older motion applies first.
+		_flush_pending_snapshot()
 		if message.id > last_guest_snapshot:
 			if not table_sync._valid_snapshot(message.scene):
 				_bad_table("shot", table_sync.snapshot_problem(message.scene))
 				return
 			if _snapshot_phase(message.scene) != _guest_phase:
 				return
-			if not table_sync.apply_snapshot(message.scene):
+			if not table_sync.apply_validated_snapshot(message.scene):
 				_bad_table("shot", "apply_snapshot failed")
 				return
 			last_guest_snapshot = message.id
@@ -2192,23 +2308,50 @@ func _received_table(actor: int, message: Dictionary):
 		and message.id > last_guest_snapshot
 		and message.get("scene") is Dictionary
 	):
-		if not table_sync._valid_snapshot(message.scene):
-			_bad_table("table", table_sync.snapshot_problem(message.scene))
-			return
-		var phase = _snapshot_phase(message.scene)
-		# Ball updates must wait for the reliable scene transition.
-		if not message.has("shop") and phase != _guest_phase:
-			return
-		if not table_sync.apply_snapshot(message.scene):
-			_bad_table("table", "apply_snapshot failed")
-			return
 		if message.has("shop"):
-			if not message.shop is Dictionary or not shop_sync.apply_state(message.shop):
-				_bad_table("shop", "shop apply failed")
-				return
-			_guest_phase = phase
-		_clear_bad_snapshot_streak()
-		last_guest_snapshot = message.id
+			# Phase barrier: apply now; it supersedes any older pending motion.
+			_pending_snapshot = {}
+			_apply_guest_snapshot(message)
+		elif _pending_snapshot.is_empty() or message.id > int(_pending_snapshot.id):
+			# PERF-002: one bounded slot holds the newest disposable sample until
+			# the receive drain ends, so a burst reconciles once per frame.
+			_pending_snapshot = message
+
+
+func _flush_pending_snapshot() -> void:
+	if _pending_snapshot.is_empty():
+		return
+	var message: Dictionary = _pending_snapshot
+	_pending_snapshot = {}
+	if not active or is_table_host() or int(message.get("id", 0)) <= last_guest_snapshot:
+		return
+	_apply_guest_snapshot(message)
+
+
+func _apply_guest_snapshot(message: Dictionary) -> void:
+	if not table_sync._valid_snapshot(message.scene):
+		_bad_table("table", table_sync.snapshot_problem(message.scene))
+		return
+	var phase = _snapshot_phase(message.scene)
+	# Ball updates must wait for the reliable scene transition.
+	if not message.has("shop") and phase != _guest_phase:
+		return
+	# Validate both parts before either can mutate the table or open native results.
+	if message.has("shop"):
+		if not message.shop is Dictionary or not shop_sync.valid_state(message.shop):
+			_bad_table("shop", "invalid bundled shop")
+			return
+	# PERF-014: validated once above; the internal applies do not re-check.
+	if not table_sync.apply_validated_snapshot(message.scene):
+		_bad_table("table", "apply_snapshot failed")
+		return
+	if message.has("shop"):
+		if not shop_sync.apply_validated_state(message.shop):
+			_bad_table("shop", "shop apply failed")
+			return
+		_guest_phase = phase
+	_clear_bad_snapshot_streak()
+	last_guest_snapshot = message.id
 
 
 func _snapshot_phase(scene: Dictionary) -> Array:
@@ -2277,6 +2420,12 @@ func _valid_state(message: Dictionary, table: int) -> bool:
 		and not expansion_balls.valid_state(message.get("expansion_balls"))
 	):
 		return false
+	if message.has("cue_feedback"):
+		if not CueEffects.valid_feedback(message.cue_feedback):
+			return false
+		if not message.cue_feedback.is_empty() and message.cue_feedback.shot > message.used_shots + int(message.pending):
+			return false
+		# A receipt can outlive its actor's membership; it grants no authority.
 	if message.has("ui_nav") and not UiNav.valid(message.ui_nav):
 		return false
 	if message.has("cues") and (

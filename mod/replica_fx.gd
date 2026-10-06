@@ -66,6 +66,8 @@ func observe_shot() -> void:
 
 
 func observe_ball(body: Node, state: Dictionary, created: bool) -> void:
+	if not state.get("ball_visual", {}).is_empty():
+		body.set_meta("together_ball_visual_authoritative", true)
 	var id: int = state.id
 	var was_present: bool = _present.has(id)
 	_present[id] = true
@@ -141,6 +143,8 @@ func _play_start_animation(table: Node) -> void:
 
 
 func _pulse_spawn(body: Node) -> void:
+	if body.get_meta("together_ball_visual_authoritative", false):
+		return
 	if _visuals >= MAX_VISUALS_PER_APPLY or not is_instance_valid(body):
 		return
 	_visuals += 1
@@ -153,6 +157,8 @@ func _pulse_spawn(body: Node) -> void:
 
 
 func _pulse_pocket(body: Node) -> void:
+	if body.get_meta("together_ball_visual_authoritative", false):
+		return
 	if _visuals >= MAX_VISUALS_PER_APPLY or not is_instance_valid(body):
 		return
 	_visuals += 1
@@ -171,6 +177,8 @@ func _flash_spark(spark: CanvasItem) -> void:
 
 
 func _hide_spark(body: Node) -> void:
+	if body.get_meta("together_ball_visual_authoritative", false):
+		return
 	var spark = _effect_node(body, "static/spark")
 	if spark is CanvasItem and spark.visible:
 		spark.hide()
@@ -189,7 +197,7 @@ func _auto_hide(node: CanvasItem, seconds: float) -> void:
 	timer.timeout.connect(
 		func():
 			_spark_timers = maxi(_spark_timers - 1, 0)
-			if is_instance_valid(node):
+			if is_instance_valid(node) and not node.get_meta("together_ball_visual_authoritative", false):
 				node.hide(),
 		CONNECT_ONE_SHOT
 	)

@@ -24,7 +24,12 @@ var native_aim = preload("native_aim_fixture.gd").new()
 var native_pocket = preload("native_pocket_fixture.gd").new()
 var native_effects = preload("native_table_effects_fixture.gd").new()
 var native_visual_fx = preload("native_visual_fx_fixture.gd").new()
+var native_drawing = preload("native_drawing_fixture.gd").new()
+var ball_presentation = preload("ball_presentation_fixture.gd").new()
+var ability_feedback = preload("ability_feedback_fixture.gd").new()
+var bounty_feedback = preload("bounty_feedback_fixture.gd").new()
 var cue_fixtures: RefCounted
+var cue_native: RefCounted
 var fixture_config = {"deck": "1_CLASSIC", "difficulty": "diff_3", "seed": 24681}
 
 
@@ -190,10 +195,12 @@ func _run():
 	_check(not mod.run_controls._bindings.is_empty(), "native run exits route to lobby voting")
 	_check_run_config("host")
 	_check_balls(game.balls, "host")
-	await native_aim.check(mod, game, "host", _check)
+	await native_aim.check(mod, game, "host", _check, _capture)
 	await native_pocket.check_host(mod, game, _check, _capture)
 	await native_effects.check_host(mod, game, _check, _capture)
 	await native_visual_fx.check_host(mod, game, _check, _capture)
+	await native_drawing.check_host(mod, game, _check, _capture)
+	await ball_presentation.check_host(mod, game, _check, _capture)
 	await _capture("10-host-table", "Host table · the selected native Classic starting set")
 	var cue_native_script = load(
 		get_script().resource_path.get_base_dir().path_join("cue_native_fixtures.gd")
@@ -202,7 +209,8 @@ func _run():
 		cue_native_script != null and cue_native_script.can_instantiate(),
 		"compiled native cue fixtures"
 	):
-		await cue_native_script.new().run(mod, game, _capture, _check)
+		cue_native = cue_native_script.new()
+		await cue_native.run(mod, game, _capture, _check)
 	await fixtures.capture_table_states(mod, _capture)
 	var snapshot = mod.table_sync.capture()
 	var spectator_fixtures = (
@@ -298,10 +306,17 @@ func _run():
 		if game.player_ball.has_method("_hide_cue_pivot"):
 			game.player_ball._hide_cue_pivot()
 	await _capture("30-guest-table", "Guest table · reconstructed from the host snapshot")
-	await native_aim.check(mod, game, "guest", _check)
+	await native_aim.check(mod, game, "guest", _check, _capture)
 	await native_pocket.check_guest(mod, snapshot, _check, _capture)
 	await native_effects.check_guest(mod, snapshot, _check, _capture)
 	await native_visual_fx.check_guest(mod, snapshot, _check, _capture)
+	await native_drawing.check_guest(mod, snapshot, _check, _capture)
+	await ball_presentation.check_guest(mod, snapshot, _check, _capture)
+	await ability_feedback.check_guest(
+		mod, snapshot, _check, _capture,
+		cue_native.committed_feedback if cue_native != null else {}
+	)
+	await bounty_feedback.check_guest(mod, snapshot, _check, _capture)
 	await _capture_guest_aim(game)
 	await _capture_ball_previews(game)
 	await _capture_guest_shop(snapshot, shop_state)

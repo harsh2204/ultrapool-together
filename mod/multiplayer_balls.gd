@@ -11,6 +11,7 @@ var _ball_script: Script
 var _native_ball_script: Script
 var _hooked: Dictionary = {}
 var _remote: Dictionary = {}
+var _last_capture: Dictionary = {}
 var _active = false
 var _round_key = ""
 var _encore: WeakRef
@@ -41,6 +42,7 @@ func begin_session() -> void:
 	_active = true
 	_round_key = ""
 	_remote.clear()
+	_last_capture = {}
 	catalog.set_active(true)
 
 
@@ -54,6 +56,7 @@ func end_session() -> void:
 	_potted.clear()
 	_encore = null
 	_remote.clear()
+	_last_capture = {}
 	_round_key = ""
 	if catalog != null:
 		catalog.set_active(false)
@@ -62,12 +65,27 @@ func end_session() -> void:
 
 
 func _process(_delta: float) -> void:
-	if not _active:
-		return
-	if _controller.is_table_host():
+	if _active and _controller.is_table_host():
 		_sync_round()
 		_try_encore()
-	_ui.refresh(capture() if _controller.is_table_host() else _remote)
+	# The overlay also presents expansion ability state (MOD-07..12), so it keeps
+	# refreshing while only expansion sets are enabled.
+	var expansion = _controller.get("expansion_balls")
+	var expansion_state: Dictionary = {}
+	if expansion != null and expansion.has_method("display_state"):
+		expansion_state = expansion.display_state()
+	var cue_feedback: Dictionary = _controller.latest_state.get("cue_feedback", {})
+	if not _active and expansion_state.is_empty() and cue_feedback.is_empty():
+		if not _ui._cue_feedback.is_empty():
+			_ui.refresh({}, {}, {})
+		return
+	_ui.refresh(display_state() if _active else {}, expansion_state, cue_feedback)
+
+
+## PERF-028: the host reuses its latest published capture instead of rebuilding
+## every ball's display entry each rendered frame; guests use validated remote state.
+func display_state() -> Dictionary:
+	return _last_capture if _controller.is_table_host() else _remote
 
 
 func _game():
@@ -201,15 +219,20 @@ func record_pocket(body, pocket, multiplier: float) -> void:
 		game.player_info.gain_money(action.money)
 		game.table.update_money(game.player_info.money)
 		game.display_money(action.money, body.global_position)
-	if action.heal > 0 and game.player_info.hp < game.get_max_hp():
-		game.player_info.hp = mini(game.get_max_hp(), game.player_info.hp + action.heal)
-		game.update_hp(game.player_info.hp)
+	if action.heal > 0:
+		var before_hp: int = game.player_info.hp
+		if before_hp < game.get_max_hp():
+			game.player_info.hp = mini(game.get_max_hp(), before_hp + action.heal)
+			game.update_hp(game.player_info.hp)
+		rules.record_heal(body.get_instance_id(), int(game.player_info.hp) - before_hp)
 	if action.encore:
 		for index in range(_potted.size() - 1, -1, -1):
 			var candidate = _potted[index].get_ref()
 			if _encore_candidate(candidate):
 				_encore = weakref(candidate)
 				break
+		if _encore == null:
+			rules.record_encore("unavailable")
 	if kinds.is_empty():
 		_potted.append(weakref(body))
 
@@ -230,6 +253,7 @@ func _try_encore() -> void:
 	var game = _game()
 	var body = _encore.get_ref()
 	if game == null or not _encore_candidate(body):
+		rules.record_encore("cancelled")
 		_encore = null
 		return
 	# round_ended alone must not cancel — native sets it when the table clears, which is
@@ -237,6 +261,7 @@ func _try_encore() -> void:
 	if BallRules.encore_cancelled(
 		bool(game.in_shop), bool(game.get("round_end_stuff_happened"))
 	):
+		rules.record_encore("cancelled")
 		_encore = null
 		return
 	if (
@@ -253,6 +278,7 @@ func _try_encore() -> void:
 	game.respawn_specific_ball(body)
 	game.pocketed_balls.erase(body)
 	game.delay_round_end(1.0)
+	rules.record_encore("returned")
 	_encore = null
 
 
@@ -316,11 +342,13 @@ func bounty_shot() -> int:
 
 func capture() -> Dictionary:
 	if not _active:
+		_last_capture = {}
 		return {}
 	var data = {
 		"last_shooter": rules.last_shooter,
 		"pending": rules.pending,
 		"bounty_shot": bounty_shot(),
+		"feedback": rules.capture_feedback(),
 		"call": rules.call_state.duplicate(),
 		"balls": [],
 		"pockets": []
@@ -361,6 +389,7 @@ func capture() -> Dictionary:
 					"open": not fixed[index].closed
 				}
 			)
+	_last_capture = data
 	return data
 
 

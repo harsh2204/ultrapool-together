@@ -71,6 +71,11 @@ class AdapterStub:
 	func can_shoot() -> bool:
 		return ready_to_shoot
 
+	func aim_context() -> Array:
+		if not ready_to_shoot or not state.get("can_shoot", false):
+			return []
+		return [state.get("rounds_played", 0), state.get("round", 0)]
+
 	func shoot(vector: Vector2, accepted: Callable = Callable()) -> bool:
 		if not ready_to_shoot:
 			return false
@@ -97,6 +102,10 @@ class TableStub:
 	extends Node
 	var ended = 0
 	var active_effects = false
+	var spawn_blocked = false
+	var input_ready = false
+	var readiness_states: Array = []
+	var validations = 0
 	var shots: Array[Vector2] = []
 	var captured: Dictionary = {"available": false}
 	var applied: Dictionary = {}
@@ -108,6 +117,7 @@ class TableStub:
 		ended += 1
 
 	func _valid_snapshot(data: Dictionary) -> bool:
+		validations += 1
 		return data.get("available") is bool
 
 	func valid_capture(data: Dictionary) -> bool:
@@ -129,7 +139,11 @@ class TableStub:
 		return result
 
 	func spawn_barrier_active() -> bool:
-		return false
+		return spawn_blocked
+
+	func ready_for_state(state: Dictionary) -> bool:
+		readiness_states.append(state.duplicate(true))
+		return input_ready
 
 	func effects_active() -> bool:
 		return active_effects
@@ -137,6 +151,9 @@ class TableStub:
 	func apply_snapshot(data: Dictionary) -> bool:
 		if not _valid_snapshot(data):
 			return false
+		return apply_validated_snapshot(data)
+
+	func apply_validated_snapshot(data: Dictionary) -> bool:
 		applied = data.duplicate(true)
 		return true
 
@@ -148,6 +165,7 @@ class TableStub:
 class SpectatorStub:
 	extends Node
 	var watched_table = -1
+	var summary_refreshes = 0
 	var states: Array = []
 	var snapshots: Array = []
 
@@ -163,11 +181,15 @@ class SpectatorStub:
 	func apply_snapshot(table: int, scene: Dictionary):
 		snapshots.append({"table": table, "scene": scene.duplicate(true)})
 
+	func refresh_summary():
+		summary_refreshes += 1
+
 
 class ShopStub:
 	extends Node
 	var ended = 0
 	var captures = 0
+	var validations = 0
 	var state = {"open": false, "revision": 1}
 
 	func capture() -> Dictionary:
@@ -192,7 +214,16 @@ class ShopStub:
 	func end_session():
 		ended += 1
 
+	func valid_state(data: Dictionary) -> bool:
+		validations += 1
+		return data.get("open") is bool and data.get("revision") is int and data.revision >= 0
+
 	func apply_state(data: Dictionary) -> bool:
+		if not valid_state(data):
+			return false
+		return apply_validated_state(data)
+
+	func apply_validated_state(data: Dictionary) -> bool:
 		state = data.duplicate(true)
 		return true
 
@@ -271,6 +302,7 @@ class RunStub:
 	var validations = 0
 	var starts = 0
 	var cancelled = 0
+	var input_ready = true
 
 	func at_main_menu() -> bool:
 		return false
@@ -280,7 +312,7 @@ class RunStub:
 		return true
 
 	func ready_for_input() -> bool:
-		return true
+		return input_ready
 
 	func start(_config: Dictionary) -> Error:
 		starts += 1
@@ -327,6 +359,11 @@ func _initialize() -> void:
 	_cue_shop_run_setting()
 	_topology_keyframes()
 	_first_shot_phase_order()
+	_phase_publish_retry()
+	_aim_context_readiness()
+	_bundled_shop_prevalidation()
+	_snapshot_slot_and_single_validation()
+	_watcher_forwarding_is_gated()
 	_race_and_score_limits()
 	_native_score_standings()
 	_race_finishes()
@@ -373,6 +410,7 @@ func _controller():
 		controller.add_child(dependency)
 	controller.lobby_model = load(_base.path_join("lobby_state.gd")).new()
 	controller.router = load(_base.path_join("table_router.gd")).new()
+	controller.bounty_race = load(_base.path_join("bounty_race.gd"))
 	controller._local_id = 20
 	controller.table_id = 1
 	controller.table_leader_id = 20
@@ -616,6 +654,11 @@ func _run_closes_during_shot():
 func _targeted_shop_sync():
 	var controller = _controller()
 	controller.active = true
+	controller.adapter.state.merge({"available": true, "in_shop": true, "round": 1, "rounds_played": 1}, true)
+	controller.table_sync.captured = {
+		"available": true, "scene_id": 301, "round": 0, "rounds_played": 1,
+		"rotated": false, "results": {"phase": "shop"}, "balls": [], "pockets": []
+	}
 	controller.shop_sync.state = {"open": true, "revision": 2}
 	controller.last_shop_state = {"open": true, "revision": 1}
 	controller._publish_state(30)
@@ -660,6 +703,11 @@ func _shop_capture_reuse_after_send():
 	# capture reuse in the normal path, but never publish stale shop consent.
 	var controller = _controller()
 	controller.active = true
+	controller.adapter.state.merge({"available": true, "in_shop": true, "round": 1, "rounds_played": 1}, true)
+	controller.table_sync.captured = {
+		"available": true, "scene_id": 301, "round": 0, "rounds_played": 1,
+		"rotated": false, "results": {"phase": "shop"}, "balls": [], "pockets": []
+	}
 	controller.lobby.revision = 7
 	var captured = {
 		"open": true,
@@ -732,6 +780,15 @@ func _rejected_shots_preserve_turn_state():
 		"invalid baseline preserves the turn and publishes no invalid shot-start"
 	)
 	controller.table_sync.captured = {"available": false}
+	controller.table_sync.spawn_blocked = true
+	_check(not controller._take_shot(20, Vector2(100, 0), 0), "initializing native body blocks even a schema-valid shot baseline")
+	_check(not controller._pass(20, 0) and controller.turn_owner == 20 and controller.shot_number == 0, "delayed pass intent cannot advance ownership while a native body initializes")
+	_check(controller.adapter.accepted_shots == 0 and controller.transport.sent.is_empty() and controller.used_shots == 0, "spawn barrier rejection cannot spend a shot or publish an incomplete rack")
+	controller.table_sync.spawn_blocked = false
+	controller.run_setup.input_ready = false
+	_check(not controller._pass(20, 0) and not controller._take_shot(20, Vector2(100, 0), 0), "pass and shot intents wait for run setup completion")
+	_check(controller.turn_owner == 20 and controller.shot_number == 0, "setup rejection preserves the authoritative turn")
+	controller.run_setup.input_ready = true
 	_check(not controller._take_shot(30, Vector2(100, 0), 0), "nonowner shot is rejected")
 	_check(not controller._take_shot(20, Vector2(100, 0), 1), "future turn is rejected")
 	_check(not controller._take_shot(20, Vector2(20, 0), 0), "weak shot is rejected")
@@ -881,10 +938,10 @@ func _topology_keyframes():
 	guest._local_id = 30
 	guest.transport.id = 30
 	guest._guest_phase = guest._snapshot_phase(removed_hole.scene)
-	guest._received_table(20, added_hole)
+	_deliver(guest, 20, added_hole)
 	_check(guest.table_sync.applied.pockets.size() == 2, "guest accepts the new hole keyframe")
-	guest._received_table(20, removed_hole)
-	guest._received_table(20, added_hole)
+	_deliver(guest, 20, removed_hole)
+	_deliver(guest, 20, added_hole)
 	_check(
 		guest.table_sync.applied.pockets.size() == 1
 		and guest.last_guest_snapshot == removed_hole.id,
@@ -922,15 +979,44 @@ func _topology_keyframes():
 	effect_guest._local_id = 30
 	effect_guest.transport.id = 30
 	effect_guest._guest_phase = effect_guest._snapshot_phase(with_effects.scene)
-	effect_guest._received_table(20, with_effects)
-	effect_guest._received_table(20, without_effects)
-	effect_guest._received_table(20, with_effects)
+	_deliver(effect_guest, 20, with_effects)
+	_deliver(effect_guest, 20, without_effects)
+	_deliver(effect_guest, 20, with_effects)
 	_check(effect_guest.table_sync.applied.effects.droplets.is_empty() and effect_guest.table_sync.applied.visual_fx.items.is_empty(), "delayed effects cannot resurrect after a newer removal keyframe")
 	effect_guest.free()
+	# Optional art can recover while every other effect family still overflows.
+	# Its status is a reliable boundary even when identities remain unchanged.
+	host.table_sync.captured.effects.status = "overflow"
+	host.table_sync.captured.effects.reason = "bytes"
+	host.table_sync.captured.visual_fx.status = "overflow"
+	host.table_sync.captured["native_draw"] = {"status": "overflow", "items": []}
+	host._publish_snapshot()
+	host._publish_snapshot()
+	_check(host.transport.sent.back().unreliable, "stable effect overflow remains disposable")
+	for field in ["ball_visual_status", "pocket_visual_status"]:
+		var status_before: Array = host._published_presentation_status.duplicate()
+		host.table_sync.captured[field] = "overflow"
+		host._publish_snapshot(false, 30)
+		_check(not host.transport.sent.back().unreliable, field + " targeted overflow resync is reliable")
+		_check(host._published_presentation_status == status_before, field + " targeted overflow preserves broadcast boundary")
+		host._publish_snapshot()
+		_check(not host.transport.sent.back().unreliable, field + " status-only overflow broadcasts reliably")
+		host._publish_snapshot()
+		_check(host.transport.sent.back().unreliable, field + " stable overflow is disposable")
+		status_before = host._published_presentation_status.duplicate()
+		host.table_sync.captured[field] = "complete"
+		host._publish_snapshot(false, 30)
+		_check(not host.transport.sent.back().unreliable, field + " targeted recovery resync is reliable")
+		_check(host._published_presentation_status == status_before, field + " targeted recovery preserves broadcast boundary")
+		host._publish_snapshot()
+		_check(not host.transport.sent.back().unreliable, field + " status-only recovery broadcasts reliably")
+		host._publish_snapshot()
+		_check(host.transport.sent.back().unreliable, field + " stable recovery is disposable")
 	host._clear_spawn_barrier()
 	_check(
 		host._published_ball_ids.is_empty() and host._published_pocket_ids.is_empty()
-		and host._published_effect_ids.is_empty() and host._published_visual_fx_ids.is_empty(),
+		and host._published_effect_ids.is_empty() and host._published_visual_fx_ids.is_empty()
+		and host._published_native_draw_ids.is_empty() and host._published_presentation_status.is_empty(),
 		"disconnect/rematch reset clears every bounded topology cache"
 	)
 	host._publish_snapshot()
@@ -995,6 +1081,151 @@ func _first_shot_phase_order():
 	_check(guest.table_sync.shots.size() == 1, "a repeated first-shot packet cannot launch twice")
 	guest.free()
 	host.free()
+
+
+func _phase_publish_retry():
+	var host = _controller()
+	host.active = true
+	host.adapter.state.merge({
+		"available": true, "table_active": true, "can_shoot": true,
+		"round": 1, "rounds_played": 1
+	}, true)
+	host.table_sync.captured = {
+		"available": true, "scene_id": 401, "round": 0, "rounds_played": 1,
+		"rotated": false, "results": {"phase": "play"}, "balls": [], "pockets": []
+	}
+	host.table_sync.spawn_blocked = true
+	host.shop_sync.state = {"open": true, "revision": 2, "scene": 402}
+	host._publish_state()
+	_check(host._last_phase.is_empty() and host.snapshot_id == 0, "a held phase retains its reliable baseline debt")
+	_check(host.last_shop_state.is_empty(), "held shop phase does not consume standalone shop publication")
+	_check(not host.latest_state.can_shoot, "a held native rack publishes no shot readiness")
+	host._spawn_barrier_since_msec = Time.get_ticks_msec() - host.SPAWN_BARRIER_WARNING_MSEC
+	host._publish_state()
+	_check(host._spawn_barrier_warned and host.snapshot_id == 0, "an expired spawn diagnostic never permits an incomplete snapshot")
+	host._publish_state(30)
+	_check(host._last_phase.is_empty() and host.snapshot_id == 0, "targeted resync also waits for every native body")
+	var sent_early_shop = false
+	for frame in host.transport.sent:
+		sent_early_shop = sent_early_shop or frame.message.get("payload", {}).get("kind") == "shop_state"
+	_check(not sent_early_shop and host.last_shop_state.is_empty(), "neither broadcast nor targeted open shop can appear over an incomplete phase")
+	host.table_sync.spawn_blocked = false
+	host._publish_state(30)
+	_check(host._last_phase.is_empty() and host._spawn_barrier_held, "successful targeted recovery preserves the broadcast phase debt")
+	host.transport.sent.clear()
+	host._publish_state()
+	var recovered: Dictionary = {}
+	var readiness_sent = false
+	for frame in host.transport.sent:
+		var payload: Dictionary = frame.message.get("payload", {})
+		if payload.get("kind") == "snapshot":
+			recovered = payload
+			_check(not frame.unreliable and payload.has("shop"), "unchanged phase retries with its reliable complete baseline")
+		if payload.get("kind") == "state":
+			readiness_sent = payload.can_shoot
+	_check(not host._last_phase.is_empty() and not host._spawn_barrier_held and not host._spawn_barrier_warned, "complete broadcast commits phase and clears diagnostic state")
+	_check(readiness_sent, "readiness recovery is a reliable state change even without score or turn changes")
+	var previous_snapshot: int = host.snapshot_id
+	host.transport.sent.clear()
+	host.shop_sync.state.revision += 1
+	host._publish_state()
+	_check(host.snapshot_id == previous_snapshot and host.transport.sent.back().message.payload.kind == "shop_state", "same-phase shop revisions still update without rebuilding the table")
+	var guest = _controller()
+	guest.active = true
+	guest._local_id = 30
+	guest.transport.id = 30
+	if not recovered.is_empty():
+		_deliver(guest, 20, recovered)
+	_check(guest.table_sync.applied.get("scene_id") == 401 and not guest._guest_phase.is_empty(), "guest hydrates the phase after delayed body completion")
+	var committed_phase: Array = host._last_phase.duplicate()
+	host.adapter.state.round = 2
+	host.adapter.state.rounds_played = 2
+	host.table_sync.captured.available = "invalid"
+	host.shop_sync.state = {"open": false, "revision": 4}
+	var previous_id: int = host.snapshot_id
+	host._publish_state()
+	_check(host._last_phase == committed_phase and host.snapshot_id == previous_id, "invalid capture cannot consume a new round's reliable transition")
+	_check(host.last_shop_state.open, "invalid next-round capture keeps the prior shop presentation committed")
+	host.table_sync.captured.available = true
+	host.table_sync.captured.round = 1
+	host.table_sync.captured.rounds_played = 2
+	host._publish_state()
+	var next_round: Dictionary = {}
+	for frame in host.transport.sent:
+		var payload: Dictionary = frame.message.get("payload", {})
+		if payload.get("kind") == "snapshot":
+			next_round = payload
+	_check(host._last_phase != committed_phase and next_round.has("shop"), "same round state retries after invalid capture recovery")
+	_deliver(guest, 20, next_round)
+	_check(guest.table_sync.applied.get("rounds_played") == 2, "guest accepts the recovered round through its real phase barrier")
+	host.adapter.state.round += 1
+	host.adapter.state.rounds_played += 1
+	# Make state current first, then fail precisely during the owed snapshot send.
+	host.table_sync.spawn_blocked = true
+	host.adapter.state.can_shoot = false
+	host._publish_state()
+	host.table_sync.spawn_blocked = false
+	host.transport.on_send = func():
+		host.active = false
+		host._last_phase.clear()
+	host._publish_state()
+	_check(host._last_phase.is_empty(), "synchronous session loss during send cannot resurrect a committed phase")
+	guest.free()
+	host.free()
+
+
+func _aim_context_readiness():
+	var controller = _controller()
+	controller.active = true
+	controller.adapter.ready_to_shoot = true
+	controller.adapter.state.merge({"can_shoot": true, "rounds_played": 4, "round": 5}, true)
+	controller.shot_number = 9
+	_check(controller.aim_view_context() == [9, 4, 5] and controller._turn_ready(), "host exposes the native ready round and current shot")
+	controller.turn_owner = 30
+	_check(controller.aim_view_context() == [9, 4, 5] and not controller._turn_ready(), "off-turn peers can view a coherent aim but cannot take control")
+	controller.table_sync.spawn_blocked = true
+	_check(controller.aim_view_context().is_empty(), "host native aim waits for its complete rack")
+	controller.table_sync.spawn_blocked = false
+	controller._local_id = 30
+	controller.transport.id = 30
+	controller.latest_state = {"rounds_played": 4, "round": 5, "can_shoot": true}
+	_check(controller.aim_view_context().is_empty(), "new reliable readiness cannot expose an uncommitted guest scene")
+	controller.table_sync.input_ready = true
+	_check(controller.aim_view_context() == [9, 4, 5] and controller._turn_ready(), "guest input and aim share committed state readiness")
+	_check(controller.table_sync.readiness_states.back() == controller.latest_state, "guest coherence checks the actual newest reliable state")
+	for field in ["finished", "shot_pending"]:
+		controller.set(field, true)
+		_check(controller.aim_view_context().is_empty(), "aim context closes immediately for " + field)
+		controller.set(field, false)
+	controller.awaiting_shot_turn = 9
+	_check(controller.aim_view_context().is_empty(), "pending local submission hides the old aim context")
+	controller.awaiting_shot_turn = -1
+	controller.panel.show()
+	_check(controller.aim_view_context().is_empty(), "mod menu hides native aim context")
+	controller.panel.hide()
+	controller.shop_sync.state.open = true
+	_check(controller.aim_view_context().is_empty(), "shop transition hides native aim context")
+	controller.free()
+
+
+func _bundled_shop_prevalidation():
+	var guest = _controller()
+	guest.active = true
+	guest._local_id = 30
+	guest.transport.id = 30
+	var scene = {"available": false}
+	guest._received_table(20, {
+		"kind": "snapshot", "id": 1, "scene": scene,
+		"shop": {"open": false, "revision": 1}
+	})
+	_check(guest.table_sync.applied == scene and guest.shop_sync.validations == 1, "valid bundled shop commits once through the prevalidated apply")
+	guest.table_sync.applied = {}
+	guest._received_table(20, {
+		"kind": "snapshot", "id": 2, "scene": scene,
+		"shop": {"open": "invalid", "revision": 2}
+	})
+	_check(guest.table_sync.applied.is_empty(), "invalid bundled shop rejects before any table or results mutation")
+	guest.free()
 
 
 func _host_controller(mode: String):
@@ -1138,6 +1369,23 @@ func _race_finishes():
 		}
 	)
 	_check(host._valid_state(win, 1), "native final-round victory is a valid race finish")
+	var receipt_state: Dictionary = win.duplicate(true)
+	receipt_state.used_shots = 2
+	receipt_state.cue_feedback = {"generation": 1, "shot": 2, "actor": 20, "ball": 123, "model": "bankshot", "points": 0.18}
+	_check(host._valid_state(receipt_state, 1), "committed cue receipt crosses the state boundary")
+	var pending_receipt: Dictionary = receipt_state.duplicate(true)
+	pending_receipt.pending = true
+	pending_receipt.cue_feedback.shot = 3
+	_check(host._valid_state(pending_receipt, 1), "mid-shot cue receipt is valid before used_shots increments")
+	pending_receipt.cue_feedback.shot = 4
+	_check(not host._valid_state(pending_receipt, 1), "pending cue receipt cannot claim a future shot")
+	for invalid in [{"model": "house"}, {"model": "res://foreign.gd"}, {"points": 0.0}, {"points": INF}, {"points": 1000000.0}, {"shot": 3}]:
+		var bad_receipt: Dictionary = receipt_state.duplicate(true)
+		bad_receipt.cue_feedback.merge(invalid, true)
+		_check(not host._valid_state(bad_receipt, 1), "invalid or future cue receipt rejects before state apply " + str(invalid))
+	var legacy_receipt: Dictionary = receipt_state.duplicate(true)
+	legacy_receipt.erase("cue_feedback")
+	_check(host._valid_state(legacy_receipt, 1), "legacy state remains valid without cue receipt")
 	var premature: Dictionary = win.duplicate(true)
 	premature.round = 19
 	_check(not host._valid_state(premature, 1), "winning a nonfinal round cannot finish a race")
@@ -1322,6 +1570,9 @@ func _spectator_routes():
 	viewer.spectator = SpectatorStub.new()
 	viewer.add_child(viewer.spectator)
 	viewer.spectator.watched_table = 0
+	viewer._roster_changed()
+	_check(viewer.spectator.summary_refreshes == 1,
+		"lobby summary delivery refreshes a finished watched result without another snapshot")
 	_check(not viewer._turn_ready(), "spectating blocks local shot controls")
 	var frame = {
 		"kind": "watch_state", "match": viewer.match_id, "table": 0, "payload": _state(viewer, 0)
@@ -1344,6 +1595,127 @@ func _spectator_routes():
 	viewer._received(10, frame)
 	_check(viewer.spectator.snapshots.size() == 1, "previous-match spectator snapshots are ignored")
 	viewer.free()
+
+
+## Receive one table message, then end the frame's receive drain (PERF-002).
+func _deliver(controller, actor: int, message: Dictionary) -> void:
+	controller._received_table(actor, message)
+	controller._flush_pending_snapshot()
+
+
+func _snapshot_slot_and_single_validation():
+	var host = _controller()
+	host.active = true
+	host.adapter.state.available = true
+	host.table_sync.captured = {
+		"available": true,
+		"scene_id": 202,
+		"rounds_played": 0,
+		"rotated": false,
+		"results": {"phase": "table"},
+		"balls": [{"id": 11}, {"id": 12}],
+		"pockets": [{"id": 21, "base_index": 0}]
+	}
+	host._publish_snapshot()
+	var first: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	host._publish_snapshot()
+	var second: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	host.table_sync.captured.balls.append({"id": 13})
+	host._publish_snapshot()
+	var third: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	_check(second.id > first.id and third.id > second.id, "fixture snapshots have increasing ids")
+	var guest = _controller()
+	guest.active = true
+	guest._local_id = 30
+	guest.transport.id = 30
+	guest._guest_phase = guest._snapshot_phase(first.scene)
+	guest._received_table(20, first)
+	_check(
+		guest.table_sync.applied.is_empty() and guest._pending_snapshot.get("id") == first.id,
+		"a disposable snapshot waits in the bounded slot until the receive drain ends"
+	)
+	guest._received_table(20, second)
+	guest._received_table(20, third)
+	_check(guest._pending_snapshot.get("id") == third.id, "a burst keeps only the newest sample")
+	var validations_before: int = guest.table_sync.validations
+	guest._flush_pending_snapshot()
+	_check(
+		guest.table_sync.applied.balls.size() == 3 and guest.last_guest_snapshot == third.id,
+		"one drain applies only the newest sample"
+	)
+	_check(
+		guest.table_sync.validations - validations_before == 1,
+		"the applied snapshot is validated exactly once (PERF-014)"
+	)
+	_check(guest._pending_snapshot.is_empty(), "flush empties the slot")
+	guest._received_table(20, second)
+	guest._flush_pending_snapshot()
+	_check(
+		guest.last_guest_snapshot == third.id and guest.table_sync.applied.balls.size() == 3,
+		"a stale sample never reconciles after a newer apply"
+	)
+	host.table_sync.captured.balls.pop_back()
+	host._publish_snapshot()
+	var motion: Dictionary = host.transport.sent.back().message.payload.duplicate(true)
+	var barrier: Dictionary = motion.duplicate(true)
+	barrier.id = motion.id + 1
+	barrier["shop"] = {"open": false, "revision": 2}
+	guest._received_table(20, motion)
+	guest._received_table(20, barrier)
+	_check(
+		guest._pending_snapshot.is_empty() and guest.last_guest_snapshot == barrier.id,
+		"a phase barrier applies immediately and supersedes pending motion"
+	)
+	_check(guest._guest_phase == guest._snapshot_phase(barrier.scene), "the barrier advances the guest phase")
+	var late: Dictionary = barrier.duplicate(true)
+	late.erase("shop")
+	late.id = barrier.id + 1
+	guest._received_table(20, late)
+	guest._end_table()
+	_check(guest._pending_snapshot.is_empty(), "leaving the table drops the pending sample")
+	guest.free()
+	host.free()
+
+
+func _watcher_forwarding_is_gated():
+	var host = _host_controller("race")
+	var snapshot = {"kind": "snapshot", "id": 4, "scene": {"available": false}}
+	var validations_before: int = host.table_sync.validations
+	_send_table(host, 10, 0, snapshot)
+	_check(
+		host.table_sync.validations == validations_before,
+		"an unwatched table's snapshot is not validated by the room host (PERF-007)"
+	)
+	_check(
+		host._watch_snapshots.get(0, {}).get("id") == 4,
+		"the newest unwatched snapshot is retained for late joiners"
+	)
+	host._set_watcher(30, {"match": host.match_id, "table": 0})
+	var frames = host.transport.sent.filter(
+		func(frame): return frame.message.get("kind") == "watch_state" and frame.message.payload.get("kind") == "snapshot"
+	)
+	_check(
+		host.table_sync.validations == validations_before + 1
+		and frames.size() == 1 and frames[0].recipient == 30 and frames[0].message.payload.id == 4,
+		"a late joiner receives the retained snapshot after exactly one validation"
+	)
+	host.transport.sent.clear()
+	snapshot = {"kind": "snapshot", "id": 5, "scene": {"available": false}}
+	_send_table(host, 10, 0, snapshot)
+	frames = host.transport.sent.filter(
+		func(frame): return frame.message.get("kind") == "watch_state"
+	)
+	_check(
+		host.table_sync.validations == validations_before + 2 and frames.size() == 1,
+		"a watched table's snapshot validates once and forwards once"
+	)
+	host.transport.sent.clear()
+	_send_table(host, 10, 0, {"kind": "snapshot", "id": 6, "scene": "broken"})
+	_check(
+		host.transport.sent.is_empty() and host._watch_snapshots[0].id == 5,
+		"a malformed snapshot is rejected before reaching watchers"
+	)
+	host.free()
 
 
 func _check(condition: bool, description: String):

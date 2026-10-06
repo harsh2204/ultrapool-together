@@ -4,6 +4,7 @@ extends Node
 ## Native compatibility and timing remain implemented, unmeasured.
 
 const Rules = preload("cue_effect_rules.gd")
+const CueModels = preload("cue_models.gd")
 const MAX_FIXED_POCKETS = 16
 const CUSTOM_PREFIXES = ["TOGETHER_", "PHASES_", "MORPH_", "TIDE_", "RELIC_", "TAROT_", "ZODIAC_"]
 
@@ -15,6 +16,10 @@ var _hooked: Dictionary = {}
 var _fixed_pockets: Dictionary = {}
 var _round_key = ""
 var _active = false
+# MOD-13 / PERF-028: one committed outcome, replaced on the next award and
+# cleared at the round/session boundary. No event queue or playback state.
+var _feedback: Dictionary = {}
+var _feedback_generation = 0
 
 
 func setup(controller: Node) -> bool:
@@ -39,6 +44,7 @@ func end_session() -> void:
 	_release_hooks()
 	_fixed_pockets.clear()
 	_round_key = ""
+	_feedback = {}
 	rules = null
 
 
@@ -52,6 +58,8 @@ func begin_shot(index: int, actor: int, raw_vector: Vector2) -> bool:
 	if key != _round_key:
 		_release_hooks()
 		_round_key = key
+		_feedback_generation += 1
+		_feedback = {}
 		rules.reset_round(key)
 		_cache_pockets(game)
 	if game.balls.size() > Rules.MAX_BALLS:
@@ -135,6 +143,7 @@ func record_pocket(body, pocket, multiplier: float) -> Dictionary:
 		"points": points, "position": body.global_position,
 		"source": weakref(body), "game": weakref(game), "service": get_instance_id(),
 		"round": _round_key, "shot": rules.shot_index, "consumed": false,
+		"model": str(rules._profile.id), "actor": int(rules._actor),
 	}
 
 
@@ -146,10 +155,12 @@ func commit_pocket(award: Dictionary) -> void:
 	if (
 		not _recording() or award.get("service") != get_instance_id()
 		or award.get("round") != _round_key or award.get("shot") != rules.shot_index
+		or award.get("model") != rules._profile.get("id", "") or award.get("actor") != rules._actor
 		or not award.get("source") is WeakRef or not award.get("game") is WeakRef
 		or not award.get("position") is Vector2 or not award.position.is_finite()
 		or not (award.get("points") is float or award.get("points") is int)
 		or not is_finite(float(award.points)) or award.points <= 0.0
+		or award.points > float(rules._profile.get("bonus_cap", 0.0))
 	):
 		return
 	var game = _game()
@@ -163,7 +174,44 @@ func commit_pocket(award: Dictionary) -> void:
 	# Native super.pocket has now marked the source dead and delivered its normal
 	# score. Only other living GAMEBALLs may observe a bonus threshold crossing.
 	# chains=false prevents SCORE/SCORE-SELF recursion; keep the pre-graveyard point.
+	var source_id: int = body.get_instance_id()
 	game.add_score(float(award.points), award.position, false, true, body, false)
+	_feedback = {
+		"generation": _feedback_generation, "shot": int(award.shot),
+		"actor": int(award.actor), "ball": source_id,
+		"model": str(award.model), "points": float(award.points),
+	}
+
+
+## Read only at publication boundaries. A round can finish before its next shot;
+## clearing here prevents the previous round's outcome surviving that idle gap.
+func capture_feedback() -> Dictionary:
+	if not _active:
+		return {}
+	var game = _game()
+	if game == null or "%d:%d" % [game.get_instance_id(), game.rounds_played] != _round_key:
+		_feedback = {}
+	return _feedback.duplicate(true)
+
+
+static func valid_feedback(data) -> bool:
+	if not data is Dictionary:
+		return false
+	if data.is_empty():
+		return true
+	if data.size() != 6:
+		return false
+	for field in ["generation", "shot", "actor", "ball"]:
+		if not data.get(field) is int or data[field] <= 0:
+			return false
+	if not data.get("model") is String or not CueModels.is_known(data.model):
+		return false
+	var model: Dictionary = CueModels.entry(data.model)
+	return (
+		model.bonus_rate > 0 and model.bonus_cap > 0
+		and (data.get("points") is float or data.get("points") is int)
+		and is_finite(float(data.points)) and data.points > 0.0 and data.points <= model.bonus_cap
+	)
 
 
 func _recording() -> bool:

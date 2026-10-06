@@ -7,6 +7,9 @@ signal disconnected(reason: String)
 signal received(sender: int, message: Dictionary)
 signal status_changed(text: String)
 signal room_ready
+## Emitted after each frame's bounded receive drain so a listener can apply the
+## newest coalesced sample once per frame without adding a frame of delay (PERF-002).
+signal receive_drained
 
 const PROTOCOL := 10
 const MAX_PLAYERS := 8
@@ -444,6 +447,7 @@ func _process(_delta: float) -> void:
 		elif now - peer.last_heartbeat >= HEARTBEAT_MS:
 			peer.last_heartbeat = now
 			_send_wire(id, {"kind": "ping"})
+	receive_drained.emit()
 
 
 func _receive_budget_available(started_usec: int) -> bool:

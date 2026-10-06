@@ -28,6 +28,10 @@ const REASONS = [
 	"descriptor",
 	"bytes"
 ]
+const POCKET_VISUAL_PATHS = [
+	".", "Doors", "Doors/Left", "Doors/Right", "ShieldIndicator",
+	"SkullIndicator", "Label", "ExtraScoreLabelPivot"
+]
 const COMMON = ["id", "position", "rotation", "scale", "color", "visible"]
 const DROPLET_FIELDS = [
 	"kind",
@@ -463,13 +467,51 @@ static func _energy_valid(data: Dictionary) -> bool:
 	return true
 
 
+static func capture_pocket_visuals(pocket: Node2D) -> Array:
+	var nodes: Array = pocket.get_meta("together_pocket_visual_nodes", [])
+	if nodes.is_empty():
+		for path in POCKET_VISUAL_PATHS:
+			nodes.append(pocket.get_node_or_null(path))
+		pocket.set_meta("together_pocket_visual_nodes", nodes)
+	var visuals: Array = []
+	for index in nodes.size():
+		var node = nodes[index]
+		if not node is CanvasItem:
+			return []
+		# Root pose already belongs to the ordinary pocket state.
+		visuals.append([
+			Vector2.ZERO if index == 0 else node.position,
+			0.0 if index == 0 else node.rotation,
+			Vector2.ONE if index == 0 else node.scale,
+			node.modulate, node.self_modulate, node.visible,
+			node.text if node is Label else ""
+		])
+	return visuals
+
+
 static func _pocket_valid(data: Dictionary) -> bool:
+	# Protocol 10 durable effects use this exact legacy three-key shape. New
+	# presentation belongs to the permissive ordinary pocket extension instead.
 	return (
 		_keys(data, ["id", "suction_scale", "suction_color"])
 		and _scale(data.suction_scale, 1000000.0)
 		and _color(data.suction_color)
 	)
 
+
+static func pocket_visual_valid(visuals) -> bool:
+	if not visuals is Array or visuals.size() != POCKET_VISUAL_PATHS.size():
+		return false
+	for part in visuals:
+		if not part is Array or part.size() != 7:
+			return false
+		if not _vector(part[0], 1024.0) or not _number(part[1], -1000.0, 1000.0) or not _vector(part[2], 16.0):
+			return false
+		if not _color(part[3]) or not _color(part[4]) or typeof(part[5]) != TYPE_BOOL:
+			return false
+		if not part[6] is String or part[6].length() > 64:
+			return false
+	return true
 
 static func _pose_valid(data: Dictionary) -> bool:
 	return (

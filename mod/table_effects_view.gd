@@ -20,6 +20,7 @@ var _last: Dictionary = {}
 var _latest: Dictionary = {}
 var _origin = Vector2.ZERO
 var _pocket_states: Dictionary = {}
+var _pocket_default_visuals: Array = []
 
 
 func setup(parent: Node2D, game_scene: PackedScene) -> void:
@@ -38,6 +39,11 @@ func setup(parent: Node2D, game_scene: PackedScene) -> void:
 			_textures = textures.duplicate()
 	if energy_scene != null:
 		_energy_template = SceneReader.create(energy_scene)
+	var pocket_scene = SceneReader.exported(game_scene, "hole_scene")
+	if pocket_scene is PackedScene:
+		var pocket_template = SceneReader.create(pocket_scene)
+		_pocket_default_visuals = Effects.capture_pocket_visuals(pocket_template)
+		pocket_template.free()
 	# Native allowlist: this is the flame's material, never a resource path from the wire.
 	_fire_material = load("res://effects/fire_droplet_material.tres")
 
@@ -111,26 +117,42 @@ func tick() -> void:
 		apply(_latest, _origin, _epoch)
 
 
-func apply_pockets(effects: Dictionary, pockets: Dictionary) -> void:
-	if effects.get("status", "complete") == "overflow":
-		return
+func apply_pockets(effects: Dictionary, pockets: Dictionary, ordinary: Array = []) -> void:
+	var suction_paused: bool = effects.get("status", "complete") == "overflow"
+	var visuals: Dictionary = {}
+	for state in ordinary:
+		if state.has("pocket_visual"):
+			visuals[state.id] = state.pocket_visual
 	var states: Dictionary = {}
-	for state in effects.get("pockets", []):
-		states[state.id] = state
+	if not suction_paused:
+		for state in effects.get("pockets", []):
+			states[state.id] = state
 	for id in pockets:
 		var pocket: Node2D = pockets[id]
-		var state: Dictionary = states.get(
-			id, {"id": id, "suction_scale": Vector2.ONE, "suction_color": Color.TRANSPARENT}
-		)
 		var previous: Dictionary = _pocket_states.get(id, {})
-		if previous.get("node") == pocket and previous.get("state") == state:
+		var previous_state: Dictionary = previous.get("state", {}) if previous.get("node") == pocket else {}
+		var state: Dictionary = (
+			previous_state.duplicate(true) if suction_paused and not previous_state.is_empty()
+			else states.get(id, {"id": id, "suction_scale": Vector2.ONE, "suction_color": Color.TRANSPARENT}).duplicate(true)
+		)
+		# Ordinary pocket art has its own validated descriptor and byte-overflow
+		# boundary. A paused durable-effects substate must not block newer doors,
+		# shields or labels. Missing optional art retains its last complete sample.
+		if visuals.has(id):
+			state["visuals"] = visuals[id]
+		elif previous_state.has("visuals"):
+			state["visuals"] = previous_state.visuals
+		var restore_retained_art: bool = not visuals.has(id) and previous_state.has("visuals")
+		if previous.get("node") == pocket and previous_state == state and not restore_retained_art:
 			continue
-		var area = pocket.get_node_or_null("Area2D")
-		if area is Node2D:
-			_set_changed(area, "scale", state.suction_scale)
-		var white_hole = pocket.find_child("WhiteHoleEffect", true, false)
-		if white_hole is CanvasItem:
-			_set_changed(white_hole, "modulate", state.suction_color)
+		if not suction_paused:
+			var area = pocket.get_node_or_null("Area2D")
+			if area is Node2D:
+				_set_changed(area, "scale", state.suction_scale)
+			var white_hole = pocket.find_child("WhiteHoleEffect", true, false)
+			if white_hole is CanvasItem:
+				_set_changed(white_hole, "modulate", state.suction_color)
+		_apply_pocket_visuals(pocket, state.get("visuals", []))
 		_pocket_states[id] = {"node": pocket, "state": state.duplicate(true)}
 	for id in _pocket_states.keys():
 		if not pockets.has(id):
@@ -145,6 +167,9 @@ func clear() -> void:
 	for previous in _pocket_states.values():
 		if not is_instance_valid(previous.node):
 			continue
+		if previous.state.has("visuals"):
+			_apply_pocket_visuals(previous.node, _pocket_default_visuals)
+			previous.node.set_meta("together_pocket_sampled", false)
 		var area = previous.node.get_node_or_null("Area2D")
 		if area is Node2D:
 			_set_changed(area, "scale", Vector2.ONE)
@@ -171,6 +196,7 @@ func dispose() -> void:
 	_energy_template = null
 	_textures = []
 	_fire_material = null
+	_pocket_default_visuals = []
 
 
 func _entry(id: int, kind: int, energy: bool) -> Dictionary:
@@ -281,3 +307,32 @@ func _enable_visuals(node: Node) -> void:
 func _set_changed(node: Object, property: StringName, value) -> void:
 	if node.get(property) != value:
 		node.set(property, value)
+
+
+func _apply_pocket_visuals(pocket: Node2D, visuals: Array) -> void:
+	if visuals.is_empty():
+		return
+	pocket.set_meta("together_pocket_sampled", true)
+	for path in ["Doors/AnimationPlayer", "ScoreAnimationPlayer"]:
+		var animation = pocket.get_node_or_null(path)
+		if animation is AnimationPlayer and animation.is_playing():
+			animation.stop(true)
+	var nodes: Array = pocket.get_meta("together_pocket_visual_nodes", [])
+	if nodes.is_empty():
+		for path in Effects.POCKET_VISUAL_PATHS:
+			nodes.append(pocket.get_node_or_null(path))
+		pocket.set_meta("together_pocket_visual_nodes", nodes)
+	for index in visuals.size():
+		var node = nodes[index]
+		if not is_instance_valid(node):
+			continue
+		var part: Array = visuals[index]
+		if index > 0:
+			_set_changed(node, "position", part[0])
+			_set_changed(node, "rotation", part[1])
+			_set_changed(node, "scale", part[2])
+		_set_changed(node, "modulate", part[3])
+		_set_changed(node, "self_modulate", part[4])
+		_set_changed(node, "visible", part[5])
+		if node is Label:
+			_set_changed(node, "text", part[6])
