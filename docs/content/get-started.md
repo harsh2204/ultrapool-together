@@ -2,9 +2,9 @@
 
 You’ll need your own copy of Ultrapool on Steam and friends with the same Together version. The mod supports Windows and macOS and needs about **400–500 MB** of free space.
 
-[Download Together](https://github.com/harsh2204/ultrapool-together/releases)
+[Download Together v0.12.0](https://github.com/harsh2204/ultrapool-together/releases/tag/v0.12.0)
 
-Check the release notes before downloading: each Together version works with a particular Ultrapool version. **Some features in this guide are not in the latest download yet.** Everyone in your group should install the same release.
+**Together v0.12.0 requires Ultrapool 0.17.2.** Everyone in your group should install the same release. If Steam updates Ultrapool, check for a compatible Together update before reinstalling.
 
 ## Windows
 

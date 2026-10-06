@@ -54,7 +54,7 @@ GUIDES = [
 def source_guides() -> list[Guide]:
     guides = list(GUIDES)
     if (SITE / "content/after-hours.md").is_file():
-        guides.insert(6, Guide("after-hours", "docs/content/after-hours.md", "After the final shot", "Coming soon: compare every table’s final build.", "Playing"))
+        guides.insert(6, Guide("after-hours", "docs/content/after-hours.md", "After the final shot", "Compare final builds and arrange the racks together.", "Playing"))
     return guides
 
 

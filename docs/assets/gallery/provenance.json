@@ -91,7 +91,7 @@
     {
       "file": "final-rack.png",
       "title": "Look back at the final rack",
-      "caption": "Coming soon: browse every table’s recorded build and ball points.",
+      "caption": "Browse every table’s recorded build and ball points.",
       "alt": "The final native triangle and reserve layout with saved ball points.",
       "capture_date": "2026-10-06",
       "source": ".local/after-hours-native-candidate3/.local/screenshots/20261006T102326Z-c8759028/after-hours-two-tables-final.png",
@@ -105,7 +105,7 @@
     {
       "file": "shared-rack.png",
       "title": "Talk through the build",
-      "caption": "Coming soon: drag a ball while everyone viewing the rack sees the move.",
+      "caption": "Drag a ball while everyone viewing the rack sees the move.",
       "alt": "A second viewer sees another player moving a ball with its points visible.",
       "capture_date": "2026-10-06",
       "source": ".local/after-hours-native-candidate3/.local/screenshots/20261006T102326Z-c8759028/after-hours-shared-native-peer.png",

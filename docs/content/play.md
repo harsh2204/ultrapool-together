@@ -36,6 +36,8 @@ Press **F8 → Watch** to visit another table. Switch tables or return to your o
 
 ## Play another match
 
+When your table finishes, [review the final racks](after-hours.md) and discuss the builds together while other tables keep playing.
+
 The host can return everyone to the lobby once all tables finish. Ending a match early needs everyone’s approval. Your seats stay assigned for the next match.
 
 New players join between matches. If a table’s host disconnects, that table ends; if the room host leaves, the room closes.
