@@ -48,16 +48,25 @@ static func _copy_state(state: SceneState) -> Node:
 		var node = root.get_node_or_null(path) if root != null else null
 		if node == null:
 			var instance = state.get_node_instance(index)
+			var type = state.get_node_type(index)
+			# An inherited override is not a new node. Native 0.17.2's rotated
+			# table still references removed tutorial children; ignore those
+			# overrides instead of inventing nodes or calling a missing parent.
+			if instance == null and type == "":
+				continue
+			var parent = root.get_node_or_null(state.get_node_path(index, true)) if root != null else null
+			if index > 0 and parent == null:
+				continue
 			node = (
-				create(instance) if instance != null else _visual_node(state.get_node_type(index))
+				create(instance) if instance != null else _visual_node(type)
 			)
 			node.name = state.get_node_name(index)
-			if state.get_node_type(index) != "":
-				node.set_meta("native_type", state.get_node_type(index))
+			if type != "":
+				node.set_meta("native_type", type)
 			if index == 0:
 				root = node
 			else:
-				root.get_node(state.get_node_path(index, true)).add_child(node)
+				parent.add_child(node)
 		var properties: Dictionary = {}
 		for property in node.get_property_list():
 			if property.usage & PROPERTY_USAGE_STORAGE and property.name != "script":

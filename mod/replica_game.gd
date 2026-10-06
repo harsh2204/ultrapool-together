@@ -12,6 +12,7 @@ const BallLevelFx = preload("ball_level_fx.gd")
 const ShotsPips = preload("shots_pips.gd")
 const TableEffectsView = preload("table_effects_view.gd")
 const TableVisualFxView = preload("table_visual_fx_view.gd")
+const TablePassivesView = preload("table_passives_view.gd")
 
 var remote_ready = false
 var remote_shots = 0
@@ -29,6 +30,7 @@ var _pocket_states: Array = []
 var _ball_bases: Dictionary = {}
 var _fx = ReplicaFx.new()
 var effects_view = TableEffectsView.new()
+var passives_view = TablePassivesView.new()
 var _visual_fx_view = TableVisualFxView.new()
 var _native_draw_view = NativeDrawView.new()
 ## PERF-018/019: counts per apply so fixtures can show score-only cascades no
@@ -83,7 +85,8 @@ func prepare_scene() -> void:
 
 func _ready() -> void:
 	Global.gameManager = self
-	table = (table_rotated_scene if remote_rotated else table_scene).instantiate()
+	var native_table_scene: PackedScene = table_rotated_scene if remote_rotated else table_scene
+	table = native_table_scene.instantiate()
 	table.get_node("TableCustomization").shop_floor = get_node("UI/ShopFloor")
 	add_child(table)
 	table.position = Vector2.ZERO
@@ -92,6 +95,7 @@ func _ready() -> void:
 	ball_positions = table.get_ball_positions()
 	player_ball_position = table.get_player_ball_position()
 	_disable_gameplay(table)
+	passives_view.setup(table, BallDatabase, native_table_scene)
 	table.score_display_diamond.set_process(true)
 	_enable_shots_info(table.shots_info)
 	_enable_potted_rail(table.get_graveyard())
@@ -118,6 +122,7 @@ func _exit_tree() -> void:
 	CueVisuals.restore(player_ball)
 	_fx.clear()
 	effects_view.dispose()
+	passives_view.dispose()
 	_visual_fx_view.clear()
 	_native_draw_view.dispose()
 
@@ -210,6 +215,7 @@ func apply_table(data: Dictionary) -> void:
 		PlayerInventory.apply(player_info, data.inventory, BallDatabase)
 		_inventory_state = data.inventory.duplicate(true)
 		_refresh_inventory_visuals()
+	passives_view.apply(data.inventory)
 	if table.global_position != data.table_position:
 		table.global_position = data.table_position
 		_pocket_states.clear()
@@ -698,8 +704,8 @@ func _update_shots(remaining: int, maximum: int, used: int) -> void:
 
 
 func _refresh_inventory_visuals() -> void:
-	# Inventory tickets/cubes/passives live on PlayerInfo; native snack counters and the
-	# CubesButton live on the shop inventory HUD. Drive the shop HUD only (#33 / PERF-015/020).
+	# Shop ticket/cube controls share PlayerInfo. Owned table snacks have their own
+	# scriptless retained view, refreshed from the same validated inventory above.
 	# Removed dead update_cubes / update_build has_method fallbacks (no such native APIs).
 	if is_instance_valid(shop) and shop.has_method("refresh_inventory_hud"):
 		shop.refresh_inventory_hud()
